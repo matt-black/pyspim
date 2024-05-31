@@ -1,5 +1,5 @@
-# napari-dispim
-napari plugin for diSPIM analysis
+# spimlib
+Python library & napari plugin for analyzing SPIM microscopy data.
 
 ## development environment setup
 
