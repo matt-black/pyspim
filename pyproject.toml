@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 79
+
+[tool.isort]
+profile = "black"
+line_length = 79
+
+[project]
+name = "spimlib"
+version = "0.0.1"
+authors = [
+    {name = "Matthew Black"},
+    {name = "Scott Wolf"},
+]
+license = {text = "GPL-3.0-only"}
+description = "Core functionality for analyzing and visualizing single plane illumination microscopy (spim) data with special emphasis on dual-view SPIM (diSPIM) microscopy."
+# readme = { file = "README.md", content-type = "text/markdown" }
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Framework :: napari",
+    "Topic :: Software Development :: Testing",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)"
+]
+requires-python = ">=3.8"
+dependencies = [
+    "dask",
+    "dask[distributed]",
+    "fsspec>=2022.8.2",
+    "npy2bdv",
+    "numpy",
+    "pandas",
+    "pyyaml",
+    "read-roi",
+    "resource-backed-dask-array>=0.1.0",
+    "scikit-image",
+    "tifffile",
+    "tqdm",
+    "typing_extensions",
+    "zarr"
+]
+
+[project.urls]
+Repository = "https://github.com/matt-black/napari-dispim"
+BugTracker = "https://github.com/matt-black/napari-dispim/issues"
+Documentation = "https://github.com/matt-black/napari-dispim/wiki"
+SourceCode = "https://github.com/matt-black/napari-dispim"
+UserSupport = "https://github.com/matt-black/napari-dispim/issues"
+
+[tool.setuptools.package-data]
+mypkg = ["*.yaml"]
+
+[project.optional-dependencies]
+testing = [
+    "tox",
+    "pytest",  # https://docs.pytest.org/en/latest/contents.html
+    "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
+]
+
+[tool.pyright]
+typeCheckingMode = "off"
+reportUndefinedVariable = "error"
+reportMissingImports = "none"
+
+[tool.fawltydeps]
+ignore_unused = [
+    # None of the testing packages are imported
+    "tox",
+    "pytest",
+    "pytest-cov",
+    "pytest-qt",
+]
+output_format = "human_detailed"
