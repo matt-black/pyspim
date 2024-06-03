@@ -1,22 +1,24 @@
 import math
 
 import cupy
-from numpy.typing import ArrayLike
 
+from .typing import NDArray
 from .._util import get_skimage_module, get_fft_module
 
 
-def translation(ref : ArrayLike, mov : ArrayLike,
+def translation(ref : NDArray, mov : NDArray,
                     upsample_factor : int=1):
-    """determine translation between `ref` and `mov` using phase cross correlation
+    """determine translation between `ref` and `mov`
 
-    Args:
-        ref (ArrayLike): reference image
-        mov (ArrayLike): image to register. must be same dimensionality as `ref`
-        upsample_factor (int, optional): Upsampling factor, images are registered to `1/upsample_factor`. Defaults to 1.
-
-    Returns:
-        ArrayLike: translation (in pixels) to register `mov`  with `ref`
+    :param ref: reference image
+    :type ref: NDArray
+    :param mov: image to register. must be same dimensionality as `ref`
+    :type mov: NDArray
+    :param upsample_factor: upsampling factor, images are registered to
+        `1/upsample_factor`. defaults to 1.
+    :type upsample_factor: int
+    :returns: translation along each axis
+    :rtype: NDArray
     """
     # get relevant modules for cpu/gpu
     xp = cupy.get_array_module(ref)
@@ -33,18 +35,20 @@ def translation(ref : ArrayLike, mov : ArrayLike,
     return trans
 
 
-def scale_rotation(ref : ArrayLike, mov : ArrayLike,
-                       upsample_factor : int=1):
-    """determine scaling & rotation between `ref` & `mov` using phase cross correlation of the log-polar transformed inputs
+def scale_rotation(ref : NDArray, mov : NDArray,
+                   upsample_factor : int=1):
+    """determine scaling & rotation between `ref` & `mov` using phase cross
+        correlation of the log-polar transformed inputs
 
-    Args:
-        ref (ArrayLike): reference image
-        mov (ArrayLike): image to register. must be same dimensionality as `ref`
-        upsample_factor (int, optional): _description_. Defaults to 1.
-
-    Returns:
-        float : rotation (in degrees) to register `mov` with `ref`
-        float : scale difference between `ref` and `mov`
+    :param ref: reference image
+    :type ref: NDArray
+    :param mov: image to register. must be same dimensionality as `ref`
+    :type mov: NDArray
+    :param upsample_factor: upsampling factor, images are registered to
+        `1/upsample_factor`. defaults to 1.
+    :type upsample_factor: int
+    :returns: rotation (in degrees) and scale difference between `ref` & `mov` 
+    :rtype: Tuple[float,float]
     """
     xp = cupy.get_array_module(ref)
     skimage = get_skimage_module(xp)

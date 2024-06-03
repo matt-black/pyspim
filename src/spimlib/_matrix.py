@@ -70,34 +70,54 @@ def rotation_translation_scale_matrix(alpha, beta, gamma,
 
 
 ## shear matrices
-def _shear_x_matrix(sy, sz):
+def _shear_x_matrix(h_xy, h_xz):
     return numpy.vstack([
-        numpy.array([1, math.tan(sy), math.tan(sz), 0]),
+        numpy.array([1, h_xy, h_xz, 0]),
         numpy.array([0, 1, 0, 0]),
         numpy.array([0, 0, 1, 0]),
         numpy.array([0, 0, 0, 1])
     ])
 
 
-def _shear_y_matrix(sx, sz):
+def _shear_y_matrix(h_yx, h_yz):
     return numpy.vstack([
         numpy.array([1, 0, 0, 0]),
-        numpy.array([math.tan(sx), 1, math.tan(sz), 0]),
+        numpy.array([h_yx, 1, h_yz, 0]),
         numpy.array([0, 0, 1, 0]),
         numpy.array([0, 0, 0, 1])
     ])
 
-def _shear_z_matrix(sx, sy):
+
+def _shear_z_matrix(h_zx, h_zy):
     return numpy.vstack([
         numpy.array([1, 0, 0, 0]),
         numpy.array([0, 1, 0, 0]),
-        numpy.array([math.tan(sx), math.tan(sy), 1, 0]),
+        numpy.array([h_zx, h_zy, 1, 0]),
         numpy.array([0, 0, 0, 1])
     ])
 
 
-def shear_matrix(sxy, sy, sz):
-    X = _shear_x_matrix(sy, sz)
-    Y = _shear_y_matrix(sx, sz)
-    Z = _shear_z_matrix(sx, sy)
+def shear_matrix(h_xy, h_xz, h_yx, h_yz, h_zx, h_zy):
+    X = _shear_x_matrix(h_xy, h_xz)
+    Y = _shear_y_matrix(h_yx, h_yz)
+    Z = _shear_z_matrix(h_zx, h_zy)
     return X @ Y @ Z
+
+
+def symmetric_shear_matrix(h_xyx, h_xzx, h_yzy):
+    return shear_matrix(h_xyx, h_xzx, h_yxy, h_yzy, h_xzx, h_yzy)
+
+
+def shear_about_point_matrix(h_xy, h_xz, h_yx, h_yz, h_zx, h_zy,
+                             x, y, z):
+    t1 = translation_matrix(x, y, z)
+    S = shear_matrix(h_xy, h_xz, h_yx, h_yz, h_zx, h_zy)
+    t2 = translation_matrix(-x, -y, -z)
+    return t1 @ S @ t2
+
+
+def symmetric_shear_about_point_matrix(h_xyx, h_xzx, h_yzy, x, y, z):
+    t1 = translation_matrix(x, y, z)
+    S = symmetric_shear_matrix(h_xyx, h_xzx, h_yzy)
+    t2 = translation_matrix(-x, -y, -z)
+    return t1 @ S @ t2

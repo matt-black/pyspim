@@ -2,23 +2,31 @@
 """
 import cupy
 
+from .typing import NDArray
 from .._util import create_texture_object
 
 
-def deskew_stage_scan(im, pixel_size : float, step_size : float,
-                      direction : int, **kwargs):
-    """performs the deskewing operation for transforming SPIM data
-    acquired by stage scanning into the "normal" SPIM coordinate system
-    (as in e.g. "sheet scanning")
-
-    see [1], esp. Figure 1
-
-    this function will dispatch to a CUDA-kernel based implementation that
-    mimics that of the original Shroff lab Fiji plugin
+def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
+                      direction : int, **kwargs) -> NDArray:
+    """deskew stage-scanned volume into "normal" diSPIM coordinate system
+        (see [1], esp. Figure 1)
+        this function will dispatch to a CUDA-kernel based implementation that
+        mimics that of the original Shroff lab Fiji plugin
 
     References
     ---
     [1]  Kumar, et. al, "Using Stage- and Slit-...", doi: 10.1086/689589
+
+    :param im: input volume
+    :type im: NDArray
+    :param pixel_size: pixel size, in real (space) units
+    :type pixel_size: float
+    :param step_size: step size, in real (space) units
+    :type step_size: float
+    :param direction: 
+    :type direction: int
+    :returns: deskewed volume
+    :rtype: NDArray
     """
     xp = cupy.get_array_module(im)
     if xp == cupy:
@@ -28,8 +36,8 @@ def deskew_stage_scan(im, pixel_size : float, step_size : float,
         return _deskew_stage_scan_cpu(im, pixel_size, step_size, direction)
 
 
-def _deskew_stage_scan_gpu(im, pixel_size, step_size, direction,
-                           block_size=4):
+def _deskew_stage_scan_gpu(im : NDArray, pixel_size : float, step_size : float,
+                           direction : int, block_size : int=4) -> NDArray:
     assert direction == 1 or direction == -1, \
         "direction must be +/- 1"
     depth, height, width = im.shape

@@ -1,5 +1,7 @@
 """private utilities
 """
+import types
+import typing
 from collections.abc import Iterable
 from functools import partial
 
@@ -18,8 +20,18 @@ import scipy.fft as fftcpu
 from cupy.cuda import texture
 from cupy.cuda import runtime
 
+from .typing import NDArray
+
+
 ## utilities for determining CPU/GPU libraries from inputs
-def get_skimage_module(arr_or_xp):
+def get_skimage_module(arr_or_xp) -> types.ModuleType:
+    """skimage array module for input arguments
+
+    :param arr_or_xp: input to determine whether skimage or cucim should be used
+    :type arr_or_xp: NDArray or numpy/cupy module
+    :returns: `skimage` or `cucim.skimage` based on types of the arguments
+    :rtype: module
+    """
     if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
         xp = cupy.get_array_module(arr_or_xp)
     else:
@@ -30,7 +42,14 @@ def get_skimage_module(arr_or_xp):
         return cucim.skimage
 
 
-def get_fft_module(arr_or_xp):
+def get_fft_module(arr_or_xp) -> types.ModuleType:
+    """fft module for input arguments
+
+    :param arr_or_xp: input to determine whether scipy or cupyx should be used
+    :type arr_or_xp: NDArray or numpy/cupy module
+    :returns: `scipy.fft` or `cupyx.scipy.fft` based on types of the arguments
+    :rtype: module
+    """
     if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
         xp = cupy.get_array_module(arr_or_xp)
     else:
@@ -41,7 +60,14 @@ def get_fft_module(arr_or_xp):
         return fftgpu
 
 
-def get_scipy_module(arr_or_xp):
+def get_scipy_module(arr_or_xp) -> types.ModuleType:
+    """scipy module for input arguments
+
+    :param arr_or_xp: input to determine whether scipy or cupyx should be used
+    :type arr_or_xp: NDArray or numpy/cupy module
+    :returns: `scipy` or `cupyx.scipy` based on types of the arguments
+    :rtype: module
+    """
     if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
         xp = cupy.get_array_module(arr_or_xp)
     else:
@@ -53,7 +79,7 @@ def get_scipy_module(arr_or_xp):
 
 
 ## misc. support functions
-def supported_float_type(input_dtype, allow_complex=False):
+def supported_float_type(input_dtype, allow_complex : bool=False):
     """Return an appropriate floating-point dtype for a given dtype.
 
     float32, float64, complex64, complex128 are preserved.
@@ -61,20 +87,16 @@ def supported_float_type(input_dtype, allow_complex=False):
     complex256 is demoted to complex128.
     Other types are cast to float64.
 
-    Parameters
-    ----------
-    input_dtype : cupy.dtype or Iterable of cupy.dtype
-        The input dtype. If a sequence of multiple dtypes is provided, each
-        dtype is first converted to a supported floating point type and the
-        final dtype is then determined by applying `cupy.result_type` on the
-        sequence of supported floating point types.
-    allow_complex : bool, optional
-        If False, raise a ValueError on complex-valued inputs.
-
-    Returns
-    -------
-    float_type : dtype
-        Floating-point dtype for the image.
+    :param input_dtype: the input dtype.
+        If a sequence of multiple dtypes is provided, each dtype is first
+        converted to a supported floating point type and the final dtype
+        is then determined by applying `cupy.result_type` on the sequence
+        of supported floating point types.
+    :type input_dtype: cupy.dtype or Iterable of cupy.dtype
+    :param allow_complex: 
+    :type allow_complex: bool
+    :returns: floating-point dtype for the image
+    :rtype: float
     """
     new_float_type = {
         # preserved types
@@ -103,9 +125,15 @@ def supported_float_type(input_dtype, allow_complex=False):
 
 
 ## padding/shape utilities
-def shape_for_divisible(shp, *div):
-    """compute the shape >= input `shp` that is divisible in each
-    dimension by the passed-in args, `*div`
+def shape_for_divisible(shp, *div) -> typing.List[int]:
+    """compute the shape >= input that is divisible in each dimension
+
+    :param shp: shape of volume
+    :type shp: tuple or Iterable
+    :param *div: divisor in each dimension
+    :type *div: int
+    :returns: largest size smaller than dimension divisible by input arg
+    :rtype: list
     """
     out = []
     assert len(shp) == len(div), \
@@ -118,10 +146,17 @@ def shape_for_divisible(shp, *div):
     return out
 
 
-def pad_to_shape(vol, shape, **kwargs):
-    """pad input volume to specified shape by padding
-    (as equally as possible) to edges s.t. original volume
-    is centered in padded image
+def pad_to_shape(vol : NDArray, shape, **kwargs) -> NDArray:
+    """pad input volume to specified shape
+        padding is done such that original volume is centered in the output
+        `**kwargs` are passed to underlying `numpy.pad` or `cupy.pad` function
+
+    :param vol: input volume
+    :type vol: NDArray
+    :param shape: desired output shape
+    :type shape: tuple or Iterable
+    :returns: padded volume
+    :rtype: NDArray
     """
     xp = cupy.get_array_module(vol)
     s_, v_ = list(shape), []
@@ -135,8 +170,15 @@ def pad_to_shape(vol, shape, **kwargs):
     return xp.pad(vol, pads, **kwargs)
 
 
-def unpad_to_shape(vol, shape):
-    """get rid of padding due to `pad_to_shape`
+def unpad_to_shape(vol : NDArray, shape) -> NDArray:
+    """inverse of `pad_to_shape`, gets rid of padding at volume edges
+
+    :param vol: input, padded volume
+    :type vol: NDArray
+    :param shape: desired output shape
+    :type shape: tuple or Iterable
+    :returns: unpadded volume
+    :rtype: NDArray
     """
     s_, v_ = list(shape), []
     for i, s in enumerate(s_):
@@ -150,9 +192,20 @@ def unpad_to_shape(vol, shape):
     return vol[slices]
 
 
-def pad_to_same_size(a, b, **kwargs):
-    """pad input volumes `a` & `b` to the same size
-    `**kwargs` are passed to `cp.pad`
+def pad_to_same_size(a : NDArray, b : NDArray,
+                     **kwargs) -> typing.Tuple[NDArray,NDArray]:
+    """pad input volumes so that they are the same size
+        finds smallest possible padding in each dimension to add so that the
+        shared size is as small as possible
+        `**kwargs` are passed to underlying pad function
+        (`numpy.pad` or `cupy.pad` depending on input)
+
+    :param a: array 1
+    :type a: NDArray
+    :param b: array 2
+    :type b: NDArray
+    :returns: padded versions of input volumes with common shape
+    :rtype: tuple[NDArray]
     """
     za, ya, xa = a.shape
     zb, yb, xb = b.shape
@@ -161,7 +214,15 @@ def pad_to_same_size(a, b, **kwargs):
     return fn(a), fn(b)
 
 
-def center_crop(vol : ArrayLike, *args):
+def center_crop(vol : NDArray, *args) -> NDArray:
+    """crop out the center of the input volume
+
+    :param vol: input volume
+    :type vol: NDArray
+    :returns: crop of input volume
+    :rtype: NDArray
+    """
+
     # unpack args into crop_z, crop_r, crop_c
     n_dim = len(vol.shape)
     assert n_dim == 2 or n_dim == 3, \
@@ -189,10 +250,24 @@ def center_crop(vol : ArrayLike, *args):
 
 
 ## texture utilities
-def create_texture_object(data,
+def create_texture_object(data : NDArray,
                           address_mode: str,
                           filter_mode: str,
                           read_mode: str):
+    """make a texture object from the input array, `data`
+
+    :param data: array to copy into texture memory
+    :type data: NDArray
+    :param address_mode: one of ('wrap', 'clamp', 'mirror', 'border')
+    :type address_mode: str
+    :param filter_mode: one of ('nearest', 'linear')
+    :type filter_mode: str
+    :param read_mode: one of ('element_type', 'normalized_float')
+    :type read_mode: str
+    :returns: tuple of the texture object and CUDAarray
+    
+    """
+
     if cupy.issubdtype(data.dtype, cupy.unsignedinteger):
         fmt_kind = runtime.cudaChannelFormatKindUnsigned
     elif cupy.issubdtype(data.dtype, cupy.integer):
@@ -241,11 +316,17 @@ def create_texture_object(data,
 
 
 ## image processing utilities
-def threshold_triangle(im, nbins=256):
-    """compute threshold value for `im` by triangle method
+def threshold_triangle(im : NDArray, nbins : int=256) -> float:
+    """compute threshold value by triangle method
+        copied from `skimage.filters` but modified so that
+        numpy or cupy is used depending on input type
 
-    copied from `skimage.filters` with histogram modified
-    to use numpy/cupy
+    :param im: array to calculate threshold for
+    :type im: NDArray
+    :param nbins: number of bins to use in histogram
+    :type nbins: int
+    :returns: threshold value
+    :rtype: float
     """
     xp = cupy.get_array_module(im)
     

@@ -4,6 +4,7 @@ import cupy
 import numpy
 from scipy.ndimage import affine_transform as affine_transform_cpu
 
+from ..typing import NDArray
 from .._matrix import *
 from .._util import create_texture_object
 
@@ -61,7 +62,17 @@ __global__ void affineKernel(float *out, cudaTextureObject_t tex,
 '''
 
 
-def transform(vol, tM):
+def transform(vol : NDArray, tM : NDArray) -> NDArray:
+    """transform the input volume using the specified affine transform.
+        uses linear interpolation to calculate values in transformed volume.
+
+    :param vol: array of volumetric data to transform
+    :type vol: NDArray
+    :param tM: transform matrix
+    :type tM: NDArray
+    :returns: transformed volume
+    :rtype: NDArray
+    """
     xp = cupy.get_array_module(vol)
     in_type = vol.dtype
     tM = cupy.asarray(tM).astype(cupy.float32)
@@ -70,25 +81,58 @@ def transform(vol, tM):
     tex_obj, tex_arr = create_texture_object(vol, 'border', 'linear', 'element_type')
     out = cupy.zeros(vol.shape, dtype=cupy.float32)
     _affine_transform_kernel(tex_obj, tM, *vol.shape[1:], out)
-    if xp == numpy:
-        vol = vol.get()
     vol = vol.astype(in_type, copy=False)
     del tex_obj, tex_arr
     return out
 
 
-def rotate_about_point(vol, x, y, z, alpha, beta, gamma):
+def rotate_about_point(vol : NDArray,
+                       x : float, y : float, z : float,
+                       alpha : float, beta : float, gamma : float) -> NDArray:
+    """rotate volume about the point `(x,y,z)`
+
+    :param vol: input volume
+    :type vol: NDArray
+    :param x: x-coordinate of point to rotate about
+    :type x: float
+    :param y: y-coordinate of point to rotate about
+    :type y: float
+    :param z: z-coordinate of point to rotate about
+    :type z: float
+    :param alpha: rotation angle along x-axis
+    :type alpha: float
+    :param beta: rotation angle along y-axis
+    :type beta: float
+    :param gamma: rotation angle along z-axis
+    :type gamma: float
+    :returns: rotated volume
+    :rtype: NDArray
+    """
     t1 = translation_matrix(x, y, z)
     R  = rotation_matrix(alpha, beta, gamma)
     t2 = translation_matrix(-x, -y, -z)
     return affine_transform(vol, t1 @ R @ t2)
 
 
-def rotate_about_center(vol, alpha, beta, gamma):
+def rotate_about_center(vol : NDArray,
+                        alpha : float, beta : float, gamma : float) -> NDArray:
+    """rotate volume about its center
+
+    :param vol: input volume 
+    :type vol: NDArray
+    :param alpha: rotation angle along x-axis
+    :type alpha: float
+    :param beta: rotation angle along y-axis
+    :type beta: float
+    :param gamma: rotation angle along z-axis
+    :type gamma: float
+    :returns: rotated volume
+    :rtype: NDArray
+    """
     depth, height, width = vol.shape
-    x = width / 2.0
-    y = height / 2.0
-    z = depth / 2.0
+    x = (width - 1) / 2.0
+    y = (height - 1) / 2.0
+    z = (depth - 1) / 2.0
     return rotate_about_point(vol, x, y, z, alpha, beta, gamma)
 
 

@@ -2,8 +2,11 @@
 with the ASI diSPIM plugin
 """
 import os
+import typing
 import operator
 import warnings
+from types import ModuleType
+from collections.abc import Iterable
 from functools import partial
 from itertools import accumulate
 
@@ -18,10 +21,22 @@ from tqdm.auto import tqdm
 # if you need more, increase the range upper bound
 __a_chans = list(range(0, 20, 2))
 __b_chans = list(range(1, 20, 2))
-def _page_calculator(shape, head, time=0, channel=0):
+def _page_calculator(shape : typing.Iterable[int], head : str,
+                     time : int=0, channel : int=0) -> typing.Tuple[int,int]:
     """determine which pages to read in a single z-stack
-    taken at a given time, with the specified head, and in the
-    specified channel
+        taken at a given time, with the specified head, and in the
+        specified channel
+
+    :param shape: shape of data series being read
+    :type shape: Iterable[int]
+    :param head: which head to read data from
+    :type head: str
+    :param time: timepoint to read data from
+    :type time: int
+    :param channel: channel to read
+    :type channel: int
+    :returns: start and end pages to read
+    :rtype: Tuple[int,int]
     """
     z_sze = shape[-3]
     n_chn = shape[-4] // 2
@@ -34,7 +49,15 @@ def _page_calculator(shape, head, time=0, channel=0):
     return start, end
 
 
-def uManagerAcquisition(path, xp=numpy):
+def uManagerAcquisition(path : str, xp : ModuleType=numpy):
+    """create a class for loading a micro-manager acquisition
+
+    :param path: path to acquisition folder or file
+    :type path: str
+    :param xp: one of `numpy` or `cupy` to return output arrays with
+    :type xp: ModuleType
+    :returns: class to load acquisition
+    """
     if os.path.isdir(path):
         return uManagerAcquisitionFolderZarr(path, xp)
     else:
@@ -42,7 +65,7 @@ def uManagerAcquisition(path, xp=numpy):
 
 
 class uManagerAcquisitionFile(object):
-    def __init__(self, path, xp=numpy):
+    def __init__(self, path : str, xp : ModuleType=numpy):
         if not os.path.exists(path):
             raise ValueError("specified path doesn't exist")
         # is it a folder or a file?
@@ -73,7 +96,7 @@ class uManagerAcquisitionFile(object):
 
 
 class uManagerAcquisitionFolderZarr(object):
-    def __init__(self, path, xp=numpy):
+    def __init__(self, path : str, xp : ModuleType=numpy):
         if not os.path.isdir(path):
             raise ValueError('input path must be a folder')
         tif_paths = sorted(

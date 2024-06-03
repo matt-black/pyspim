@@ -1,12 +1,35 @@
-import cupy
-from numpy.typing import ArrayLike
+from typing import Tuple
 
+import cupy
+
+from .typing import NDArray
 from .util import threshold_triangle
 from ._util import get_scipy_module, get_skimage_module
 
 
-def detect_roi_2d(im : ArrayLike, method : str='triangle', quantile : float=0,
-                  **kwargs):
+# useful type definitions
+BBox2D = Tuple[Tuple[int,int],Tuple[int,int]]
+BBox3D = Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+
+
+def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
+                  **kwargs) -> BBox2D:
+    """determine ROI in 2d image by thresholding
+        if using `method=threshold` then `threshold=[value]` must be passed as
+        a keyword argument
+        
+    :param im: image to find ROI in
+    :type im: NDArray
+    :param method: thresholding method
+       one of ('triangle', 'otsu', 'threshold')
+    :type method: str
+    :param quantile: quantile to truncate coordinates with
+        this helps get rid of outlier values
+    :type quantile: float
+    :returns: bounding box ROI
+    :rtype: Tuple[Tuple[int,int],Tuple[int,int]]
+    """
+
     assert method in ('triangle', 'otsu', 'threshold'), \
         "invalid segmentation method specified"
     if method == 'threshold':
@@ -46,9 +69,26 @@ def detect_roi_2d(im : ArrayLike, method : str='triangle', quantile : float=0,
     return (rs, re), (cs, ce)
 
 
-def detect_roi_3d(im : ArrayLike, method : str='triangle',
+def detect_roi_3d(im : NDArray, method : str='triangle',
                   quantile_rc : float=0, quantile_zc : float=0,
-                  **kwargs):
+                  **kwargs) -> BBox3D:
+    """determine 3d bounding box by combining ROIs of 2D max-projections
+        if using `method=threshold` then `threshold=[value]` must be passed as
+        a keyword argument
+        
+    :param im: image to find ROI in
+    :type im: NDArray
+    :param method: thresholding method
+       one of ('triangle', 'otsu', 'threshold')
+    :type method: str
+    :param quantile_rc: quantile used for determining row-column bounding box
+    :type quantile_rc: float
+    :param quantile_zc: quantile used for determining z-row bounding box
+    :type quantile_zc: float
+    :returns: bounding box ROI
+       format is `((lb_z, ub_z), (lb_r,ub_r), (lb_c,ub_c))`
+    :rtype: Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+    """
     xp = cupy.get_array_module(im)
     rc = xp.amax(im, axis=0)
     (rs, re), (cs, ce) = detect_roi_2d(rc, method, quantile_rc, **kwargs)
@@ -57,7 +97,18 @@ def detect_roi_3d(im : ArrayLike, method : str='triangle',
     return (zs, ze), (rs, re), (cs, ce)
 
 
-def combine_rois(a, b, ensure_even=False):
+def combine_rois(a : BBox3D, b : BBox3D, ensure_even : bool=False) -> BBox3D:
+    """make the smallest ROI that encompasses both ROI's `a` & `b`
+
+    :param a: bounding box for first ROI
+    :type a: BBox3D
+    :param b: bounding box for second ROI
+    :type b: BBox3D
+    :param ensure_even: make all dimensions of output ROI even
+    :type ensure_even: bool
+    :returns: bounding box ROI
+    :rtype: Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+    """
     (azs, aze), (ars, are), (acs, ace) = a
     (bzs, bze), (brs, bre), (bcs, bce) = b
     zs, ze = min([azs, bzs]), max([aze, bze])

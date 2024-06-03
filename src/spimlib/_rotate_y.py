@@ -1,10 +1,22 @@
 """
 """
 import cupy
-from numpy.typing import ArrayLike
+from .typing import NDArray
 
 
-def rotate_view(vol : ArrayLike, rot_pos : bool, block_size : int=4):
+def rotate_view(vol : NDArray, rot_pos : bool, block_size : int=4) -> NDArray:
+    """rotate volume by +/- 90 degrees along Y-axis
+
+    :param vol: volume to rotate
+    :type vol: NDArray
+    :param rot_pos: rotate in positive (`True`) or negative (`False`) direction
+    :type rot_pos: bool
+    :param block_size: block size to use for CUDA kernel
+    :type block_size: int
+    :returns: rotated volume
+    :rtype: NDArray
+    """
+
     assert len(vol.shape) == 3, "input must be a 3D volume"
     depth, height, width = vol.shape
     rot_dir = 1 if rot_pos else -1

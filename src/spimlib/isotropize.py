@@ -1,13 +1,30 @@
 import math
 
 import cupy
-from numpy.typing import ArrayLike
 
+from .typing import NDArray
 from ._util import get_fft_module, get_scipy_module
 
 
-def interpolate(vol : ArrayLike, pixel_size : float, step_size : float,
+def interpolate(vol : NDArray, pixel_size : float, step_size : float,
                 axis : int=0, **kwargs):
+    """upsample an axis by interpolation.
+        function will upsample the specified `axis` by assuming it has
+        spacing `step_size` such that the output voxel is `pixel_size**3`
+        `**kwargs` are passed to `ndimage.zoom`
+
+    :param vol: input volume
+    :type vol: NDArray
+    :param pixel_size: pixel size in real (space) units
+    :type pixel_size: float
+    :param step_size: step size in real (space) units
+    :type step_size: float
+    :param axis: axis to upsample
+    :type axis: int
+    :returns: upsampled volume
+    :rtype: NDArray
+    """
+
     n_dim = len(vol.shape)
     assert axis < n_dim and axis >= 0, \
         "axis must be in range [0, len(vol.shape))"
@@ -17,8 +34,32 @@ def interpolate(vol : ArrayLike, pixel_size : float, step_size : float,
     return sp.ndimage.zoom(vol, resc, **kwargs)
 
 
-def fourier_upsample(vol : ArrayLike, pixel_size : float, step_size : float,
+def fourier_upsample(vol : NDArray, pixel_size : float, step_size : float,
                      axis : int=0):
+    """upsample an axis by fourier upsampling.
+        function will upsample the specified `axis` by assuming it has
+        spacing `step_size` such that the output voxel is `pixel_size**3`
+
+        originally described in [1], this technique will preserve the
+        input spectrum by zero-padding the fourier transform of the input
+
+    References
+    ---
+    [1] Stein, et al. "Fourier interpolation stochastic..."
+        doi:10.1364/OE.23.016154
+
+    :param vol: input volume
+    :type vol: NDArray
+    :param pixel_size: pixel size in real (space) units
+    :type pixel_size: float
+    :param step_size: step size in real (space) units
+    :type step_size: float
+    :param axis: axis to upsample
+    :type axis: int
+    :returns: upsampled volume
+    :rtype: NDArray
+    """
+
     n_dim = len(vol.shape)
     assert n_dim == 2 or n_dim == 3, \
         "input must be a 2D image or 3D volume"

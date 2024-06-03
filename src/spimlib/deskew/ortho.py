@@ -4,9 +4,39 @@ import cupy
 import numpy
 from numba import njit, prange
 
+from .typing import NDArray
 
-def deskew_stage_scan(im, pixel_size : float, step_size : float,
-                      direction : int, theta : float=math.pi/4):
+def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
+                      direction : int, theta : float=math.pi/4) -> NDArray:
+    """deskew stage scan data into xyz coordinate system
+        output format is zyx where z is normal to the coverslip,
+        and x & y are the coverslip
+        y is along the long axis of the sheet, x along is the scan direction
+
+        uses the 'orthogonal interpolation' scheme where interpolation is done
+        orthogonally to the direction of the light sheet. this was originally
+        proposed/implemented in V. Maioli's Ph.D. thesis [1]. our code is based
+        heavily on the implementation by D. Shepherd's group [2].
+
+    References
+    ---
+    [1] Vincent Miaioli's PhD Thesis doi: 10.25560/68022
+    [2] github.com/QI2lab/OPM
+
+    :param im: input volume to be deskewed
+    :type im: NDArray
+    :param pixel_size: size of pixels, in real (space) units
+    :type pixel_size: float
+    :param step_size: real space spacing between sheets
+    :type step_size: float
+    :param direction: scan direction (+/- 1)
+    :type direction: int
+    :param theta: angle of objective w.r.t coverslip
+    :type theta: float
+    :returns: deskewed volume
+    :rtype NDArray
+    """
+
     xp = cupy.get_array_module(im)
     if xp == numpy:
         return _deskew_orthogonal_cpu(im, pixel_size, step_size, direction, theta)
