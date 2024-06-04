@@ -2,7 +2,7 @@
 """
 import cupy
 
-from .typing import NDArray
+from ..typing import NDArray
 from .._util import create_texture_object
 
 
@@ -60,7 +60,7 @@ def _deskew_stage_scan_gpu(im : NDArray, pixel_size : float, step_size : float,
     # need to rescale width s.t. entire original image
     # will fit in the deskewed output
     width = width + round(depth*abs(step_size/pixel_size))
-    out = cupy.zeros((depth, height, width), dtype=cp.float32)
+    out = cupy.zeros((depth, height, width), dtype=cupy.float32)
     # setup the kernel
     dkern = cupy.RawKernel(__deskew_kernel_source, 'deskewKernel')
     # launch kernel

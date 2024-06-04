@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Tuple, Union
 
 import cupy
 import numpy
@@ -7,3 +7,12 @@ import numpy
 # array, this is a convenience type definition that can be used to properly
 # annotate the types of these functions
 NDArray = Union[numpy.ndarray, cupy.ndarray]
+
+
+# convenience type for bounding boxes
+# convention here is that the tuples correspond to axes and the values
+# are (lower, upper) bounds for the bounding box
+# example: ((0, 10), (5, 20)) is a 2d bounding box that could be used to
+#          crop `im` like im[0:10,5:20]
+BBox2D = Tuple[Tuple[int,int],Tuple[int,int]]
+BBox3D = Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]

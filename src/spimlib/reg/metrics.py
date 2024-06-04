@@ -1,6 +1,6 @@
 import cupy
 
-from .typing import NDArray
+from ..typing import NDArray
 from .._util import create_texture_object
 
 

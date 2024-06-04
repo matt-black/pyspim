@@ -6,6 +6,7 @@ from typing import Callable, Optional
 import cupy
 import numpy
 import cupyx.scipy
+import dask.array
 from scipy import signal as cpusig
 from cupyx.scipy import signal as cusig
 from dask.array import map_overlap
@@ -303,7 +304,7 @@ def deconvolve_dask(decon_fun : str, device : str,
         backproj_b = psf_b[::-1,::-1,::-1]
     # if verbose, make a tqdm progress bar
     # otherwise, this should be a no-op
-    cxt_mgr = TqdmCallback(desc="dask-decon") if verbose else nullcontext
+    ctx_mgr = TqdmCallback(desc="dask-decon") if verbose else nullcontext
     with ctx_mgr:
         return dask.array.map_overlap(
             _decon_dask, view_a, view_b,
@@ -339,7 +340,7 @@ def _decon_dask(view_a : NDArray, view_b : NDArray,
         if cupy.get_array_module(psf_b) != cupy:
             psf_b = cupy.asarray(psf_b)
         out = decon_fun(
-            cupy.asarray(a), cupy.asarray(b), psf_a, psf_b,
+            cupy.asarray(view_a), cupy.asarray(view_b), psf_a, psf_b,
             (psf_a[::-1,::-1,::-1] if backproj_a is None else backproj_a),
             (psf_b[::-1,::-1,::-1] if backproj_b is None else backproj_b),
             num_iter=num_iter, epsilon=epsilon,
@@ -349,7 +350,7 @@ def _decon_dask(view_a : NDArray, view_b : NDArray,
             mempool.free_all_blocks()
     else:  # cpu
         out = decon_fun(
-            a, b, psf_a, psf_b,
+            view_a, view_b, psf_a, psf_b,
             (psf_a[::-1,::-1,::-1] if backproj_a is None else backproj_a),
             (psf_b[::-1,::-1,::-1] if backproj_b is None else backproj_b),
             num_iter=num_iter, epsilon=epsilon,
@@ -358,4 +359,4 @@ def _decon_dask(view_a : NDArray, view_b : NDArray,
     if crop is None:
         return out
     else:
-        return out[crop:-crop,crop:-crop,crop_:-crop]
+        return out[crop:-crop,crop:-crop,crop:-crop]

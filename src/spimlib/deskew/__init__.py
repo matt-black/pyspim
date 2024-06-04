@@ -12,7 +12,7 @@ def deskew_stage_scan(im, pixel_size : float, step_size : float,
             im, pixel_size, step_size, direction, theta
         )
     elif method == 'dispim':
-        return deskew_stage_scan_shroff(
+        return deskew_stage_scan_dispim(
             im, pixel_size, step_size, direction
         )
     else:

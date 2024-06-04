@@ -3,7 +3,7 @@ import math
 import cupy
 
 from .typing import NDArray
-from ._util import get_fft_module, get_scipy_module
+from ._util import get_fft_module, get_ndimage_module
 
 
 def interpolate(vol : NDArray, pixel_size : float, step_size : float,
@@ -28,10 +28,10 @@ def interpolate(vol : NDArray, pixel_size : float, step_size : float,
     n_dim = len(vol.shape)
     assert axis < n_dim and axis >= 0, \
         "axis must be in range [0, len(vol.shape))"
-    sp = get_scipy_module(vol)
+    ndi = get_ndimage_module(vol)
     resc = [1.,] * n_dim
     resc[axis] = step_size / pixel_size
-    return sp.ndimage.zoom(vol, resc, **kwargs)
+    return ndi.zoom(vol, resc, **kwargs)
 
 
 def fourier_upsample(vol : NDArray, pixel_size : float, step_size : float,

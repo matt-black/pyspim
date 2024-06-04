@@ -3,9 +3,30 @@
 import cupy
 from .typing import NDArray
 
+from .affine.interp import rotate_about_center
 
-def rotate_view(vol : NDArray, rot_pos : bool, block_size : int=4) -> NDArray:
+
+def rotate_view(vol : NDArray, rot_pos : bool, kernel : bool=True) -> NDArray:
     """rotate volume by +/- 90 degrees along Y-axis
+
+    :param vol: volume to rotate
+    :type vol: NDArray
+    :param rot_pos: rotate in positive (`True`) or negative (`False`) direction
+    :type rot_pos: bool
+    :param kernel: use CUDA kernel, if `False` use affine transform
+        CUDA kernel is copied from diSPIMFusion/microImageLib
+    :type kernel: bool
+    :returns: rotated volume
+    :rtype: NDArray
+    """
+    if kernel:
+        return rotate_by_kernel(vol, rot_pos)
+    else:
+        return rotate_by_affine(vol, rot_pos)
+
+
+def rotate_by_affine(vol : NDArray, rot_pos : bool) -> NDArray:
+    """rotate volume by +/- 90 degrees along Y-axis by affine transform
 
     :param vol: volume to rotate
     :type vol: NDArray
@@ -15,6 +36,28 @@ def rotate_view(vol : NDArray, rot_pos : bool, block_size : int=4) -> NDArray:
     :type block_size: int
     :returns: rotated volume
     :rtype: NDArray
+    """
+    sign = 1 if rot_pos else -1
+    return rotate_about_center(vol, 0, sign * math.pi / 2, 0)
+
+
+def rotate_by_kernel(vol : NDArray, rot_pos : bool, block_size : int=4) -> NDArray:
+    """rotate volume by +/- 90 degrees along Y-axis using CUDA kernel
+        kernel taken from microImageLib ([1])
+
+    References
+    ---
+    [1] https://github.com/eguomin/microImageLib
+
+    :param vol: volume to rotate
+    :type vol: NDArray
+    :param rot_pos: rotate in positive (`True`) or negative (`False`) direction
+    :type rot_pos: bool
+    :param block_size: block size to use for CUDA kernel
+    :type block_size: int
+    :returns: rotated volume
+    :rtype: NDArray
+
     """
 
     assert len(vol.shape) == 3, "input must be a 3D volume"
@@ -35,7 +78,7 @@ def rotate_view(vol : NDArray, rot_pos : bool, block_size : int=4) -> NDArray:
     gz = (depth + block_size - 1) // block_size
     rkern(
         (gx, gy, gz), (block_size, block_size, block_size),
-        (out, vol, width, height, depth, rotdir)
+        (out, vol, width, height, depth, rot_dir)
     )
     if input_cpu:
         return out.get()

@@ -2,14 +2,9 @@ from typing import Tuple
 
 import cupy
 
-from .typing import NDArray
+from .typing import NDArray, BBox2D, BBox3D
 from .util import threshold_triangle
-from ._util import get_scipy_module, get_skimage_module
-
-
-# useful type definitions
-BBox2D = Tuple[Tuple[int,int],Tuple[int,int]]
-BBox3D = Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+from ._util import get_ndimage_module, get_skimage_module
 
 
 def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
@@ -35,13 +30,13 @@ def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
     if method == 'threshold':
         thresh = kwargs['threshold']
     xp = cupy.get_array_module(im)
-    sp = get_scipy_module(xp)
+    ndi = get_ndimage_module(xp)
     sk = get_skimage_module(xp)
     # get rid of line artifacts
     vert_line = xp.zeros((5, 5))
     vert_line[:,2] = 1
-    thrim = sp.ndimage.grey_erosion(
-        sp.ndimage.grey_erosion(im, structure=vert_line),
+    thrim = ndi.grey_erosion(
+        ndi.grey_erosion(im, structure=vert_line),
         structure=vert_line.T
     )
     # threshold the image by triangle method
@@ -53,8 +48,8 @@ def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
         pass  # already defined this, above when we grabbed from **kwargs
     
     # dilate 3 times to remove small particles
-    thrim = sp.ndimage.binary_dilation(thrim > thresh, iterations=3,
-                                       brute_force=True)
+    thrim = ndi.binary_dilation(thrim > thresh, iterations=3,
+                                brute_force=True)
     # figure out how to draw bounding box/ROI
     row, col = xp.nonzero(thrim)
     if quantile > 0:

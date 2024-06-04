@@ -1,6 +1,6 @@
 import math
-import functools
 import itertools
+from functools import partial
 
 import numpy
 import cupy
@@ -17,6 +17,8 @@ from .metrics import discrete_entropy
 from .metrics import _corr_ratio_reftex_ewk
 from .metrics import _mutual_information_precomp_target
 from .metrics import _entropy_correlation_coeff_precomp_target
+# other imports
+from ..typing import NDArray
 from .._util import create_texture_object
 from .._util import get_skimage_module, get_fft_module
 
@@ -70,19 +72,32 @@ def __is_floating_point(x):
 
 def _parse_transform_string(string):
     if string in ('t', 'trans', 'translation'):
-        return _trans_matrix, 3
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]]}
+        return _trans_matrix, postfix, 3
     # rotation + translation (+ scaling)
     elif string in ('t+r', 'transrot', 'translation+rotation'):
-        return _rot_trans_matrix, 6
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             'a' : ["{:.2f}".format(v) for v in x[3:]]}
+        return _rot_trans_matrix, postfix, 6
     elif string in ('t+r+s', 'transrotscale', 'translation+rotation+scale'):
-        return _rot_trans_scale_matrix, 9
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             'a' : ["{:.2f}".format(v) for v in x[3:6]],
+                             's' : ["{:.2f}".format(v) for v in x[6:]]}
+        return _rot_trans_scale_matrix, postfix, 9
     # shear + translation
     elif string in ('t+ssh', 'transsymmshear', 'translation+symmetricshear'):
-        return _symmshear_trans_matrix, 6
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             'sh' : ["{:.2f}".format(v) for v in x[3:]]}
+        return _symmshear_trans_matrix, postfix, 6
     elif string in ('t+sh', 'transshear', 'translation+shear'):
-        return _shear_trans_matrix, 9
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             'sh' : ["{:.2f}".format(v) for v in x[3:]]}
+        return _shear_trans_matrix, postfix, 9
     elif string in ('t+sh+s', 'transshearscale', 'translation+shear+scale'):
-        return _shear_trans_scale_matrix, 12
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             'sh' : ["{:.2f}".format(v) for v in x[3:9]],
+                             's' : ["{:.2f}".format(v) for v in x[9:]]}
+        return _shear_trans_scale_matrix, postfix, 12
     else:
         raise ValueError('invalid transform string')
 
@@ -135,7 +150,7 @@ def optimize(ref : NDArray, mov : NDArray, metric : str, transform : str,
 
     # make function that will generate the transform matrix
     # also get # of params req'd
-    mat_fun, n_par_req = _parse_transform_string(transform)
+    mat_fun, postfix_fun, n_par_req = _parse_transform_string(transform)
     if len(par0) != n_par_req:
         raise ValueError('invalid # of initial params for transform')
     if bounds is not None and len(bounds) != n_par_req:
@@ -151,8 +166,7 @@ def optimize(ref : NDArray, mov : NDArray, metric : str, transform : str,
     # we want to maximize, so for metrics confined to [0,1] we do
     # 1 - metric and for unbound metrics, take its negative
     if metric == 'cr':
-        met_fun = functools.partial(_corr_ratio_reftex_ewk,
-                                    ref_tex, mov)
+        met_fun = partial(_corr_ratio_reftex_ewk, ref_tex, mov)
         opt_fun = lambda p: 1.0 - float(met_fun(par_fun(p)))
     elif metric == 'mi' or metric == 'ec':
         # need to normalize input images to [0, 1] for algo. to work
@@ -165,14 +179,14 @@ def optimize(ref : NDArray, mov : NDArray, metric : str, transform : str,
         H_mov = discrete_entropy(P_mov) / cupy.log2(nbin_mov)
         # formulate function
         if metric == 'mi':
-            met_fun = functools.partial(
+            met_fun = partial(
                 _mutual_information_precomp_target,
                 ref_tex, mov, nbin_ref=nbin_ref, nbin_tar=nbin_mov,
                 H_tar=H_mov
             )
             opt_fun = lambda p: -float(met_fun(par_fun(p)))
         elif metric == 'ec':
-            met_fun = functools.partial(
+            met_fun = partial(
                 _entropy_correlation_coeff_precomp_target,
                 ref_tex, mov, nbin_ref=nbin_ref, nbin_tar=nbin_mov,
                 H_tar=H_mov
@@ -184,26 +198,16 @@ def optimize(ref : NDArray, mov : NDArray, metric : str, transform : str,
             )
     else:
         raise ValueError('invalid metric')
-    opt_call = functools.partial(minimize, opt_fun,
-                                 x0=par0, bounds=bounds,
-                                 method='powell', options=opt_kwargs)
+    opt_call = partial(minimize, opt_fun,
+                       x0=par0, bounds=bounds, method='powell',
+                       options=opt_kwargs)
     if verbose:
-        def cback(x, transform, pbar):
+        def cback(x, pbar, postfix_fun):
             pbar.update(1)
-            a = ["{:.1f}".format(p*180/numpy.pi) for p in x[3:6]]
-            if len(x) == 6:
-                t = ["{:.1f}".format(p) for p in x[:3]]
-                pbar.set_postfix({'t' : t, 'r' : a})
-            elif len(x) == 9:
-                t = ["{:.1f}".format(p) for p in x[:3]]
-                s = ["{:.1f}".format(p) for p in x[6:]]
-                pbar.set_postfix({'t':t, 'r':a, 's':s})
-            elif len(x) == 12:
-                pass
-            else:
-                pbar.set_postfix({'t' : t})
+            pbar.set_postfix(postfix_fun(x))
+
         with tqdm(desc="Registration") as pbar:
-            _cback = functools.partial(cback, transform=transform, pbar=pbar)
+            _cback = partial(cback, pbar=pbar, postfix_fun=postfix_fun)
             res = opt_call(callback=_cback)
     else:
         res = opt_call()

@@ -2,7 +2,7 @@ import math
 
 import cupy
 
-from .typing import NDArray
+from ..typing import NDArray
 from .._util import get_skimage_module, get_fft_module
 
 

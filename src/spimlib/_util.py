@@ -9,18 +9,20 @@ import cupy
 import numpy
 from numpy.typing import ArrayLike
 # skimage
-import cucim
 import skimage
+from cucim import skimage as skimage_gpu
 # scipy
 import scipy
 import cupyx.scipy
 import cupyx.scipy.fft as fftgpu
 import scipy.fft as fftcpu
+from scipy import ndimage as ndi_cpu
+from cupyx.scipy import ndimage as ndi_gpu
 # cupy.cuda
 from cupy.cuda import texture
 from cupy.cuda import runtime
 
-from .typing import NDArray
+from .typing import NDArray, BBox2D, BBox3D
 
 
 ## utilities for determining CPU/GPU libraries from inputs
@@ -39,7 +41,7 @@ def get_skimage_module(arr_or_xp) -> types.ModuleType:
     if xp == numpy:
         return skimage
     else:
-        return cucim.skimage
+        return skimage_gpu
 
 
 def get_fft_module(arr_or_xp) -> types.ModuleType:
@@ -76,6 +78,24 @@ def get_scipy_module(arr_or_xp) -> types.ModuleType:
         return scipy
     else:
         return cupyx.scipy
+
+
+def get_ndimage_module(arr_or_xp) -> types.ModuleType:
+    """scipy.ndimage module for input arguments
+
+    :param arr_or_xp: input to determine whether scipy or cupyx should be used
+    :type arr_or_xp: NDArray or numpy/cupy module
+    :returns: `scipy.ndimage` or `cupyx.scipy.ndimage` based on types of the arguments
+    :rtype: module
+    """
+    if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
+        xp = cupy.get_array_module(arr_or_xp)
+    else:
+        xp = arr_or_xp
+    if xp == numpy:
+        return ndi_cpu
+    else:
+        return ndi_gpu
 
 
 ## misc. support functions
@@ -247,6 +267,76 @@ def center_crop(vol : NDArray, *args) -> NDArray:
         return vol[sr:sr+crop_r,sc:sc+crop_c]
     else:
         return vol[sz:sz+crop_z,sr:sr+crop_r,sc:sc+crop_c]
+
+
+def bbox_for_mask(m : NDArray) -> typing.Union[BBox2D, BBox3D]:
+    """calculate bounding box encompassing 'on' pixels of mask
+
+    :param m: input mask
+    :type m: NDArray
+    :returns: bounding box for mask
+    :rtype: Union[BBox2D, BBox3D]
+    """
+    assert len(m.shape) == 2 or len(m.shape) == 3, \
+        "input mask must be 2- or 3-D"
+    xp = cupy.get_array_module(m)
+    if len(m.shape) == 3:
+        z, y, x = xp.where(m)
+        lz, uz = xp.amin(z), xp.amax(z)
+        ly, uy = xp.amin(y), xp.amax(y)
+        lx, ux = xp.amin(x), xp.amax(x)
+        return (lz, uz), (ly, uy), (lx, ux)
+    else:
+        y, x = xp.where(m)
+        ly, uy = xp.amin(y), xp.amax(y)
+        lx, ux = xp.amin(x), xp.amax(x)
+        return (ly, uy), (lx, ux)
+
+
+def shared_bbox_from_proj_threshold(
+        v1 : NDArray, v2 : NDArray,
+        proj_fun : str='max', thresh_val : float=0) -> BBox3D:
+    """determine region shared by both volumes by thresholding
+        'shared' means that both have data in the region
+
+    :param v1: first volume
+    :type v1: NDArray
+    :param v2: second volume
+    :type v2: NDArray
+    :param proj_fun: function to project with
+       one of ('max', 'mean', 'median')
+    :type proj_fun: str
+    :param thresh_val: value to threshold with to make mask
+    :type thresh_val: float
+    :returns: 3d bounding box of region common to `v1` and `v2`
+    :rtype: BBox3D
+    """
+    assert proj_fun in ('max', 'mean', 'median'), \
+        "invalid `proj_fun` must be one of ('max', 'mean', 'median')"
+    xp = cupy.get_array_module(v1)
+    if proj_fun == 'max':
+        fun = xp.amax
+    elif proj_fun == 'mean':
+        fun = xp.mean
+    else:
+        fun = 'median'
+    bb_yx = bbox_for_mask(
+        xp.logical_and(fun(v1, 0)>thresh_val, fun(v2, 0)>thresh_val)
+    )
+    bb_yx = [0, xp.inf] + list(bb_yx[0]) + list(bb_yx[1])
+    bb_zx = bbox_for_mask(
+        xp.logical_and(fun(v1, 1)>thresh_val, fun(v2, 1)>thresh_val)
+    )
+    bb_zx = list(bb_zx[0]) + [0, xp.inf] + list(bb_zx[1])
+    bb_zy = bbox_for_mask(
+        xp.logical_and(fun(v1, 2)>thresh_val, fun(v2, 2)>thresh_val)
+    )
+    bb_zy = list(bb_zy[0]) + list(bb_zy[1]) + [0, xp.inf]
+    bb = numpy.vstack([bb_yx, bb_zx, bb_zy])
+    starts = xp.amax(bb, 0)[::2].astype(int)
+    ends = xp.amin(bb, 0)[1::2].astype(int)
+    bb = [(starts[i], ends[i]) for i in range(3)]
+    return tuple(bb)
 
 
 ## texture utilities

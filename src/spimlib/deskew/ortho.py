@@ -4,7 +4,7 @@ import cupy
 import numpy
 from numba import njit, prange
 
-from .typing import NDArray
+from ..typing import NDArray
 
 def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
                       direction : int, theta : float=math.pi/4) -> NDArray:
