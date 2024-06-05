@@ -16,6 +16,8 @@ import numpy
 import tifffile as tiff
 from tqdm.auto import tqdm
 
+from ..typing import NDArray
+
 
 # NOTE: these lists are hard-coded to accomodate up to 10 channels/head
 # if you need more, increase the range upper bound
@@ -133,3 +135,19 @@ class uManagerAcquisitionFolderZarr(object):
             assert len(self._zarr.shape) == 5, \
                 "expected 5d array, was {:d}".format(len(self._zarr.shape))
             return self._xp.asarray(self._zarr[time,_ch,...])
+
+
+def subtract_constant_uint16arr(arr : NDArray, const : int) -> NDArray:
+    """subtract constant value from uint16 input array
+        useful when handling unsigned integer data as it typically is formatted
+        by the cameras used in diSPIM imaging
+
+    :param arr: input array
+    :type arr: NDArray
+    :param const: constant to subtract
+    :type const: int
+    :returns: input array less the constant value
+    :rtype: NDArray
+    """
+    xp = cupy.get_array_module(arr)
+    return (arr.astype(xp.int32) - const).clip(0, 2**16).astype(xp.uint16)
