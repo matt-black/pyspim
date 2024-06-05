@@ -111,7 +111,7 @@ def rotate_about_point(vol : NDArray,
     t1 = translation_matrix(x, y, z)
     R  = rotation_matrix(alpha, beta, gamma)
     t2 = translation_matrix(-x, -y, -z)
-    return affine_transform(vol, t1 @ R @ t2)
+    return transform(vol, t1 @ R @ t2)
 
 
 def rotate_about_center(vol : NDArray,

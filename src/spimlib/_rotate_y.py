@@ -1,8 +1,10 @@
 """
 """
-import cupy
-from .typing import NDArray
+import math
 
+import cupy
+
+from .typing import NDArray
 from .affine.interp import rotate_about_center
 
 

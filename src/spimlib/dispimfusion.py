@@ -7,6 +7,9 @@ References
 [2] https://github.com/eguomin/diSPIMFusion
 [3] https://github.com/eguomin/microImageLib
 """
+import math
+
+from .typing import NDArray
 
 ## IMPORTS
 ## import order is roughly that of the pipeline that is used by
@@ -50,8 +53,30 @@ from .affine.interp import transform as affine_transform
 ## deconvolution
 ## ===
 ## to achieve isotropic resolution, the two registered views must be
-## co-deconvolved
+## co-deconvolved. because diSPIMFusion uses the `joint_rl_dispim`
+## deconvolution algorithm, we alias it as `deconvolve` here
 from ._util import shared_bbox_from_proj_threshold
-from .deconv._util import crop_and_pad_for_deconv
-from .deconv.dualview import joint_rl_dispim as deconvolve 
-from .deconv.dualview import deconvolve_dask
+from .decon._util import crop_and_pad_for_deconv
+from .decon.dualview import joint_rl_dispim as deconvolve 
+from .decon.dualview import deconvolve_dask
+
+
+## rotation 2
+## ===
+## *optional*: the final output can be rotated so that it is in the "normal"
+##   lab frame coordinate system where xy is the coverslip and z is normal
+##   to the coverslip
+from .affine.interp import rotate_about_center
+def rotate_into_lab_frame(vol : NDArray):
+    """rotate output of diSPIMFusion into the lab frame
+        diSPIMFusion does all the analysis in the coordinate frame of the 'A'
+        head, which is tilted 45 degrees from the coverslip. this function will
+        rotate the volume 45 degrees along the y-axis so that the volume now
+        is in the "normal" zyx "lab frame" coordinate system
+
+    :param vol: input volume
+    :type vol: NDArray
+    :returns: input rotated 45 degrees
+    :rtype: NDArray
+    """
+    return rotate_about_center(vol, 0, math.pi/4, 0)
