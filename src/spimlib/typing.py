@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import List, Tuple, Union
 
 import cupy
 import numpy
@@ -16,3 +16,8 @@ NDArray = Union[numpy.ndarray, cupy.ndarray]
 #          crop `im` like im[0:10,5:20]
 BBox2D = Tuple[Tuple[int,int],Tuple[int,int]]
 BBox3D = Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+
+# convenience type for specifying padding
+# mostly used for deconvolution but useful for any function
+# that pads an image and takes the amount of padding as input
+PadType = Union[int,List[int],Tuple[int]]

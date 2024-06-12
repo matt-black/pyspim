@@ -260,7 +260,10 @@ def center_crop(vol : NDArray, *args) -> NDArray:
         size_r, size_c = vol.shape
     else:
         size_z, size_r, size_c = vol.shape
+        crop_z = crop_z if crop_z < size_z else size_z
         sz = size_z // 2 - crop_z // 2
+    crop_r = crop_r if crop_r < size_r else size_r
+    crop_c = crop_c if crop_c < size_c else size_c
     sr = size_r // 2 - crop_r // 2
     sc = size_c // 2 - crop_c // 2
     if n_dim == 2:

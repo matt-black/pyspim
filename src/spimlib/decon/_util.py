@@ -1,7 +1,12 @@
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
+
 import cupy
+from scipy.signal import fftconvolve as fftconv_cpu
+from cupyx.scipy.signal import fftconvolve as fftconv_gpu
 
 from ..typing import NDArray, BBox3D
+from .._util import supported_float_type
+
 __tup3 = Tuple[int,int,int]  # convenience type for output
 
 
