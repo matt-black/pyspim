@@ -24,7 +24,6 @@ def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
     :returns: bounding box ROI
     :rtype: Tuple[Tuple[int,int],Tuple[int,int]]
     """
-
     assert method in ('triangle', 'otsu', 'threshold'), \
         "invalid segmentation method specified"
     if method == 'threshold':

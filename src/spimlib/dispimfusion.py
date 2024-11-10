@@ -48,7 +48,7 @@ from ._rotate_y import rotate_view  # view B rotation
 ##   preliminary alignments can be obtained by using phase cross correlation
 from ._util import pad_to_same_size
 from . import reg
-from .affine.interp import transform as affine_transform
+from .affine.lerp import transform as affine_transform
 
 ## deconvolution
 ## ===
@@ -66,7 +66,7 @@ from .decon.dualview import deconvolve_dask
 ## *optional*: the final output can be rotated so that it is in the "normal"
 ##   lab frame coordinate system where xy is the coverslip and z is normal
 ##   to the coverslip
-from .affine.interp import rotate_about_center
+from .affine.lerp import rotate_about_center
 def rotate_into_lab_frame(vol : NDArray):
     """rotate output of diSPIMFusion into the lab frame
         diSPIMFusion does all the analysis in the coordinate frame of the 'A'

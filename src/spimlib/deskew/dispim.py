@@ -1,9 +1,26 @@
 """
 """
+import os
 import cupy
 
 from ..typing import NDArray
 from .._util import create_texture_object
+
+
+__module_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    'dispim.cu'
+)
+with open(__module_path, 'r') as f:
+    __module_txt = f.read()
+
+__kernel_names = (
+    'deskewTexture',
+)
+__cuda_module = cupy.RawModule(code=__module_txt,
+                               name_expressions=__kernel_names)
+__cuda_module.compile()  # throw compiler errors here, if problems
+
 
 
 def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
@@ -28,18 +45,17 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
     :returns: deskewed volume
     :rtype: NDArray
     """
-    xp = cupy.get_array_module(im)
-    if xp == cupy:
-        return _deskew_stage_scan_gpu(im, pixel_size, step_size, direction,
-                                      **kwargs)
-    else:
-        return _deskew_stage_scan_cpu(im, pixel_size, step_size, direction)
+    return deskew_texture(im, pixel_size, step_size, direction, **kwargs)
 
 
-def _deskew_stage_scan_gpu(im : NDArray, pixel_size : float, step_size : float,
-                           direction : int, block_size : int=4) -> NDArray:
-    assert direction == 1 or direction == -1, \
-        "direction must be +/- 1"
+def output_width(depth : int, width : int, 
+                 step_size : float, pixel_size : float):
+    return width + round(depth * abs(step_size / pixel_size))
+
+
+def deskew_texture(im : NDArray, pixel_size : float, step_size : float,
+                   direction : int, block_size : int=4) -> cupy.ndarray:
+    assert direction == 1 or direction == -1, "direction must be +/- 1"
     depth, height, width = im.shape
     # convert image to 32-bit float
     in_type = im.dtype
@@ -54,15 +70,16 @@ def _deskew_stage_scan_gpu(im : NDArray, pixel_size : float, step_size : float,
     # if nearest-neighbor interpolation is used -- linear will give
     # a funny doubling pattern in the output. but also note that for
     # step sizes less than 1, this can give jagged artifacts
-    tex_obj, tex_arr = create_texture_object(im, 'border', 'nearest',
-                                             'element_type')
+    tex_obj, tex_arr = create_texture_object(
+        im, 'border', 'nearest', 'element_type'
+    )
     depth, height, width = im.shape
     # need to rescale width s.t. entire original image
     # will fit in the deskewed output
-    width = width + round(depth*abs(step_size/pixel_size))
+    width = output_width(depth, width, step_size, pixel_size)
     out = cupy.zeros((depth, height, width), dtype=cupy.float32)
     # setup the kernel
-    dkern = cupy.RawKernel(__deskew_kernel_source, 'deskewKernel')
+    dkern = __cuda_module.get_function('deskewTexture')
     # launch kernel
     grid_x = (width + block_size - 1) // block_size
     grid_y = (height + block_size - 1) // block_size
@@ -78,28 +95,4 @@ def _deskew_stage_scan_gpu(im : NDArray, pixel_size : float, step_size : float,
     # return the same data type as the input image (probably uint16)
     # NOTE: this seems to solve a CUDAIllegalMemoryAccess error that
     # can occur if the output is left as a 32-bit float
-    return out.astype(in_type)
-
-
-__deskew_kernel_source=r'''
-extern "C"{
-__global__ void deskewKernel(float* deskewed, cudaTextureObject_t texObj,
-                             int width, int height, int depth, double rel_pixel_size)
-{
-    unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    int z;
-    if (x < width && y < height) {
-        for (z = 0; z < depth; z++) {
-            float x2 = (float)x * rel_pixel_size - z;
-            deskewed[x + width*y + z*width*height] = tex3D<float>(texObj, x2/rel_pixel_size, y, z);
-        }
-    }
-}
-}
-'''
-
-
-def _deskew_stage_scan_cpu(im, pixel_size, step_size, direction):
-    raise NotImplementedError('only GPU-based deskewing avail. right now')
+    return cupy.clip(out, 0, 2**16-1).astype(in_type)

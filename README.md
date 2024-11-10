@@ -3,21 +3,27 @@ Python library & napari plugin for analyzing SPIM microscopy data.
 
 ## development environment setup
 
-To get all of the dependencies (*note*: done on `della@princeton`):
-```
-module load anaconda3/2023.9
-module load cudatoolkit/12.2
-conda create -p /tigress/[user name]/conda/napari-env python=3.10
-conda activate /tigress/[user name]/conda/napari-env
-conda install -c conda-forge mamba
-mamba install -c conda-forge napari
-mamba install -c rapidsai -c conda-forge -c nvidia cuml=24.04 cucim=24.04 cuda-version=12.2
-```
-*note*: the rapids installation is quite general and probably brings along a bunch of shit we don't need. We'll trim later. I also don't know if the `module load cudatoolkit/12.2` is necessary, but for now it stays because this worked. 
+Dependencies:
+    - `cupy`
+    - `numpy`
+    - `scipy`
+    - `scikit-image`
+    - `tqdm`
 
-I like to have a JupyterLab instance in my development environment:
+Compilation of CUB kernels requires CUDA >=12.6. To ensure this works, `cupy` has to be linked to the version already installed, as is done below (*note*: done on `della@princeton`).
 ```
-mamba install -c conda-forge jupyterlab ipympl
+module load anaconda3/2024.6
+module load cudatoolkit/12.6
+conda create -p /tigress/[user name]/conda/spimlib python=3.12
+conda activate /tigress/[user name]/conda/spimlib
+CUDA_PATH=/usr/local/cuda-12.6 pip install cupy
+pip install tqdm
+```
+
+Other useful things:
+```
+pip install jupyterlab
+pip install ipympl
 ```
 
 Then to install this repository into your environment for development:

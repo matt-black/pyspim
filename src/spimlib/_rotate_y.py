@@ -5,7 +5,7 @@ import math
 import cupy
 
 from .typing import NDArray
-from .affine.interp import rotate_about_center
+from .affine.lerp import rotate_about_center
 
 
 def rotate_view(vol : NDArray, rot_pos : bool, kernel : bool=True) -> NDArray:
@@ -43,7 +43,8 @@ def rotate_by_affine(vol : NDArray, rot_pos : bool) -> NDArray:
     return rotate_about_center(vol, 0, sign * math.pi / 2, 0)
 
 
-def rotate_by_kernel(vol : NDArray, rot_pos : bool, block_size : int=4) -> NDArray:
+def rotate_by_kernel(vol : NDArray, rot_pos : bool, 
+                     block_size : int=4) -> NDArray:
     """rotate volume by +/- 90 degrees along Y-axis using CUDA kernel
         kernel taken from microImageLib ([1])
 

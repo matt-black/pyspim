@@ -624,8 +624,8 @@ def deconvolve_dask(decon_fun : str, device : str,
     else:
         raise ValueError('invalid decon function')
     if device == 'gpu':
-        psf_a = cupy.asarray(psf_a)
-        psf_b = cupy.asarray(psf_b)
+        psf_a = cupy.asarray(psf_a).astype(cupy.float32)
+        psf_b = cupy.asarray(psf_b).astype(cupy.float32)
         mempool = cupy.get_default_memory_pool()
     else:
         mempool = None
@@ -683,7 +683,9 @@ def _decon_dask(view_a : NDArray, view_b : NDArray,
         if cupy.get_array_module(psf_b) != cupy:
             psf_b = cupy.asarray(psf_b)
         out = decon_fun(
-            cupy.asarray(view_a), cupy.asarray(view_b), psf_a, psf_b,
+            cupy.asarray(view_a).astype(cupy.float32), 
+            cupy.asarray(view_b).astype(cupy.float32), 
+            psf_a, psf_b,
             (psf_a[::-1,::-1,::-1] if backproj_a is None else backproj_a),
             (psf_b[::-1,::-1,::-1] if backproj_b is None else backproj_b),
             num_iter=num_iter, epsilon=epsilon,

@@ -93,7 +93,7 @@ def fourier_upsample(vol : NDArray, pixel_size : float, step_size : float,
         elif axis == 1:
             return out[:,cent-nmh,cent+nmh,:]
         else:
-            return out[...,cent-nhm:cent+nmh]
+            return out[...,cent-nmh:cent+nmh]
     else:  # n_dim == 2
         if axis == 0:
             return out[cent-nmh:cent+nmh,:]

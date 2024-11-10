@@ -7,10 +7,7 @@ from functools import partial
 
 import cupy
 import numpy
-from numpy.typing import ArrayLike
-# skimage
-import skimage
-from cucim import skimage as skimage_gpu
+
 # scipy
 import scipy
 import cupyx.scipy
@@ -22,26 +19,7 @@ from cupyx.scipy import ndimage as ndi_gpu
 from cupy.cuda import texture
 from cupy.cuda import runtime
 
-from .typing import NDArray, BBox2D, BBox3D
-
-
-## utilities for determining CPU/GPU libraries from inputs
-def get_skimage_module(arr_or_xp) -> types.ModuleType:
-    """skimage array module for input arguments
-
-    :param arr_or_xp: input to determine whether skimage or cucim should be used
-    :type arr_or_xp: NDArray or numpy/cupy module
-    :returns: `skimage` or `cucim.skimage` based on types of the arguments
-    :rtype: module
-    """
-    if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
-        xp = cupy.get_array_module(arr_or_xp)
-    else:
-        xp = arr_or_xp
-    if xp == numpy:
-        return skimage
-    else:
-        return skimage_gpu
+from .typing import NDArray, BBox2D, BBox3D, CuLaunchParameters
 
 
 def get_fft_module(arr_or_xp) -> types.ModuleType:
@@ -137,11 +115,23 @@ def supported_float_type(input_dtype, allow_complex : bool=False):
         '?': cupy.float32,     # bool
     }
     if isinstance(input_dtype, Iterable) and not isinstance(input_dtype, str):
-        return cupy.result_type(*(_supported_float_type(d) for d in input_dtype))
+        return cupy.result_type(*(supported_float_type(d) for d in input_dtype))
     input_dtype = cupy.dtype(input_dtype)
     if not allow_complex and input_dtype.kind == 'c':
         raise ValueError("complex valued input is not supported")
     return new_float_type.get(input_dtype.char, cupy.float64)
+
+
+def is_floating_point(x : NDArray) -> bool:
+    """boolean indicator for if the input is/not floating point
+
+    :param x: input array to check
+    :type x: NDArray
+    :return: whether (`True`) or not (`False`) the array is floating point
+    :rtype: bool
+    """
+    xp = cupy.get_array_module(x)
+    return x.dtype in (xp.float16, xp.float32, xp.float64)
 
 
 ## padding/shape utilities
@@ -227,11 +217,19 @@ def pad_to_same_size(a : NDArray, b : NDArray,
     :returns: padded versions of input volumes with common shape
     :rtype: tuple[NDArray]
     """
-    za, ya, xa = a.shape
-    zb, yb, xb = b.shape
-    z, y, x = max([za, zb]), max([ya, yb]), max([xa, xb])
-    fn = partial(pad_to_shape, shape=[z, y, x], **kwargs)
-    return fn(a), fn(b)
+    if len(a.shape) == 3:
+        za, ya, xa = a.shape
+        zb, yb, xb = b.shape
+        z, y, x = max([za, zb]), max([ya, yb]), max([xa, xb])
+        fn = partial(pad_to_shape, shape=[z, y, x], **kwargs)
+        return fn(a), fn(b)
+    else:
+        assert len(a.shape) == 2, 'must be 2d image if not a 3d volume'
+        ya, xa = a.shape
+        yb, xb = b.shape
+        y, x = max([ya, yb]), max([xa, xb])
+        fn = partial(pad_to_shape, shape=[y,x], **kwargs)
+        return fn(a), fn(b)
 
 
 def center_crop(vol : NDArray, *args) -> NDArray:
@@ -242,7 +240,6 @@ def center_crop(vol : NDArray, *args) -> NDArray:
     :returns: crop of input volume
     :rtype: NDArray
     """
-
     # unpack args into crop_z, crop_r, crop_c
     n_dim = len(vol.shape)
     assert n_dim == 2 or n_dim == 3, \
@@ -338,7 +335,7 @@ def shared_bbox_from_proj_threshold(
     bb = numpy.vstack([bb_yx, bb_zx, bb_zy])
     starts = xp.amax(bb, 0)[::2].astype(int)
     ends = xp.amin(bb, 0)[1::2].astype(int)
-    bb = [(starts[i], ends[i]) for i in range(3)]
+    bb = [(int(starts[i]), int(ends[i])) for i in range(3)]
     return tuple(bb)
 
 
@@ -360,7 +357,6 @@ def create_texture_object(data : NDArray,
     :returns: tuple of the texture object and CUDAarray
     
     """
-
     if cupy.issubdtype(data.dtype, cupy.unsignedinteger):
         fmt_kind = runtime.cudaChannelFormatKindUnsigned
     elif cupy.issubdtype(data.dtype, cupy.integer):
@@ -460,3 +456,17 @@ def threshold_triangle(im : NDArray, nbins : int=256) -> float:
     if flip:
         arg_level = nbins - arg_level - 1
     return bin_centers[arg_level]
+
+
+def _cuda_gridsize_for_blocksize(dim : int, block_size : int) -> int:
+    return (dim + block_size - 1) // block_size
+
+
+def launch_params_for_volume(shp : Iterable[int], 
+                             block_size_z : int, 
+                             block_size_r : int,
+                             block_size_c : int) -> CuLaunchParameters:
+    gz = _cuda_gridsize_for_blocksize(shp[0], block_size_z)
+    gr = _cuda_gridsize_for_blocksize(shp[1], block_size_r)
+    gc = _cuda_gridsize_for_blocksize(shp[2], block_size_c)
+    return (gz, gr, gc), (block_size_z, block_size_r, block_size_c)

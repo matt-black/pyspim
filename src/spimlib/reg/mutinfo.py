@@ -4,153 +4,6 @@ from ..typing import NDArray
 from .._util import create_texture_object
 
 
-## CORRELATION RATIO
-corr_kernel_source=r'''
-extern "C"{
-__global__ void corrKernel(double *sqrsum, double *corsum,
-                           double *d_aff, float* target, cudaTextureObject_t src_tex,
-                           size_t sx, size_t sy, size_t sz, size_t sx2, size_t sy2, size_t sz2) {
-        const size_t x = blockDim.x * blockIdx.x + threadIdx.x;
-	const size_t y = blockDim.y * blockIdx.y + threadIdx.y;
-
-        size_t z;
-	float t, s;
-	double ss = 0, st = 0;
-	// coordinates transformation
-	if (x < sx && y < sy)
-        {
-		for (z = 0; z < sz; z++)
-                {
-			float ix = (float)x;
-			float iy = (float)y;
-			float iz = (float)z;
-			float tx = d_aff[0] * ix + d_aff[1] * iy + d_aff[2] * iz + d_aff[3] + 0.5;
-			float ty = d_aff[4] * ix + d_aff[5] * iy + d_aff[6] * iz + d_aff[7] + 0.5;
-			float tz = d_aff[8] * ix + d_aff[9] * iy + d_aff[10] * iz + d_aff[11] + 0.5;
-			if (tx>0 && tx < sx2 && ty>0 && ty < sy2 && tz>0 && tz < sz2)
-				s = tex3D<float>(src_tex, tx, ty, tz);
-			else
-				s = 0;
-			t = target[x + y*sx + z*sx*sy];
-			ss += (double)s*s;
-			st += (double)s*t;
-		}
-		sqrsum[x + y*sx] = ss;
-		corsum[x + y*sx] = st;
-	}
-}
-}
-'''
-
-
-def _corr_ratio_reftex_raw(texA, imB : NDArray, stdB : float, tM : NDArray,
-                           zdimA : int, ydimA : int, xdimA : int,
-                           block_size : int =4):
-    zdimB, ydimB, xdimB = imB.shape
-    imB = imB.astype(cupy.float32, copy=False)
-    # preallocate output
-    sqrsum = cupy.zeros((xdimA*ydimA,), dtype=cupy.uint64)
-    corsum = cupy.zeros_like(sqrsum)
-    # make the kernel
-    ckern = cupy.RawKernel(corr_kernel_source, 'corrKernel')
-    # figure out computation grid
-    grid_x = (xdimB + block_size - 1) // block_size
-    grid_y = (ydimB + block_size - 1) // block_size
-    # call the kernel
-    ckern((grid_x, grid_y), (block_size, block_size),
-          (sqrsum, corsum, tM, imB, texA,
-           xdimB, ydimB, zdimB, xdimA, ydimA, zdimA))
-    # finish the calculation
-    sqrsum = cupy.sum(sqrsum)
-    corsum = cupy.sum(corsum)
-    if cupy.sqrt(sqrsum) == 0:
-        return -2.0
-    else:
-        return float(cupy.sqrt(corsum)/(cupy.sqrt(sqrsum)*stdB))
-    
-
-def _corr_ratio_refcpy_raw(imA : NDArray, imB : NDArray, tM : NDArray,
-                           block_size : int=4) -> float:
-    """compute the correlation ratio using the CUDA kernel from [1]
-        for how the CUDA setup works, see [2]
-
-    References
-    ---
-    [1] Guo et al. "Rapid image deconvolution...", doi:10.1038/s41587-020-0560-x
-    [2] https://github.com/cupy/cupy/pull/2432
-
-    :param imA: reference volume
-    :type imA: NDArray
-    :param imB: moving volume
-    :type imB: NDArray
-    :param tM: matrix to transform `imB` with
-    :type tM: NDArray
-    :param block_size: block size of CUDA kernel
-    :type block_size: int
-    :returns: correlation ratio
-    :rtype: float
-    """
-    zda, yda, xda = imA.shape
-    imA = imA.astype(cupy.float32)
-    stdA = cupy.sqrt(cupy.sum(imA))
-    imB = imB.astype(cupy.float32)
-    stdB = cupy.sqrt(cupy.sum(imB))
-    # need to move the reference image (A) to texture
-    tex_obj, tex_arr = create_texture_object(imA, 'border', 'linear',
-                                             'element_type')
-    cr = correlation_ratio_reftex(tex_obj, imB, stdB, tM, zda, yda, xda,
-                                  block_size)
-    del tex_obj, tex_arr
-    return cr
-
-
-_corr_ratio_sum_kernel = cupy.ElementwiseKernel(
-    'U texObj, raw T target, raw float32 m, uint64 height, uint64 width',
-    'T corsum, T sqrsum',
-    '''
-    float4 voxel = make_float4(
-        (float)(i / (width * height)) + .5f,
-        (float)((i % (width * height)) / width) + .5f,
-        (float)((i % (width * height)) % width) + .5f,
-        1.0f
-    );
-
-    float x = dot(voxel, make_float4(m[0],  m[1],  m[2],  m[3]));
-    float y = dot(voxel, make_float4(m[4],  m[5],  m[6],  m[7]));
-    float z = dot(voxel, make_float4(m[8],  m[9],  m[10], m[11]));
-
-    T s = tex3D<T>(texObj, z, y, x);
-    corsum = s * target[i];
-    sqrsum = s * s;
-    ''',
-    'correlation_ratio',
-    preamble='''
-    inline __host__ __device__ float dot(float4 a, float4 b)
-    {
-        return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-    }
-    ''')
-
-
-def _corr_ratio_refcpy_ewk(imA : NDArray, imB : NDArray, tM : NDArray):
-    tex_obj, tex_arr = create_texture_object(imA, 'border', 'linear',
-                                             'element_type')
-    sqrsum = cupy.empty_like(imB)
-    corsum = cupy.empty_like(imA)
-    _corr_ratio_sum_kernel(tex_obj, imB, tM.astype(cupy.float32), *imB.shape[1:],
-                           corsum, sqrsum)
-    del tex_obj, tex_arr
-    return cupy.sum(corsum) / cupy.sum(sqrsum)
-
-
-def _corr_ratio_reftex_ewk(imA : NDArray, imB : NDArray, tM : NDArray):
-    sqrsum, corsum = cupy.empty_like(imB), cupy.empty_like(imB)
-    tM = cupy.asarray(tM).astype(cupy.float32)
-    _corr_ratio_sum_kernel(imA, imB, tM, *imB.shape[1:],
-                           corsum, sqrsum)
-    return cupy.sum(corsum) / cupy.sum(sqrsum)
-
-
 ## MUTUAL INFORMATION
 # mutual information based metrics
 """cupy implementation of fast histogramming, as described in [1]
@@ -200,19 +53,13 @@ _joint_hist_preproc_kernel = cupy.ElementwiseKernel(
     ''')
 
 
-@cupy.fuse()
-def discrete_entropy(hist_vals : NDArray):
-    """compute the (unnormalized) entropy of the input histogram values,
-        as if they're a probability distribution
-        as defined here, the entropy will scale like log2(# bins)
-        so to normalize it, take the output of this and divide by that
-
-    :param hist_vals: values at each histogram bin
-    :type hist_vals: NDArray
-    :returns: entropy
-    :rtype: float
-    """
-    return -cupy.sum(hist_vals * cupy.log2(hist_vals))
+discrete_entropy = cupy.ReductionKernel(
+    'T h', 'T y',
+    'h * log2(h)',
+    'a + b',
+    'y = -a',
+    ''
+)
 
 
 def _preprocess_image_pair_reftex(ref, tar : NDArray, tM : NDArray,
@@ -271,15 +118,15 @@ def mutual_information(ref : NDArray, tar : NDArray, tM : NDArray,
     """
     ref_tex, tex_arr = create_texture_object(ref, 'border', 'linear',
                                              'element_type')
-    j1, jx = _preprocess_image_pair_reftex(
-        ref_tex, tar, tM, nbin_ref, nbin_tar
-    )
+    #j1, jx = _preprocess_image_pair_reftex(
+    #    ref_tex, tar, tM, nbin_ref, nbin_tar
+    #)
     # compute entropy of target
     P_tar, _ = cupy.histogram(tar, nbin_tar)
     P_tar = P_tar / cupy.sum(P_tar) + cupy.finfo(float).eps
     H_tar = discrete_entropy(P_tar) / cupy.log2(nbin_tar)
-    mi = mutual_information_precomp_target(ref_tex, tar, cupy.eye(4),
-                                           nbin_ref, nbin_tar, H_tar)
+    mi = _mutual_information_precomp_target(ref_tex, tar, cupy.eye(4),
+                                            nbin_ref, nbin_tar, H_tar)
     del ref_tex, tex_arr
     return mi
     
@@ -320,15 +167,15 @@ def entropy_correlation_coeff(ref : NDArray, tar : NDArray, tM : NDArray,
     """
     ref_tex, tex_arr = create_texture_object(ref, 'border', 'linear',
                                              'element_type')
-    j1, jx = _preprocess_image_pair_reftex(
-        ref_tex, tar, tM, nbin_ref, nbin_tar
-    )
+    #j1, jx = _preprocess_image_pair_reftex(
+    #    ref_tex, tar, tM, nbin_ref, nbin_tar
+    #)
     # compute entropy of target
     P_tar, _ = cupy.histogram(tar, nbin_tar)
     P_tar = P_tar / cupy.sum(P_tar) + cupy.finfo(float).eps
     H_tar = discrete_entropy(P_tar) / cupy.log2(nbin_tar)
-    ec = entropy_correlation_coeff_precomp_target(
-        ref_tex, tar, cupy.eye(4), nbin_ref, nbin_tar, H_tar
+    ec = _entropy_correlation_coeff_precomp_target(
+        ref_tex, tar, tM, nbin_ref, nbin_tar, H_tar
     )
     del ref_tex, tex_arr
     return ec

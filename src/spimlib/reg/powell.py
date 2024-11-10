@@ -1,6 +1,7 @@
-import math
-import itertools
 from functools import partial
+from itertools import accumulate
+from typing import List
+from numbers import Number
 
 import numpy
 import cupy
@@ -11,33 +12,35 @@ from .._matrix import translation_matrix, \
     rotation_about_point_matrix, \
     scale_matrix, \
     symmetric_shear_about_point_matrix, shear_about_point_matrix
-from ..affine.interp import transform as affine_transform
-# metric imports
-from .metrics import discrete_entropy
-from .metrics import _corr_ratio_reftex_ewk
-from .metrics import _mutual_information_precomp_target
-from .metrics import _entropy_correlation_coeff_precomp_target
 # other imports
-from ..typing import NDArray
-from .._util import create_texture_object
-from .._util import get_skimage_module, get_fft_module
+from .met import _cub as met_cub
+from .met import _linear as met_linear
+from .met import _cubspl as met_cubspl
+from ..typing import CuLaunchParameters, OptBounds, OptBoundMargins
+from ..util import launch_params_for_volume
 
 
 def _trans_matrix(params, x, y, z):
     return translation_matrix(*params)
 
 
+def _trans_scale_matrix(params, x, y, z):
+    T = translation_matrix(*params[:3])
+    T[0,0], T[1,1], T[2,2] = params[3], params[4], params[5]
+    return T
+
+
 def _rot_trans_matrix(params, x, y, z):
     R = rotation_about_point_matrix(*(params[3:] * numpy.pi/180), x, y, z)
     T = translation_matrix(*params[:3])
-    return R @ T
+    return T @ R
 
 
 def _rot_trans_scale_matrix(params, x, y, z):
     R = rotation_about_point_matrix(*(params[3:6] * numpy.pi/180), x, y, z)
     S = scale_matrix(*params[6:])
     T = translation_matrix(*params[:3])
-    return S @ R @ T
+    return T @ R @ S
 
 
 def _symmshear_trans_matrix(params, x, y, z):
@@ -45,7 +48,7 @@ def _symmshear_trans_matrix(params, x, y, z):
         *(numpy.tan(params[3:] * numpy.pi/180)), x, y, z
     )
     T = translation_matrix(*params[:3])
-    return S @ T
+    return T @ S
 
 
 def _shear_trans_matrix(params, x, y, z):
@@ -53,7 +56,7 @@ def _shear_trans_matrix(params, x, y, z):
         *(numpy.tan(params[3:] * numpy.pi/180)), x, y, z
     )
     T = translation_matrix(*params[:3])
-    return S @ T
+    return T @ S
 
 
 def _shear_trans_scale_matrix(params, x, y, z):
@@ -62,73 +65,77 @@ def _shear_trans_scale_matrix(params, x, y, z):
     )
     T  = translation_matrix(*params[:3])
     S  = scale_matrix(*params[9:])
-    return Sh @ S @ T
+    return T @ S @ Sh
 
 
-def __is_floating_point(x):
-    xp = cupy.get_array_module(x)
-    return x.dtype in (xp.float16, xp.float32, xp.float64)
-
-
-def _parse_transform_string(string):
+def parse_transform_string(string : str):
     if string in ('t', 'trans', 'translation'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]]}
-        return _trans_matrix, postfix, 3
+        return _trans_matrix, postfix, [0,]*3
+    elif string in ('t+s', 'transscale', 'translation+scale'):
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             's' : ["{:.2f}".format(v) for v in x[3:]]}
+        return _trans_scale_matrix, postfix, [0,0,0,1,1,1]
     # rotation + translation (+ scaling)
     elif string in ('t+r', 'transrot', 'translation+rotation'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
                              'a' : ["{:.2f}".format(v) for v in x[3:]]}
-        return _rot_trans_matrix, postfix, 6
+        par0 = [0,] * 6
+        return _rot_trans_matrix, postfix, [0,]*6
     elif string in ('t+r+s', 'transrotscale', 'translation+rotation+scale'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
                              'a' : ["{:.2f}".format(v) for v in x[3:6]],
                              's' : ["{:.2f}".format(v) for v in x[6:]]}
-        return _rot_trans_scale_matrix, postfix, 9
+        par0 = [0,]*6 + [1,]*3
+        return _rot_trans_scale_matrix, postfix, par0
     # shear + translation
     elif string in ('t+ssh', 'transsymmshear', 'translation+symmetricshear'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
                              'sh' : ["{:.2f}".format(v) for v in x[3:]]}
-        return _symmshear_trans_matrix, postfix, 6
+        return _symmshear_trans_matrix, postfix, [0,]*6
     elif string in ('t+sh', 'transshear', 'translation+shear'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
                              'sh' : ["{:.2f}".format(v) for v in x[3:]]}
-        return _shear_trans_matrix, postfix, 9
+        return _shear_trans_matrix, postfix, [0,]*9
     elif string in ('t+sh+s', 'transshearscale', 'translation+shear+scale'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
                              'sh' : ["{:.2f}".format(v) for v in x[3:9]],
                              's' : ["{:.2f}".format(v) for v in x[9:]]}
-        return _shear_trans_scale_matrix, postfix, 12
+        par0 = [0,]*9 + [1,]*3
+        return _shear_trans_scale_matrix, postfix, par0
     else:
         raise ValueError('invalid transform string')
 
 
-def optimize(ref : NDArray, mov : NDArray, metric : str, transform : str,
-             par0 : list=[0,]*6, nbin_ref : int=64, nbin_mov : int=64,
-             bounds : list=None, verbose : bool=False,
-             **opt_kwargs):
-    """find optimal transform to register `mov` with `ref` by Powell's method
+def optimize_affine(ref : cupy.ndarray, mov : cupy.ndarray, 
+                    metric : str, transform : str, interp_method : str,
+                    par0 : List[float], bounds : OptBounds|OptBoundMargins|None,
+                    kernel_launch_params : CuLaunchParameters|None = None,
+                    verbose : bool=False,
+                    **opt_kwargs):
+    """find optimal affine transform to register `mov` with `ref` 
+        by Powell's method
         `**opt_kwargs` are passed to `scipy.optimize.minimize`
 
     :param ref: reference volume
-    :type ref: NDArray
+    :type ref: cupy.ndarray
     :param mov: moving volume, to be registered
-    :type mov: NDArray
+    :type mov: cupy.ndarray
     :param metric: metric to optimize for registration
-        one of ('cr', 'mi', 'ec').
-        'cr' : correlation ratio
-        'mi' : mutual information
-        'ec' : entropy correlation coefficient
+        one of ('nip', 'cr', 'ncc').
+        'nip' : normalized inner product
+        'cr'  : correlation ratio
+        'ncc' : normalized cross correlation
     :type metric: str
     :param transform: transform to optimize
     :type transform: str
+    :param interp: interpolation method to use during transformation
+        one of ('linear', 'cubspl')
+        'linear' : trilinear interpolation
+        'cubspl' : cubic b-spline interpolation
+    :type interp: str
     :param par0: initial guess for parameters
     :type par0: list
-    :param nbin_ref: number of bins in histogram for `ref`
-       only used for metric=='mi' or 'ec'
-    :type nbin_ref: int
-    :param nbin_mov: number of bins in histogram for `mov`
-       only used for metric=='mi' or 'ec'
-    :type nbin_mov: int
     :param bounds: bounds for parameters
     :type bounds: list
     :param verbose: show intermediate results with tqdm progress bar
@@ -136,68 +143,110 @@ def optimize(ref : NDArray, mov : NDArray, metric : str, transform : str,
     :returns: transform and optimization results
     :rtype: Tuple[NDArray,OptimizeResult]
     """
-
     # make sure both input images are already on the GPU and are floating point
     # TODO: update so that this works on CPU, too
-    assert cupy.get_array_module(ref) == cupy and __is_floating_point(ref), \
-        "reference image must be on the GPU and floating point"
-    assert cupy.get_array_module(mov) == cupy and __is_floating_point(mov), \
-        "moving image must be on the GPU and floating point"
-
+    assert cupy.get_array_module(ref) == cupy, \
+        "reference image must be on the GPU"
+    assert cupy.get_array_module(mov) == cupy, \
+        "moving image must be on the GPU"
     # figure out coords of centroid of image
     msze_z, msze_y, msze_x = mov.shape
     cx, cy, cz = msze_x / 2., msze_y / 2., msze_z / 2.
-
     # make function that will generate the transform matrix
     # also get # of params req'd
-    mat_fun, postfix_fun, n_par_req = _parse_transform_string(transform)
-    if len(par0) != n_par_req:
+    mat_fun, postfix_fun, ipar0 = parse_transform_string(transform)
+    if par0 is None:
+        par0 = ipar0
+    if len(par0) != len(ipar0):
         raise ValueError('invalid # of initial params for transform')
-    if bounds is not None and len(bounds) != n_par_req:
-        raise ValueError('invalid # of bounds for transform')
+    if bounds is not None:
+        if len(bounds) != len(ipar0):
+            raise ValueError('invalid # of bounds for transform')
+        if isinstance(bounds[0], Number):
+            bounds = [(p-b,p+b) for p, b in zip(par0, bounds)]
+        elif len(bounds[0]) == 2:  # do nothing
+            pass  # already correctly formatted
+        else:
+            raise ValueError('input bounds should be scalar or tuple')
     par_fun = lambda p: mat_fun(p, cx, cy, cz).astype(float).flatten()[:12]
-
-    # move `ref` to texture memory
-    ref_tex, tex_arr = create_texture_object(ref, 'border', 'linear',
-                                             'element_type')
-
+    # get shape of reference and moving images
+    sz_ref, sy_ref, sx_ref = ref.shape
+    sz_mov, sy_mov, sx_mov = mov.shape
+    # figure out launch parameters
+    if kernel_launch_params is None:
+        block_size = 8
+        kernel_launch_params = launch_params_for_volume(
+            [sz_mov, sy_mov, sx_mov], block_size, block_size, block_size
+        )
     # formulate optimization function
     # NOTE: scipy only has a `minimize` function and most of these metrics
     # we want to maximize, so for metrics confined to [0,1] we do
     # 1 - metric and for unbound metrics, take its negative
-    if metric == 'cr':
-        met_fun = partial(_corr_ratio_reftex_ewk, ref_tex, mov)
-        opt_fun = lambda p: 1.0 - float(met_fun(par_fun(p)))
-    elif metric == 'mi' or metric == 'ec':
-        # need to normalize input images to [0, 1] for algo. to work
-        max_val = max([cupy.amax(mov), cupy.amax(ref)])
-        mov /= max_val
-        ref /= max_val
-        # precompute entropy of moving image
-        P_mov, _ = cupy.histogram(mov, nbin_mov)
-        P_mov = P_mov / cupy.sum(P_mov) + cupy.finfo(float).eps
-        H_mov = discrete_entropy(P_mov) / cupy.log2(nbin_mov)
-        # formulate function
-        if metric == 'mi':
-            met_fun = partial(
-                _mutual_information_precomp_target,
-                ref_tex, mov, nbin_ref=nbin_ref, nbin_tar=nbin_mov,
-                H_tar=H_mov
-            )
-            opt_fun = lambda p: -float(met_fun(par_fun(p)))
-        elif metric == 'ec':
-            met_fun = partial(
-                _entropy_correlation_coeff_precomp_target,
-                ref_tex, mov, nbin_ref=nbin_ref, nbin_tar=nbin_mov,
-                H_tar=H_mov
-            )
-            opt_fun = lambda p: 1.0 - float(met_fun(par_fun(p)))
+    if metric[-1] == '*':  # flag for CUB-reduction kernels
+        _kern = met_cub.make_kernel(metric[:-1], interp_method,
+                                    *kernel_launch_params[1])
+        if metric[:-1] == 'nip':
+            mu_ref, mu_mov = 0., 0.
+        elif metric[:-1] == 'cr':
+            mu_ref, mu_mov = cupy.mean(ref), 0.
+        elif metric[:-1] == 'ncc':
+            mu_ref, mu_mov = cupy.mean(ref), cupy.mean(mov)
         else:
-            raise ValueError(
-                'invalid metric, must be one of [\'cr\', \'mi\', \'ec\']'
-            )
+            raise ValueError('invalid metric')
+        met_fun = partial(met_cub.compute_kernel, _kern,
+                          reference=ref, moving=mov,
+                          mu_reference=mu_ref, mu_moving=mu_mov,
+                          sz_r=sz_ref, sy_r=sy_ref, sx_r=sx_ref,
+                          sz_m=sz_mov, sy_m=sy_mov, sx_m=sx_mov,
+                          launch_params=kernel_launch_params)
+        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
+    elif metric == 'nip':
+        if interp_method == 'linear':
+            _nip_fun = met_linear.normalized_inner_product
+        elif interp_method == 'cubspl':
+            _nip_fun = met_cubspl.normalized_inner_product
+        else:
+            raise ValueError('invalid interpolation method')
+        met_fun = partial(_nip_fun,
+                          reference=ref, moving=mov, 
+                          sz_r=sz_ref, sy_r=sy_ref, sx_r=sx_ref,
+                          sz_m=sz_mov, sy_m=sy_mov, sx_m=sx_mov,
+                          launch_params=kernel_launch_params)
+        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
+    elif metric == 'cr':
+        mu_ref = cupy.mean(ref)
+        if interp_method == 'linear':
+            _cr_fun = met_linear.correlation_ratio
+        elif interp_method == 'cubspl':
+            _cr_fun = met_cubspl.correlation_ratio
+        else:
+            raise ValueError('invalid interpolation method')
+        met_fun = partial(_cr_fun,
+                          reference=ref, moving=mov,
+                          mu_reference=mu_ref,
+                          sz_r=sz_ref, sy_r=sy_ref, sx_r=sx_ref,
+                          sz_m=sz_mov, sy_m=sy_mov, sx_m=sx_mov,
+                          launch_params=kernel_launch_params)
+        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
+    elif metric == 'ncc':
+        mu_ref, mu_mov = cupy.mean(ref), cupy.mean(mov)
+        mu_ref = cupy.mean(ref)
+        if interp_method == 'linear':
+            _ncc_fun = met_linear.normalized_cross_correlation
+        elif interp_method == 'cubspl':
+            _ncc_fun = met_cubspl.normalized_cross_correlation
+        else:
+            raise ValueError('invalid interpolation method')
+        met_fun = partial(_ncc_fun,
+                          reference=ref, moving=mov,
+                          mu_reference=mu_ref, mu_moving=mu_mov,
+                          sz_r=sz_ref, sy_r=sy_ref, sx_r=sx_ref,
+                          sz_m=sz_mov, sy_m=sy_mov, sx_m=sx_mov,
+                          launch_params=kernel_launch_params)
+        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
     else:
         raise ValueError('invalid metric')
+    # do powell's registration
     opt_call = partial(minimize, opt_fun,
                        x0=par0, bounds=bounds, method='powell',
                        options=opt_kwargs)
@@ -205,14 +254,48 @@ def optimize(ref : NDArray, mov : NDArray, metric : str, transform : str,
         def cback(x, pbar, postfix_fun):
             pbar.update(1)
             pbar.set_postfix(postfix_fun(x))
-
-        with tqdm(desc="Registration") as pbar:
+        with tqdm(desc="Registration", leave=False) as pbar:
             _cback = partial(cback, pbar=pbar, postfix_fun=postfix_fun)
             res = opt_call(callback=_cback)
     else:
         res = opt_call()
-    # get rid of texture objects (ensures they get GC'd)
-    del ref_tex, tex_arr
     # calculate transform
     T = mat_fun(res.x, cx, cy, cz).reshape(4, 4)
+    # the transform calculated here is mapping mov into reference (the inverse)
+    # so spit out the inverse of it, which gives the forward transform
     return numpy.linalg.inv(T), res
+
+
+def _split_substrings(transform_str : str):
+    return list(accumulate(transform_str))[::2]
+
+
+def optimize_affine_piecewise(ref : cupy.ndarray, mov : cupy.ndarray,
+                              metric : str, transform : str, 
+                              interp_method : str, par0 : List[float],
+                              bounds : OptBounds|OptBoundMargins|None,
+                              kernel_launch_params : CuLaunchParameters|None,
+                              verbose : bool = False,
+                              **opt_kwargs):
+    # split at the '+' in the transform string to generate sub-problems
+    sub_transforms = _split_substrings(transform)
+    iterator = tqdm(sub_transforms) if verbose else sub_transforms
+    for subt in iterator:
+        if verbose:
+            iterator.set_description_str('Transform ({:s})'.format(subt))
+        # get number of parameters for this transform
+        _, _, ipar0 = parse_transform_string(subt)
+        _idx = len(ipar0)
+        _par0 = par0[:_idx]
+        bnds = bounds[:_idx] if bounds is not None else None
+        print(_par0, flush=True)
+        print(bnds, flush=True)
+        T, res = optimize_affine(ref, mov, metric, subt, interp_method,
+                                 _par0, bnds, kernel_launch_params,
+                                 verbose, **opt_kwargs)
+        par0[:_idx] = res.x
+        if verbose:
+            iterator.set_postfix_str(
+                'Prev ({:s}): met={:.3f}'.format(subt,1.0-res.fun)
+            )
+    return T, res

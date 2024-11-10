@@ -39,9 +39,13 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
 
     xp = cupy.get_array_module(im)
     if xp == numpy:
-        return _deskew_orthogonal_cpu(im, pixel_size, step_size, direction, theta)
+        return _deskew_orthogonal_cpu(
+            im, pixel_size, step_size, direction, theta
+        )
     else:
-        return _deskew_orthogonal_gpu(im, pixel_size, step_size, direction, theta)
+        return _deskew_orthogonal_gpu(
+            im, pixel_size, step_size, direction, theta
+        )
 
 
 @njit(parallel=True)

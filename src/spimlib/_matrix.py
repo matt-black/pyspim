@@ -64,9 +64,9 @@ def scale_matrix(sx, sy, sz):
 
 def rotation_translation_scale_matrix(alpha, beta, gamma,
                                       x, y, z, sx, sy, sz):
-    Rt = rotation_translation_matrix(alpha, beta, gamma, x, y, z)
+    Rt = rigid_affine_matrix(alpha, beta, gamma, x, y, z)
     S = scale_matrix(sx, sy, sz)
-    return S @ Rt
+    return Rt @ S
 
 
 ## shear matrices
@@ -105,7 +105,7 @@ def shear_matrix(h_xy, h_xz, h_yx, h_yz, h_zx, h_zy):
 
 
 def symmetric_shear_matrix(h_xyx, h_xzx, h_yzy):
-    return shear_matrix(h_xyx, h_xzx, h_yxy, h_yzy, h_xzx, h_yzy)
+    return shear_matrix(h_xyx, h_xzx, h_xyx, h_yzy, h_xzx, h_yzy)
 
 
 def shear_about_point_matrix(h_xy, h_xz, h_yx, h_yz, h_zx, h_zy,

@@ -18,7 +18,7 @@ def richardson_lucy(image : NDArray, psf : NDArray,
                     boundary_padding : Optional[int]=None,
                     boundary_sigma : float=1e-2) -> NDArray:
     if boundary_correction:
-        
+        raise NotImplementedError('to finish')
     else:
         return richardson_lucy_skimage(
             image, psf, num_iter, clip, filter_epsilon

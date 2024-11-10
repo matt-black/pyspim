@@ -1,0 +1,19 @@
+{
+    "files.associations": {
+        "cmath": "cpp",
+        "array": "cpp",
+        "chrono": "cpp",
+        "deque": "cpp",
+        "string": "cpp",
+        "unordered_map": "cpp",
+        "unordered_set": "cpp",
+        "vector": "cpp",
+        "iterator": "cpp",
+        "string_view": "cpp",
+        "format": "cpp",
+        "initializer_list": "cpp",
+        "span": "cpp",
+        "tuple": "cpp"
+    },
+    "C_Cpp.errorSquiggles": "disabled"
+}
