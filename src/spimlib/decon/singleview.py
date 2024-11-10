@@ -1,5 +1,4 @@
-import math
-from typing import List, Optional, Tuple, Union
+from typing import Optional
 
 import cupy
 from scipy.signal import fftconvolve as fftconv_cpu
@@ -10,15 +9,20 @@ from ..typing import NDArray, PadType
 from .._util import get_skimage_module, supported_float_type
 
 
-def richardson_lucy(image : NDArray, psf : NDArray,
-                    num_iter : int=50, 
-                    boundary_correction : bool=True,
-                    clip : bool=False,
-                    filter_epsilon : Optional[float]=None,
-                    boundary_padding : Optional[int]=None,
-                    boundary_sigma : float=1e-2) -> NDArray:
+def richardson_lucy(image : NDArray, psf : NDArray, bp : NDArray,
+                    num_iter : int = 50, 
+                    boundary_correction : bool = True,
+                    clip : bool = False,
+                    filter_epsilon : Optional[float] = None,
+                    boundary_padding : Optional[int] = None,
+                    boundary_sigma : float = 1e-2,
+                    verbose : bool = False) -> NDArray:
     if boundary_correction:
-        raise NotImplementedError('to finish')
+        return richardson_lucy_boundcorr(image, psf, bp, 
+                                         num_iter, filter_epsilon, 
+                                         boundary_padding, boundary_sigma, 
+                                         init_constant=False,
+                                         verbose=verbose)
     else:
         return richardson_lucy_skimage(
             image, psf, num_iter, clip, filter_epsilon
@@ -26,13 +30,13 @@ def richardson_lucy(image : NDArray, psf : NDArray,
 
 
 def richardson_lucy_boundcorr(image : NDArray, psf : NDArray,
-                              bp : Optional[NDArray]=None,
-                              num_iter : int=50, 
-                              filter_epsilon : float=1e-4,
-                              zero_padding : Optional[PadType]=None,
-                              boundary_sigma : float=1e-2,
-                              init_constant : bool=False,
-                              verbose : bool=False) -> NDArray:
+                              bp : Optional[NDArray] = None,
+                              num_iter : int = 50, 
+                              filter_epsilon : float = 1e-4,
+                              zero_padding : Optional[PadType] = None,
+                              boundary_sigma : float = 1e-2,
+                              init_constant : bool = False,
+                              verbose : bool = False) -> NDArray:
     """Richardson-Lucy deconvolution with boundary correction
         described in [1], this method reduces Gibbs oscillations that occur
         due to boundary effects when doing RL deconvolution. 
