@@ -2,6 +2,7 @@
 nb/
 # ignore OSX files
 **/._*
+src/napari_spimlib/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
