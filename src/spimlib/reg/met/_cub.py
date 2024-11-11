@@ -11,13 +11,19 @@ __linear_module_path = os.path.join(
 with open(__linear_module_path, 'r') as f:
     __linear_module_txt = f.read()
 
-
 __cubspl_module_path = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     'cubspl_cub.cu'
 )
 with open(__cubspl_module_path, 'r') as f:
     __cubspl_module_txt = f.read()
+
+__nearest_module_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    'nearest_cub.cu'
+)
+with open(__nearest_module_path, 'r') as f:
+    __nearest_module_txt = f.read()
 
 
 def make_kernel(function : str, interp_method : str, 
@@ -47,6 +53,8 @@ def make_kernel(function : str, interp_method : str,
         txt = __linear_module_txt
     elif interp_method == 'cubspl':
         txt = __cubspl_module_txt
+    elif interp_method == 'nearest':
+        txt = __nearest_module_txt
     else:
         raise ValueError('invalid interpolation method')
     function_text = txt.format(
@@ -54,6 +62,10 @@ def make_kernel(function : str, interp_method : str,
         block_size_z=block_size_z, function_name=function_name,
         expr1=expr1, expr2=expr2, expr3=expr3
     )
+    # NOTE: CUB requires some of the C++ standard library functions, which
+    # won't compile with `nvrtc`, so use `nvcc`. c++14 is used because 
+    # compilation will throw many warnings about deprecation if default
+    # (-std=c++11) is used
     return cupy.RawKernel(code=function_text, name=function_name,
                           backend='nvcc', options=('-std=c++14',))
 

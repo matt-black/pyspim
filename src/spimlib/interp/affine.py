@@ -10,6 +10,19 @@ from ..typing import NDArray, CuLaunchParameters
 
 ## CUDA kernel setup and module compilation
 # setup raw modules
+"""with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'nearest.cu'), 'r') as f:
+    __nearest_module_txt = f.read()
+
+__nearest_ker_names = (
+    'affineTransformNearest<unsigned short>'
+    'affineTransformNearest<float>'
+)
+__cuda_module_nearest = cupy.RawModule(code=__nearest_module_txt,
+                                       name_expressions=__nearest_ker_names)
+__cuda_module_nearest.compile()
+"""
+
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
                        'linear.cu'), 'r') as f:
     __linear_module_txt = f.read()
@@ -21,7 +34,7 @@ __linear_ker_names = (
 )
 __cuda_module_linear = cupy.RawModule(code=__linear_module_txt, 
                                       name_expressions=__linear_ker_names)
-
+__cuda_module_linear.compile()
 
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
                        'cubspl.cu'), 'r') as f:
@@ -34,6 +47,7 @@ __cubspl_ker_names = (
 )
 __cuda_module_cubspl = cupy.RawModule(code=__cubspl_module_txt,
                                       name_expressions=__cubspl_ker_names)
+__cuda_module_cubspl.compile()
 
 
 def _get_kernel(dtype, method : str = 'linear'):
@@ -51,6 +65,12 @@ def _get_kernel(dtype, method : str = 'linear'):
             return __cuda_module_cubspl.get_function(__cubspl_ker_names[1])
         else:
             raise ValueError('invalid datatype')
+    elif method == 'nearest':
+        raise NotImplementedError('to finish')
+        #if dtype == cupy.uint16:
+        #    return __cuda_module_nearest.get_function(__nearest_ker_names[0])
+        #elif dtype == cupy.float32:
+        #    return __cuda_module_nearest.get_function(__nearest_ker_names[1])
     else:
         raise ValueError('invalid interpolation method')
 

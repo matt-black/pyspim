@@ -31,7 +31,6 @@ __host__ __device__ float3 operator-(const float3& a, const float3& b)
     return float3{a.x-b.x, a.y-b.y, a.z-b.z};
 }
 
-
 template<typename T, typename U>
 __host__ __device__ U lerp3(const T* A,
                             int x_rd, int y_rd, int z_rd,
@@ -76,13 +75,16 @@ __global__ void normInnerProduct(U* prods, float* M_aff,
         for (int y = y0; y < sy_m; y += y_stride) {
             for (int x = x0; x < sx_m; x += x_stride) {
                 float4 voxel = make_float4(x, y, z, 1.0f);
-                float x_r = dot(voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3]));
+                float x_r = dot(voxel, make_float4(
+                                M_aff[0], M_aff[1], M_aff[2], M_aff[3]));
                 int x_rd  = __float2int_rd(x_r);
                 U dx  = x_r - (U)x_rd;
-                float y_r = dot(voxel, make_float4(M_aff[4], M_aff[5], M_aff[6], M_aff[7]));
+                float y_r = dot(voxel, 
+                                make_float4(M_aff[4], M_aff[5], M_aff[6], M_aff[7]));
                 int y_rd  = __float2int_rd(y_r);
                 U dy  = y_r - (U)y_rd;
-                float z_r = dot(voxel, make_float4(M_aff[8], M_aff[9], M_aff[10], M_aff[11]));
+                float z_r = dot(voxel, 
+                                make_float4(M_aff[8], M_aff[9], M_aff[10], M_aff[11]));
                 int z_rd  = __float2int_rd(z_r);
                 U dz  = z_r - (U)z_rd;
                 if (x_rd >= 0 && x_rd < sx_r-1 && 

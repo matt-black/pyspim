@@ -87,17 +87,17 @@ __global__ void {function_name:s}(float* vals, float* M_aff,
     if (x < sx_m && y < sy_m && z < sz_m) {{
         //compute the coordinate in the reference image
         float4 voxel = make_float4(x, y, z, 1.0f);
-        int x_r = dot(
+        float x_r = dot(
             voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3])
         );
         int x_rd = __float2int_rd(x_r);
         float dx = x_r - (float)x_rd;
-        int y_r = dot(
+        float y_r = dot(
             voxel, make_float4(M_aff[4], M_aff[5], M_aff[6], M_aff[7])
         );
         int y_rd = __float2int_rd(y_r);
         float dy = y_r - (float)y_rd;
-        int z_r = dot(
+        float z_r = dot(
             voxel, make_float4(M_aff[8], M_aff[9], M_aff[10], M_aff[11])
         );
         int z_rd = __float2int_rd(z_r);

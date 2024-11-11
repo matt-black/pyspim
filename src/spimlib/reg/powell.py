@@ -16,6 +16,7 @@ from .._matrix import translation_matrix, \
 from .met import _cub as met_cub
 from .met import _linear as met_linear
 from .met import _cubspl as met_cubspl
+from .met import _nearest as met_nearest
 from ..typing import CuLaunchParameters, OptBounds, OptBoundMargins
 from ..util import launch_params_for_volume
 
@@ -205,6 +206,8 @@ def optimize_affine(ref : cupy.ndarray, mov : cupy.ndarray,
             _nip_fun = met_linear.normalized_inner_product
         elif interp_method == 'cubspl':
             _nip_fun = met_cubspl.normalized_inner_product
+        elif interp_method == 'nearest':
+            _nip_fun = met_nearest.normalized_inner_product
         else:
             raise ValueError('invalid interpolation method')
         met_fun = partial(_nip_fun,
@@ -219,6 +222,8 @@ def optimize_affine(ref : cupy.ndarray, mov : cupy.ndarray,
             _cr_fun = met_linear.correlation_ratio
         elif interp_method == 'cubspl':
             _cr_fun = met_cubspl.correlation_ratio
+        elif interp_method == 'nearest':
+            _cr_fun = met_nearest.correlation_ratio
         else:
             raise ValueError('invalid interpolation method')
         met_fun = partial(_cr_fun,
@@ -235,6 +240,8 @@ def optimize_affine(ref : cupy.ndarray, mov : cupy.ndarray,
             _ncc_fun = met_linear.normalized_cross_correlation
         elif interp_method == 'cubspl':
             _ncc_fun = met_cubspl.normalized_cross_correlation
+        elif interp_method == 'nearest':
+            _ncc_fun = met_nearest.normalized_cross_correlation
         else:
             raise ValueError('invalid interpolation method')
         met_fun = partial(_ncc_fun,
