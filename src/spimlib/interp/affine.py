@@ -82,6 +82,7 @@ def output_shape_for_transform(T : NDArray,
 
 
 ## NUMBA-optimized interpolation functions for CPU
+"""
 @njit
 def __lerp(v0, v1, t):
     return (1-t)*v0 + t*v1
@@ -184,6 +185,7 @@ def cubspl_interp(A : numpy.ndarray, T : numpy.ndarray) -> numpy.ndarray:
                     data001 = g0[1] * data001 + g1[1] * data011
                     out[z,y,x] = g0[2] * data000 + g1[2] * data001
     return out
+"""
 
 
 def transform(A : NDArray, T : NDArray, interp_method : str = 'linear',
@@ -200,12 +202,13 @@ def transform(A : NDArray, T : NDArray, interp_method : str = 'linear',
         )
         return out
     else:
-        if interp_method == 'linear':
-            return linear_interp(A, T)
-        elif interp_method == 'cubspl':
-            return cubspl_interp(A, T)
-        else:
-            raise ValueError('invalid interpolation method')
+        raise ValueError('only works on cupy arrays')
+        #if interp_method == 'linear':
+        #    return linear_interp(A, T)
+        #elif interp_method == 'cubspl':
+        #    return cubspl_interp(A, T)
+        #else:
+        #    raise ValueError('invalid interpolation method')
 
 
 def maxblend_into_existing(E : cupy.ndarray, N : cupy.ndarray, T : NDArray,

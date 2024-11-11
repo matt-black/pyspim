@@ -1,10 +1,9 @@
-from typing import Tuple
-
 import cupy
 
+import skimage
 from .typing import NDArray, BBox2D, BBox3D
 from .util import threshold_triangle
-from ._util import get_ndimage_module, get_skimage_module
+from ._util import get_ndimage_module
 
 
 def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
@@ -30,7 +29,6 @@ def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
         thresh = kwargs['threshold']
     xp = cupy.get_array_module(im)
     ndi = get_ndimage_module(xp)
-    sk = get_skimage_module(xp)
     # get rid of line artifacts
     vert_line = xp.zeros((5, 5))
     vert_line[:,2] = 1
@@ -42,7 +40,7 @@ def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
     if method == 'triangle':
         thresh = threshold_triangle(im)
     elif method == 'otsu':
-        thresh = sk.filters.threshold_otsu(im)
+        thresh = skimage.filters.threshold_otsu(im)
     else:  # method == 'threshold'
         pass  # already defined this, above when we grabbed from **kwargs
     
