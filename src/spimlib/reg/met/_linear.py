@@ -49,7 +49,6 @@ def normalized_inner_product(T : NDArray,
     )
     prods += cupy.finfo(cupy.float64).eps
     nip = float(prods[0] / (cupy.sqrt(prods[1]) * cupy.sqrt(prods[2])))
-    print(nip)
     return nip
 
 

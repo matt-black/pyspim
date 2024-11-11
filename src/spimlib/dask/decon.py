@@ -10,6 +10,7 @@ from ..decon.dualview import joint_rl_dispim, additive_joint_rl, \
     efficient_bayesian
 from ..typing import NDArray, PadType
 
+
 def __effbayes_rl_dask_call(view_a : NDArray, view_b : NDArray,
                             psf_a  : NDArray, psf_b  : NDArray,
                             backproj_a          : Optional[NDArray]=None,

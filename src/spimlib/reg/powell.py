@@ -288,8 +288,6 @@ def optimize_affine_piecewise(ref : cupy.ndarray, mov : cupy.ndarray,
         _idx = len(ipar0)
         _par0 = par0[:_idx]
         bnds = bounds[:_idx] if bounds is not None else None
-        print(_par0, flush=True)
-        print(bnds, flush=True)
         T, res = optimize_affine(ref, mov, metric, subt, interp_method,
                                  _par0, bnds, kernel_launch_params,
                                  verbose, **opt_kwargs)

@@ -61,7 +61,7 @@ def _crop_bounds_and_padding(vol : NDArray, bbox : BBox3D, pad : int) -> \
     lbd = tuple([0 if l < 0 else l for l in lbd])
     ## now we follow the same logic for the upper bound except
     ## minuses are pluses and we have to check >shape instead of <0
-    ubd = [x[1] + pad for x, s in zip(bbox, shp)]
+    ubd = [x[1] + pad for x, _ in zip(bbox, shp)]
     pdr = tuple([v - s if v > s else 0 for v, s in zip(ubd, shp)])
     ubd = tuple([s if v > s else v for v, s in zip(ubd, shp)])
     return (pdl, pdr), (lbd, ubd)
