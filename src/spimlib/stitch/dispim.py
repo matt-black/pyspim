@@ -1,16 +1,17 @@
 import os
 import functools
 import concurrent.futures
-from typing import Iterable, List, Tuple
+from typing import Callable, Iterable, Tuple
 
 import cupy
 import numpy
 from tqdm.auto import tqdm
 
 from .grid import Grid1D, Grid2D
-from ..typing import CuLaunchParameters, SliceWindow3D
-from ..data.umasi import uManagerAcquisitionMultiPos
-from ..data.umasi import PositionList, subtract_constant_uint16arr
+from ..typing import CuLaunchParameters, SliceWindow3D, \
+    OptBounds, OptBoundMargins
+from ..data.dispim import uManagerAcquisitionMultiPos
+from ..data.dispim import PositionList, subtract_constant_uint16arr
 
 
 def _load_function(data_path : os.PathLike, head : str, channel : int,
@@ -38,7 +39,7 @@ class OneDimensionalStitcher(Grid1D):
         super().__init__(load_fun, tile_shape, pct_overlap, overlap_axis)
 
 
-class DiSPIMOneDimensionalStitcher(object):
+class DiSPIM1DStitcher(object):
 
     def __init__(self,
                  root_fldr : os.PathLike, channel : int,
@@ -54,24 +55,26 @@ class DiSPIMOneDimensionalStitcher(object):
         
     def register_pairs_parallel(self, pair_idxs : Iterable[Tuple[int,int]],
                                 executor : concurrent.futures.Executor,
-                                pcc_prereg : bool, metric : str,
-                                transform : str, interp_method : str,
-                                bound_margins : List[float],
+                                as_completed : Callable,
+                                pcc_prereg : bool, piecewise : bool,
+                                metric : str, transform : str, 
+                                interp_method : str, 
+                                bounds : OptBounds|OptBoundMargins|None,
                                 kernel_launch_params : CuLaunchParameters,
                                 verbose : bool = False,
                                 **opt_kwargs):
         reg_a = functools.partial(self._grid_a.register_pair,
-                                  pcc_prereg=pcc_prereg, metric=metric,
-                                  transform=transform,
+                                  pcc_prereg=pcc_prereg, piecewise=piecewise,
+                                  metric=metric, transform=transform,
                                   interp_method=interp_method,
-                                  bound_margins=bound_margins,
+                                  bound_margins=bounds,
                                   kernel_launch_params=kernel_launch_params,
                                   **opt_kwargs)
         reg_b = functools.partial(self._grid_a.register_pair,
-                                  pcc_prereg=pcc_prereg, metric=metric,
-                                  transform=transform,
+                                  pcc_prereg=pcc_prereg, piecewise=piecewise,
+                                  metric=metric, transform=transform,
                                   interp_method=interp_method,
-                                  bound_margins=bound_margins,
+                                  bound_margins=bounds,
                                   kernel_launch_params=kernel_launch_params,
                                   **opt_kwargs)
         futures_to_pairs_a = {
@@ -83,7 +86,7 @@ class DiSPIMOneDimensionalStitcher(object):
             for idx0, idx1 in pair_idxs
         }
         futures_to_pairs = {**futures_to_pairs_a, **futures_to_pairs_b}
-        iterator = concurrent.futures.as_completed(futures_to_pairs)
+        iterator = as_completed(futures_to_pairs)
         if verbose:
             iterator = tqdm(iterator, desc="Registration Pairs")
         out_list = [('a', pair_idxs[0][0], numpy.eye(4)), 
@@ -100,7 +103,6 @@ class DiSPIMOneDimensionalStitcher(object):
         out_a = [t for t in out_list if t[0] == 'a']
         out_b = [t for t in out_list if t[0] == 'b']
         return out_a, out_b
-    
     
 
 class TwoDimensionalStitcher(Grid2D):
