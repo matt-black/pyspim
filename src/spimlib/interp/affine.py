@@ -7,6 +7,7 @@ import numpy
 from numba import njit, prange
 
 from ..typing import NDArray, CuLaunchParameters
+from .._util import launch_params_for_volume
 
 ## CUDA kernel setup and module compilation
 # setup raw modules
@@ -76,28 +77,27 @@ def _get_kernel(dtype, method : str = 'linear'):
 
 
 ## decompositions of affine transformation matrices
-def decompose_translation(T : NDArray) -> NDArray:
-    return T[:-1,:-1]
-
-
-def decompose_scale(T : NDArray) -> NDArray:
-    xp = cupy.get_array_module(T)
-    return xp.sqrt(
-        xp.sum(xp.square(T[:-1,:-1]), axis=0)
-    )
-
-
-def decompose_shear_rotation(T : NDArray) -> NDArray:
-    out = T.copy()
-    scl = decompose_scale(T)
-    out[:-1,-1] = 0
-    out[:-1,:-1] = out[:-1,:-1] / scl[:,None]
-    return out
+def decompose_transform(A : NDArray) -> Tuple[NDArray,NDArray,NDArray,NDArray]:
+    xp = cupy.get_array_module(A)
+    T = A[:-1,-1]
+    RZS = A[:-1,:-1]
+    ZS = xp.linalg.cholesky(xp.dot(RZS.T, RZS)).T
+    Z = numpy.diag(ZS).copy()
+    shears = ZS / Z[:,xp.newaxis]
+    n = len(Z)
+    S = shears[xp.triu(xp.ones((n,n)), 1).astype(bool)]
+    R = xp.dot(RZS, xp.linalg.inv(ZS))
+    if xp.linalg.det(R) < 0:
+        Z[0] *= -1
+        ZS[0] *= -1
+        R = xp.dot(RZS, xp.linalg.inv(ZS))
+    return T, R, Z, S
 
 
 def output_shape_for_transform(T : NDArray, 
                                input_shape : Iterable) -> List[int]:
-    scl_zrc = decompose_scale(T)[::-1]
+    _, _, scl_xyz, _ = decompose_transform(T)
+    scl_zrc = scl_xyz[::-1]
     return [math.ceil(x*y) for x, y in zip(scl_zrc, input_shape)]
 
 
@@ -208,11 +208,14 @@ def cubspl_interp(A : numpy.ndarray, T : numpy.ndarray) -> numpy.ndarray:
 """
 
 
-def transform(A : NDArray, T : NDArray, interp_method : str = 'linear',
-              launch_params : CuLaunchParameters|None = None):
+def transform(A : NDArray, T : NDArray, interp_method : str,
+              block_size_z : int, block_size_y : int, block_size_x : int):
     if cupy.get_array_module(A) == cupy:
         kernel = _get_kernel(A.dtype, interp_method)
         out_shp = output_shape_for_transform(T, A.shape)
+        launch_params = launch_params_for_volume(
+            out_shp, block_size_z, block_size_y, block_size_x
+        )
         T = cupy.asarray(T).astype(cupy.float32)
         # preallocate output and call kernel
         out = cupy.zeros(out_shp, dtype=cupy.float32)

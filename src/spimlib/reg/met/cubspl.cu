@@ -18,7 +18,7 @@ inline __host__ __device__ void bspline_weights(T fraction,
 }
 
 inline __host__ __device__ size_t xyz2idx(int x, int y, int z, 
-                                            size_t width, size_t height)
+                                          size_t width, size_t height)
 {
     return x + ((z * height) + y) * width;
 }
