@@ -5,42 +5,19 @@ import math
 import cupy
 
 from .typing import NDArray
-from .affine.lerp import rotate_about_center
 
 
-def rotate_view(vol : NDArray, rot_pos : bool, kernel : bool=True) -> NDArray:
+def rotate_view(vol : NDArray, rot_pos : bool) -> NDArray:
     """rotate volume by +/- 90 degrees along Y-axis
 
     :param vol: volume to rotate
     :type vol: NDArray
     :param rot_pos: rotate in positive (`True`) or negative (`False`) direction
     :type rot_pos: bool
-    :param kernel: use CUDA kernel, if `False` use affine transform
-        CUDA kernel is copied from diSPIMFusion/microImageLib
-    :type kernel: bool
     :returns: rotated volume
     :rtype: NDArray
     """
-    if kernel:
-        return rotate_by_kernel(vol, rot_pos)
-    else:
-        return rotate_by_affine(vol, rot_pos)
-
-
-def rotate_by_affine(vol : NDArray, rot_pos : bool) -> NDArray:
-    """rotate volume by +/- 90 degrees along Y-axis by affine transform
-
-    :param vol: volume to rotate
-    :type vol: NDArray
-    :param rot_pos: rotate in positive (`True`) or negative (`False`) direction
-    :type rot_pos: bool
-    :param block_size: block size to use for CUDA kernel
-    :type block_size: int
-    :returns: rotated volume
-    :rtype: NDArray
-    """
-    sign = 1 if rot_pos else -1
-    return rotate_about_center(vol, 0, sign * math.pi / 2, 0)
+    return rotate_by_kernel(vol, rot_pos)
 
 
 def rotate_by_kernel(vol : NDArray, rot_pos : bool, 
@@ -60,9 +37,7 @@ def rotate_by_kernel(vol : NDArray, rot_pos : bool,
     :type block_size: int
     :returns: rotated volume
     :rtype: NDArray
-
     """
-
     assert len(vol.shape) == 3, "input must be a 3D volume"
     depth, height, width = vol.shape
     rot_dir = 1 if rot_pos else -1

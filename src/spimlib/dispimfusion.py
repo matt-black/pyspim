@@ -7,10 +7,6 @@ References
 [2] https://github.com/eguomin/diSPIMFusion
 [3] https://github.com/eguomin/microImageLib
 """
-import math
-
-from .typing import NDArray
-
 ## IMPORTS
 ## import order is roughly that of the pipeline that is used by
 ## the diSPIMFusion plugin
@@ -48,7 +44,7 @@ from ._rotate_y import rotate_view  # view B rotation
 ##   preliminary alignments can be obtained by using phase cross correlation
 from ._util import pad_to_same_size
 from . import reg
-from .affine.lerp import transform as affine_transform
+from .interp.affine import transform as affine_transform
 
 ## deconvolution
 ## ===
@@ -56,9 +52,8 @@ from .affine.lerp import transform as affine_transform
 ## co-deconvolved. because diSPIMFusion uses the `joint_rl_dispim`
 ## deconvolution algorithm, we alias it as `deconvolve` here
 from ._util import shared_bbox_from_proj_threshold
-from .decon._util import crop_and_pad_for_deconv
-from .decon.dualview import joint_rl_dispim as deconvolve 
-from .decon.dualview import deconvolve_dask
+from .decon.util import crop_and_pad_for_deconv
+from .decon.rl.dualview_fft import joint_rl_dispim as deconvolve 
 
 
 ## rotation 2
@@ -66,17 +61,4 @@ from .decon.dualview import deconvolve_dask
 ## *optional*: the final output can be rotated so that it is in the "normal"
 ##   lab frame coordinate system where xy is the coverslip and z is normal
 ##   to the coverslip
-from .affine.lerp import rotate_about_center
-def rotate_into_lab_frame(vol : NDArray):
-    """rotate output of diSPIMFusion into the lab frame
-        diSPIMFusion does all the analysis in the coordinate frame of the 'A'
-        head, which is tilted 45 degrees from the coverslip. this function will
-        rotate the volume 45 degrees along the y-axis so that the volume now
-        is in the "normal" zyx "lab frame" coordinate system
-
-    :param vol: input volume
-    :type vol: NDArray
-    :returns: input rotated 45 degrees
-    :rtype: NDArray
-    """
-    return rotate_about_center(vol, 0, math.pi/4, 0)
+# TODO: implement rotation with newer version of code
