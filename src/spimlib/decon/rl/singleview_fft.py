@@ -5,8 +5,8 @@ from scipy.signal import fftconvolve as fftconv_cpu
 from cuypx.scipy.signal import fftconvolve as fftconv_gpu
 from tqdm.auto import trange
 
-from ..typing import NDArray, PadType
-from .._util import get_skimage_module, supported_float_type
+from ...typing import NDArray, PadType
+from ..._util import get_skimage_module, supported_float_type
 
 
 def richardson_lucy(image : NDArray, psf : NDArray, bp : NDArray,

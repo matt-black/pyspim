@@ -1,17 +1,16 @@
 """deconvolution algorithms for jointly deconvolving dual-view microscopy data
 """
-from contextlib import nullcontext
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
 
 import cupy
-import numpy
 
 from scipy.signal import fftconvolve as fftconv_cpu
 from cupyx.scipy.signal import fftconvolve as fftconv_gpu
 from tqdm.auto import trange
 
-from ..typing import NDArray, PadType
-from .._util import supported_float_type
+from .._util import div_stable
+from ...typing import NDArray, PadType
+from ..._util import supported_float_type
 
 
 def joint_rl_dispim(view_a : NDArray, view_b : NDArray,
@@ -151,11 +150,11 @@ def _joint_rl_dispim_uncorr(view_a : NDArray, view_b : NDArray,
     for _ in (trange(num_iter) if verbose else range(num_iter)):
         cona = conv(psf_a, est_i)
         est_a = xp.multiply(
-            est_i, conv(backproj_a, xp.where(cona < epsilon, 0, view_a / cona))
+            est_i, conv(backproj_a, div_stable(view_a, cona, epsilon))
         )
         conb = conv(psf_b, est_a)
         est_i = xp.multiply(
-            est_a, conv(backproj_b, xp.where(conb < epsilon, 0, view_b / conb))
+            est_a, conv(backproj_b, div_stable(view_b, conb, epsilon))
         )
     if req_both:
         est_i[xp.logical_or(view_a==0, view_b==0)] = 0
@@ -470,13 +469,13 @@ def _additive_joint_rl_boundcorr(view_a : NDArray, view_b : NDArray,
                 con = conv(psf_a, est)
                 est = xp.multiply(
                     xp.multiply(window_a, est), #conv(window_a, est),
-                    conv(backproj_a, xp.where(con < epsilon, 0, view_a / con))
+                    conv(backproj_a, div_stable(view_a, con, epsilon))
                 )
             else:  # use view_b
                 con = conv(psf_b, est)
                 est = xp.multiply(
                     xp.multiply(window_b, est), #conv(window_b, est),
-                    conv(backproj_b, xp.where(con < epsilon, 0, view_b / con))
+                    conv(backproj_b, div_stable(view_b, con, epsilon))
                 )
             # recompute the flux constant
             c_tilde = xp.sum(alpha * est) / 2.0
@@ -524,11 +523,11 @@ def _additive_joint_rl_uncorr(view_a : NDArray, view_b : NDArray,
     for _ in (trange(num_iter) if verbose else range(num_iter)):
         cona = conv(psf_a, est_i)
         est_a = xp.multiply(
-            est_i, conv(backproj_a, xp.where(cona < epsilon, 0, view_a / cona))
+            est_i, conv(backproj_a, div_stable(view_a, cona, epsilon))
         )
         conb = conv(psf_b, est_i)
         est_b = xp.multiply(
-            est_i, conv(backproj_b, xp.where(conb < epsilon, 0, view_b / conb))
+            est_i, conv(backproj_b, div_stable(view_b, conb, epsilon))
         )
         est_i = (est_a + est_b) / 2
     if req_both:

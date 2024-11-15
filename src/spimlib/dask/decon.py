@@ -6,7 +6,7 @@ import numpy
 import dask.array
 from tqdm.dask import TqdmCallback
 
-from ..decon.dualview import joint_rl_dispim, additive_joint_rl, \
+from ..decon.rl.dualview_fft import joint_rl_dispim, additive_joint_rl, \
     efficient_bayesian
 from ..typing import NDArray, PadType
 
@@ -33,20 +33,20 @@ def __effbayes_rl_dask_call(view_a : NDArray, view_b : NDArray,
                               init_constant, verbose)
 
 
-def deconvolve_dask(decon_fun : str, device : str,
-                    view_a : dask.array.Array, view_b : dask.array.Array,
-                    psf_a : NDArray, psf_b : NDArray,
-                    backproj_a : Optional[NDArray]=None,
-                    backproj_b : Optional[NDArray]=None,
-                    num_iter   : int=10,
-                    epsilon    : float=1e-5,
-                    boundary_correction : bool=False,
-                    req_both   : bool=False,
-                    zero_padding : Optional[PadType]=None,
-                    boundary_sigma_a : float=1e-2,
-                    boundary_sigma_b : float=1e-2,
-                    init_constant : bool=False,
-                    verbose    : bool=False,
+def deconvolve_dualview(decon_fun : str, device : str,
+                        view_a : dask.array.Array, view_b : dask.array.Array,
+                        psf_a : NDArray, psf_b : NDArray,
+                        backproj_a : Optional[NDArray]=None,
+                        backproj_b : Optional[NDArray]=None,
+                        num_iter   : int=10,
+                        epsilon    : float=1e-5,
+                        boundary_correction : bool=False,
+                        req_both   : bool=False,
+                        zero_padding : Optional[PadType]=None,
+                        boundary_sigma_a : float=1e-2,
+                        boundary_sigma_b : float=1e-2,
+                        init_constant : bool=False,
+                        verbose    : bool=False,
                     overlap    : Optional[int]=None) -> numpy.ndarray:
     """jointly deconvolve (large) input volumes block-wise using `dask`
 

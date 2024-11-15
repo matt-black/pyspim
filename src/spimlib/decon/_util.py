@@ -1,10 +1,18 @@
 from typing import Optional, Tuple
 
 import cupy
+import numpy
 
 from ..typing import NDArray, BBox3D
 
 __tup3 = Tuple[int,int,int]  # convenience type for output
+
+
+def gaussian_kernel_1d(sigma : float, radius : int):
+    sigma2 = sigma * sigma
+    x = numpy.arange(-radius, radius+1)
+    phi = numpy.exp(-0.5 / sigma2 * x**2)
+    return phi / phi.sum()
 
 
 def crop_and_pad_for_deconv(vol : NDArray,
@@ -90,3 +98,14 @@ def _crop_and_pad(vol : NDArray,
     return xp.pad(vol[lowb[0]:uppb[0],lowb[1]:uppb[1],lowb[2]:uppb[2]],
                   [(l, r) for l, r in zip(padl, padr)],
                   'symmetric')
+
+
+## stable division: only divide `a / b` if denominator, `b`, isn't too small
+div_stable = cupy.ElementwiseKernel(
+    'T a, T b, float32 eps',
+    'T o',
+    '''
+    o = (b > eps) ? a / b : 0;
+    ''',
+    'div_stable_kernel',
+)
