@@ -233,11 +233,28 @@ class PositionList(object):
     def num_pos(self):
         return self._arr.shape[0]
     
+    def overlap_props(self):
+        rnd = numpy.ceil(numpy.abs(
+            numpy.mean(numpy.diff(self._arr[:,-3:], axis=0), 0)
+        ) / self._um_per_pix)
+        overlap_axes = list(map(int, numpy.where(rnd>0)[0]))
+        overlap_pix = [int(rnd[o]) for o in overlap_axes]
+        return overlap_axes, overlap_pix
+    
     def yaxis_stitch_pairs(self, z : int=0):
         filt = self._arr[:,1] == z
         ys = self._arr[filt,2]
         srt = numpy.argsort(ys)
         idxs = self._arr[srt,0].astype(int)
+        idxs = [int(i) for i in idxs]
+        return list(zip(idxs, idxs[1:]))
+
+    def zaxis_stitch_pairs(self, y : int=0):
+        filt = self._arr[:,2] == y
+        zs = self._arr[filt,1]
+        srt = numpy.argsort(zs)
+        idxs = self._arr[srt,0].astype(int)
+        idxs = [int (i) for i in idxs]
         return list(zip(idxs, idxs[1:]))
 
 
@@ -253,7 +270,7 @@ def parse_position_list(path : os.PathLike) -> numpy.ndarray:
     for idx, position in enumerate(positions):
         gz, gy = __label_to_grid_location(position['LABEL'])
         x, y, z = __physical_position_from_devices(position['DEVICES'])
-        rows.append([idx, gz, gy, x, y, z])
+        rows.append([idx, gz, gy, z, y, x])
     return numpy.vstack(rows)
 
 

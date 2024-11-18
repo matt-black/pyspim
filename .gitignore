@@ -2,6 +2,8 @@
 nb/
 # ignore OSX files
 **/._*
+# ignore SLURM outputs
+**/*.out
 src/napari_spimlib/
 
 # Byte-compiled / optimized / DLL files
