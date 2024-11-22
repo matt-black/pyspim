@@ -36,7 +36,6 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
     :returns: deskewed volume
     :rtype NDArray
     """
-
     xp = cupy.get_array_module(im)
     if xp == numpy:
         return _deskew_orthogonal_cpu(

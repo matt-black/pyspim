@@ -1,13 +1,12 @@
 import math
-from typing import Iterable, Tuple
+from typing import Tuple
 
 import cupy
 import numpy
 
 from ..typing import NDArray
-from .._util import launch_params_for_volume
 from .._matrix import rotation_about_point_matrix
-from ..interp.affine import maxblend_into_existing
+from ..interp.affine import transform
 
 
 def inv_deskew_matrix(pixel_size : float, step_size : float, 
@@ -35,44 +34,57 @@ def translation_full(r : int, c : int, direction : int):
         raise ValueError('invalid direction')
 
 
-def centercrop(im : NDArray):
-    xp = cupy.get_array_module(im)
+def _crop(im : NDArray, ctype : str):
     zdim, xdim = im.shape[0], im.shape[2]
-    if xdim > zdim:  # crop x
+    flag = ctype[0].lower()
+    if xdim > zdim:
         dif = (xdim - zdim) // 2
-        # cropping like this will break contiguity of array, so re-enforce
-        # it after cropping (b/c most downstream stuff expects it)
-        return xp.ascontiguousarray(im[...,dif:-dif])
+        if flag == 'l':
+            return im[...,dif:]
+        elif flag == 'r':
+            return im[...,:-dif]
+        elif flag == 'c':
+            return im[...,dif:-dif]
+        else:
+            raise ValueError('invalid crop type')
     else:
         raise NotImplementedError('todo')
 
 
-def deskew_stage_scan(im : cupy.ndarray, pixel_size : float, 
-                      step_size : float, direction : int, theta : float, 
-                      rotation_thetas : Tuple[int,int,int]|None,
-                      center_crop : bool, interp_method : str,
-                      block_size_z : int,
-                      block_size_y : int, 
-                      block_size_x : int):
-    full_shp = full_shape(im.shape[0], im.shape[1], im.shape[2],
-                          pixel_size, step_size, theta)
+def deskewing_transform(z : int, r : int, c : int, 
+                        pixel_size : float, step_size : float,
+                        theta : float, direction : int,
+                        rotation_thetas : Tuple[int,int,int]|None):
+    full_shp = full_shape(z, r, c, pixel_size, step_size, theta)
     D = inv_deskew_matrix(pixel_size, step_size, direction)
     t = translation_full(full_shp[1], full_shp[2], direction)
     M = numpy.concatenate([D, t], axis=1)
     M = numpy.concatenate([M, numpy.asarray([0,0,0,1])[numpy.newaxis,:]],
                           axis=0)
     if rotation_thetas is None:
-        T = cupy.asarray(numpy.linalg.inv(M)).astype(cupy.float32)
+        T = numpy.linalg.inv(M).astype(numpy.float32)
     else:
         R = rotation_about_point_matrix(*rotation_thetas,
                                         *[s/2 for s in full_shp[::-1]])
-        T = cupy.asarray(numpy.linalg.inv(M) @ R).astype(cupy.float32)
-    dsk = cupy.zeros(full_shp, dtype=cupy.uint16)
-    launch_params = launch_params_for_volume(
-        dsk.shape, block_size_z, block_size_y, block_size_x
-    )
-    maxblend_into_existing(dsk, im, T, interp_method, launch_params)
-    if center_crop:
-        return centercrop(dsk)
+        T = (numpy.linalg.inv(M) @ R).astype(numpy.float32)
+    return T, full_shp
+
+
+def deskew_stage_scan(im : cupy.ndarray, pixel_size : float, 
+                      step_size : float, direction : int, theta : float, 
+                      rotation_thetas : Tuple[int,int,int]|None,
+                      interp_method : str, auto_crop : str|None, 
+                      block_size_z : int,
+                      block_size_y : int, 
+                      block_size_x : int):
+    T, out_shape = deskewing_transform(im.shape[0], im.shape[1], im.shape[2],
+                                       pixel_size, step_size, theta, direction,
+                                       rotation_thetas)
+    T = cupy.asarray(T).astype(cupy.float32)
+    dsk = cupy.zeros(out_shape, dtype=cupy.uint16)
+    dsk = transform(im, T, interp_method, True, out_shape, 
+                    block_size_z, block_size_y, block_size_x)
+    if auto_crop is not None:
+        return _crop(dsk, auto_crop)
     else:
         return dsk
