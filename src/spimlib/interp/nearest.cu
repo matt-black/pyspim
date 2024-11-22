@@ -19,7 +19,7 @@ inline __host__ __device__ int nearestNeighbor(float coord)
 }
 
 template<typename T>
-__global__ void affineTransformNearest(float* out, T* in, float* M_aff,
+__global__ void affineTransformNearest(T* out, T* in, float* M_aff,
                                        size_t sz_o, size_t sy_o, size_t sx_o,
                                        size_t sz_i, size_t sy_i, size_t sx_i)
 {

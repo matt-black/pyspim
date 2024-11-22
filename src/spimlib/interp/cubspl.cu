@@ -154,6 +154,66 @@ __global__ void affineTransformCubSpl(float* out, T* in, float* M_aff,
 }
 
 
+
+extern "C" 
+__global__ void affineTransformCubSplUShort(
+    unsigned short* out, unsigned short* in, float* M_aff,
+    size_t sz_o, size_t sy_o, size_t sx_o,
+    size_t sz_i, size_t sy_i, size_t sx_i)
+{
+    const size_t z = blockDim.x * blockIdx.x + threadIdx.x;
+    const size_t y = blockDim.y * blockIdx.y + threadIdx.y;
+    const size_t x = blockDim.z * blockIdx.z + threadIdx.z;
+    if (x < sx_o && y < sy_o && z < sz_o) {
+        float4 voxel = make_float4(x, y, z, 1.0f);
+        const float3 coord = make_float3(
+            dot(voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3])),
+            dot(voxel, make_float4(M_aff[4], M_aff[5], M_aff[6], M_aff[7])),
+            dot(voxel, make_float4(M_aff[8], M_aff[9], M_aff[10], M_aff[11]))
+        );
+        const float3 index = floor(coord);
+        const float3 fract = coord - index;
+        //calculate bspline weights and points
+        float3 w0, w1, w2, w3;
+        bspline_weights(fract, w0, w1, w2, w3);
+        const float3 g0 = w0 + w1;
+        const float3 g1 = w2 + w3;
+        const float3 h0 = (w1 / g0) - 1 + index;
+        const int3 h0i  = float3_rd(h0);
+        const float3 h0f = h0 - h0i;
+        const float3 h1 = (w3 / g1) + 1 + index;
+        const int3 h1i  = float3_rd(h1);
+        const float3 h1f = h1 - h1i;
+        const int3 vol_dim = make_int3(sx_i-1, sy_i-1, sz_i-1);
+        if (geq0(h0i) && geq0(h1i) && h0i < vol_dim && h1i < vol_dim) {
+            float data000 = lerp3(in, h0i.x, h0i.y, h0i.z, h0f.x, h0f.y, h0f.z, sx_i, sy_i);
+            float data100 = lerp3(in, h1i.x, h0i.y, h0i.z, h1f.x, h0f.y, h0f.z, sx_i, sy_i);
+            data000 = g0.x * data000 + g1.x * data100;
+            float data010 = lerp3(in, h0i.x, h1i.y, h0i.z, h0f.x, h1f.y, h0f.z, sx_i, sy_i);
+            float data110 = lerp3(in, h1i.x, h1i.y, h0i.z, h1f.x, h1f.y, h0f.z, sx_i, sy_i);
+            data010 = g0.x * data010 + g1.x * data110;
+            data000 = g0.y * data000 + g1.y * data010;
+            float data001 = lerp3(in, h0i.x, h0i.y, h1i.z, h0f.x, h0f.y, h1f.z, sx_i, sy_i);
+            float data101 = lerp3(in, h1i.x, h0i.y, h1i.z, h1f.x, h0f.y, h1f.z, sx_i, sy_i);
+            data001 = g0.x * data001 + g1.x * data101;
+            float data011 = lerp3(in, h0i.x, h1i.y, h1i.z, h0f.x, h1f.y, h1f.z, sx_i, sy_i);
+            float data111 = lerp3(in, h1i.x, h1i.y, h1i.z, h1f.x, h1f.y, h1f.z, sx_i, sy_i);
+            data011 = g0.x * data011 + g1.x * data111;
+            data001 = g0.y * data001 + g1.y * data011;
+            // final interpolation
+            size_t idx = xyz2idx(x, y, z, sx_o, sy_o);
+            int val = __float2int_rd(g0.z * data000 + g1.z * data001);
+            if (val < 0) {
+                val = 0;
+            } else if (val > 65535) {
+                val = 65535;
+            }
+            out[idx] = (unsigned short)val;
+        }
+    }
+}
+
+
 extern "C"
 __global__ void affineTransformMaxBlend(unsigned short *out, unsigned short* in,
                                         float *M_aff, 
@@ -215,7 +275,7 @@ __global__ void affineTransformMaxBlend(unsigned short *out, unsigned short* in,
 
 
 extern "C"
-__global__ void affineTransformMeanBlend(half* *sum, 
+__global__ void affineTransformMeanBlend(half* sum, 
                                          unsigned char* count,
                                          unsigned short* in,
                                          float *M_aff, 

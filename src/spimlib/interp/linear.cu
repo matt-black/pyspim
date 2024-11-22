@@ -71,6 +71,45 @@ __global__ void affineTransformLerp(float* out, T* in, float* M_aff,
 }
 
 
+extern "C" 
+__global__ void affineTransformLerpUShort(
+    unsigned short* out, unsigned short* in, float* M_aff,
+    size_t sz_o, size_t sy_o, size_t sx_o,
+    size_t sz_i, size_t sy_i, size_t sx_i)
+{
+    const size_t z = blockDim.x * blockIdx.x + threadIdx.x;
+    const size_t y = blockDim.y * blockIdx.y + threadIdx.y;
+    const size_t x = blockDim.z * blockIdx.z + threadIdx.z;
+    
+    if (x < sx_o && y < sy_o && z < sz_o) {
+        float4 voxel = make_float4(x, y, z, 1.0f);
+        float x_t = dot(voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3]));
+        int x_td  = __float2int_rd(x_t);
+        float dx  = x_t - x_td;
+        float y_t = dot(voxel, make_float4(M_aff[4], M_aff[5], M_aff[6], M_aff[7]));
+        int y_td  = __float2int_rd(y_t);
+        float dy  = y_t - y_td;
+        float z_t = dot(voxel, make_float4(M_aff[8], M_aff[9], M_aff[10], M_aff[11]));
+        int z_td  = __float2int_rd(z_t);
+        float dz  = z_t - z_td;
+        if (x_td >= 0 && x_td < sx_i-1 && 
+            y_td >= 0 && y_td < sy_i-1 && 
+            z_td >= 0 && z_td < sz_i-1) {
+            int ival = __float2int_rd(
+                lerp3(in, x_td, y_td, z_td, dx, dy, dz, sx_i, sy_i)
+            );
+            if (ival < 0) {
+                ival = 0;
+            } else if (ival > 65535) {
+                ival = 65535;
+            }
+            size_t idx = xyz2idx(x, y, z, sx_o, sy_o);
+            out[idx] = (unsigned short)ival;
+        }
+    }
+}
+
+
 extern "C"
 __global__ void affineTransformMaxBlend(unsigned short *out, unsigned short* in,
                                         float* M_aff,

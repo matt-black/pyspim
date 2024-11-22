@@ -30,6 +30,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 __linear_ker_names = (
     'affineTransformLerp<unsigned short>',
     'affineTransformLerp<float>',
+    'affineTransformLerpUShort',
     'affineTransformMaxBlend',
     'affineTransformMeanBlend'
 )
@@ -43,6 +44,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 __cubspl_ker_names = (
     'affineTransformCubSpl<unsigned short>',
     'affineTransformCubSpl<float>',
+    'affineTransformCubSplUShort',
     'affineTransformMaxBlend',
     'affineTransformMeanBlend'
 )
@@ -51,17 +53,23 @@ __cuda_module_cubspl = cupy.RawModule(code=__cubspl_module_txt,
 __cuda_module_cubspl.compile()
 
 
-def _get_kernel(dtype, method : str = 'linear'):
+def _get_kernel(dtype, method : str = 'linear', preserve_dtype : bool = False):
     if method == 'linear':
         if dtype == cupy.uint16:
-            return __cuda_module_linear.get_function(__linear_ker_names[0])
+            if preserve_dtype:
+                return __cuda_module_linear.get_function(__linear_ker_names[2])
+            else:
+                return __cuda_module_linear.get_function(__linear_ker_names[0])
         elif dtype == cupy.float32:
             return __cuda_module_linear.get_function(__linear_ker_names[1])
         else:
             raise ValueError('invalid datatype')
     elif method == 'cubspl':
         if dtype == cupy.uint16:
-            return __cuda_module_cubspl.get_function(__cubspl_ker_names[0])
+            if preserve_dtype:
+                return __cuda_module_cubspl.get_function(__cubspl_ker_names[2])
+            else:
+                return __cuda_module_cubspl.get_function(__cubspl_ker_names[0])
         elif dtype == cupy.float32:
             return __cuda_module_cubspl.get_function(__cubspl_ker_names[1])
         else:
@@ -208,17 +216,20 @@ def cubspl_interp(A : numpy.ndarray, T : numpy.ndarray) -> numpy.ndarray:
 """
 
 
-def transform(A : NDArray, T : NDArray, interp_method : str,
+def transform(A : NDArray, T : NDArray, interp_method : str, 
+              preserve_dtype : bool, out_shp : Tuple[int,int,int]|None,
               block_size_z : int, block_size_y : int, block_size_x : int):
     if cupy.get_array_module(A) == cupy:
-        kernel = _get_kernel(A.dtype, interp_method)
-        out_shp = output_shape_for_transform(T, A.shape)
+        kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
+        if out_shp is None:
+            out_shp = output_shape_for_transform(T, A.shape)
         launch_params = launch_params_for_volume(
             out_shp, block_size_z, block_size_y, block_size_x
         )
         T = cupy.asarray(T).astype(cupy.float32)
         # preallocate output and call kernel
-        out = cupy.zeros(out_shp, dtype=cupy.float32)
+        out_dtype = A.dtype if preserve_dtype else cupy.float32
+        out = cupy.zeros(out_shp, dtype=out_dtype)
         kernel(
             launch_params[0], launch_params[1],
             (out, A, T, *out_shp, *A.shape)
