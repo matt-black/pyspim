@@ -109,3 +109,18 @@ div_stable = cupy.ElementwiseKernel(
     ''',
     'div_stable_kernel',
 )
+
+
+def initialize_estimate(a : cupy.ndarray, b : cupy.ndarray, order : str = 'F'):
+    out = cupy.zeros(a.shape, dtype=cupy.float32, order=order)
+    _initialize_estimate_kernel(a, b, out)
+    return out
+
+
+_initialize_estimate_kernel = cupy.ElementwiseKernel(
+    'T a, T b', 'float32 o',
+    '''
+    o = (a + b) / 2.0f
+    ''',
+    'initialize_estimate_kernel'
+)
