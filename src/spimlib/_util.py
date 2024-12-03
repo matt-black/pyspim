@@ -157,7 +157,54 @@ def shape_for_divisible(shp, *div) -> typing.List[int]:
     return out
 
 
-def pad_to_shape(vol : NDArray, shape, **kwargs) -> NDArray:
+def pad_to_shape_right(vol : NDArray, shape, **kwargs) -> NDArray:
+    xp = cupy.get_array_module(vol)
+    s_, v_ = list(shape), []
+    for i, _ in enumerate(s_):
+        v_.append(vol.shape[i])
+    pads = [s-v for s, v in zip(s_, v_)]
+    assert all([p>=0 for p in pads]), "all dims must be >= output shape"
+    pads = tuple([tuple([0, p]) for p in pads])
+    return xp.pad(vol, pads, **kwargs)
+
+
+def unpad_to_shape_right(vol : NDArray, shape, **kwargs) -> NDArray:
+    s_, v_ = list(shape), []
+    for i, _ in enumerate(s_):
+        v_.append(vol.shape[i])
+    pads = [v-s for v, s in zip(v_, s_)]
+    assert all([p>=0 for p in pads]), \
+        "output shape must be lte than current in all dimensions"
+    starts = [0 for _ in pads]
+    ends = [v-p for v, p in zip(v_, pads)]
+    slices = tuple([slice(s, e) for s, e in zip(starts, ends)])
+    return vol[slices]
+
+
+def pad_to_same_size(a : NDArray, b : NDArray, style='center', **kwargs) -> \
+    typing.Tuple[NDArray, NDArray]:
+    if style == 'center':
+        pad_fun = pad_to_shape_center
+    elif style == 'right':
+        pad_fun = pad_to_shape_right
+    else:
+        raise ValueError('invalid padding style')
+    if len(a.shape) == 3:
+        za, ya, xa = a.shape
+        zb, yb, xb = b.shape
+        z, y, x = max([za, zb]), max([ya, yb]), max([xa, xb])
+        fn = partial(pad_fun, shape=[z, y, x], **kwargs)
+        return fn(a), fn(b)
+    else:
+        assert len(a.shape) == 2, 'must be 2d image if not a 3d volume'
+        ya, xa = a.shape
+        yb, xb = b.shape
+        y, x = max([ya, yb]), max([xa, xb])
+        fn = partial(pad_fun, shape=[y,x], **kwargs)
+        return fn(a), fn(b) 
+
+
+def pad_to_shape_center(vol : NDArray, shape, **kwargs) -> NDArray:
     """pad input volume to specified shape
         padding is done such that original volume is centered in the output
         `**kwargs` are passed to underlying `numpy.pad` or `cupy.pad` function
@@ -181,7 +228,7 @@ def pad_to_shape(vol : NDArray, shape, **kwargs) -> NDArray:
     return xp.pad(vol, pads, **kwargs)
 
 
-def unpad_to_shape(vol : NDArray, shape) -> NDArray:
+def unpad_to_shape_center(vol : NDArray, shape) -> NDArray:
     """inverse of `pad_to_shape`, gets rid of padding at volume edges
 
     :param vol: input, padded volume
@@ -192,7 +239,7 @@ def unpad_to_shape(vol : NDArray, shape) -> NDArray:
     :rtype: NDArray
     """
     s_, v_ = list(shape), []
-    for i, s in enumerate(s_):
+    for i, _ in enumerate(s_):
         v_.append(vol.shape[i])
     pads = [v-s for v, s in zip(v_, s_)]
     assert all([p>=0 for p in pads]), \
@@ -203,8 +250,8 @@ def unpad_to_shape(vol : NDArray, shape) -> NDArray:
     return vol[slices]
 
 
-def pad_to_same_size(a : NDArray, b : NDArray,
-                     **kwargs) -> typing.Tuple[NDArray,NDArray]:
+def pad_to_same_size_center(a : NDArray, b : NDArray,
+                            **kwargs) -> typing.Tuple[NDArray,NDArray]:
     """pad input volumes so that they are the same size
         finds smallest possible padding in each dimension to add so that the
         shared size is as small as possible
@@ -222,14 +269,14 @@ def pad_to_same_size(a : NDArray, b : NDArray,
         za, ya, xa = a.shape
         zb, yb, xb = b.shape
         z, y, x = max([za, zb]), max([ya, yb]), max([xa, xb])
-        fn = partial(pad_to_shape, shape=[z, y, x], **kwargs)
+        fn = partial(pad_to_shape_center, shape=[z, y, x], **kwargs)
         return fn(a), fn(b)
     else:
         assert len(a.shape) == 2, 'must be 2d image if not a 3d volume'
         ya, xa = a.shape
         yb, xb = b.shape
         y, x = max([ya, yb]), max([xa, xb])
-        fn = partial(pad_to_shape, shape=[y,x], **kwargs)
+        fn = partial(pad_to_shape_center, shape=[y,x], **kwargs)
         return fn(a), fn(b)
 
 

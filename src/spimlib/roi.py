@@ -114,3 +114,15 @@ def combine_rois(a : BBox3D, b : BBox3D, ensure_even : bool=False) -> BBox3D:
         if (ce - cs) % 2 > 0:
             cs += 1
     return (zs, ze), (rs, re), (cs, ce)
+
+
+def crop_with_roi(a : NDArray, roi : BBox3D|BBox2D):
+    if len(a.shape) == 3:
+        return a[roi[0][0]:roi[0][1],
+                 roi[1][0]:roi[1][1],
+                 roi[2][0]:roi[2][1]]
+    elif len(a.shape) == 2:
+        return a[roi[0][0]:roi[0][1],
+                 roi[1][0]:roi[1][1]]
+    else:
+        raise ValueError('invalid shape, must be 2 or 3D input')
