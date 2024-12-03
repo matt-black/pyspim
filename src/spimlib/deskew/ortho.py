@@ -7,7 +7,8 @@ from numba import njit, prange
 from ..typing import NDArray
 
 def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
-                      direction : int, theta : float=math.pi/4) -> NDArray:
+                      direction : int, theta : float=math.pi/4,
+                      preserve_dtype : bool = False) -> NDArray:
     """deskew stage scan data into xyz coordinate system
         output format is zyx where z is normal to the coverslip,
         and x & y are the coverslip
@@ -38,21 +39,25 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
     """
     xp = cupy.get_array_module(im)
     if xp == numpy:
-        return _deskew_orthogonal_cpu(
-            im, pixel_size, step_size, direction, theta
+        dsk = _deskew_orthogonal_cpu(
+            im, pixel_size, step_size, direction, theta, preserve_dtype
         )
     else:
-        return _deskew_orthogonal_gpu(
-            im, pixel_size, step_size, direction, theta
+        dsk = _deskew_orthogonal_gpu(
+            im, pixel_size, step_size, direction, theta, preserve_dtype
         )
-
+    return dsk
+    
 
 @njit(parallel=True)
-def _deskew_orthogonal_cpu(im, pixel_size, step_size, direction, 
-                           theta=numpy.pi/4):
+def _deskew_orthogonal_cpu(im : numpy.ndarray, 
+                           pixel_size : float, step_size : float, 
+                           direction :int, theta : float = numpy.pi/4, 
+                           preserve_dtype : bool = False):
     direction = numpy.sign(direction)
+    step_size_lat = step_size / math.cos(theta)
     # convert step to pixel units
-    step_pix = step_size / pixel_size
+    step_pix = step_size_lat / pixel_size
     # precompute useful trig quantities
     sin_theta  = numpy.float64(numpy.sin(theta))
     cos_theta  = numpy.float64(numpy.cos(theta))
@@ -64,7 +69,7 @@ def _deskew_orthogonal_cpu(im, pixel_size, step_size, direction,
     n_x = numpy.int64(numpy.ceil(n_planes * step_pix + h * cos_theta))
     n_y = numpy.int64(n_y)
     n_z = numpy.int64(numpy.ceil(h * sin_theta))
-    dsk = numpy.zeros((n_z, n_y, n_x), dtype=numpy.float64)
+    dsk = numpy.zeros((n_z, n_y, n_x), dtype=im.dtype)
     for z in prange(0, n_z):
         for x in prange(0, n_x):
             # compute where we are in "raw" coordinates (x'=xpr, z'=zpr)
@@ -96,7 +101,12 @@ def _deskew_orthogonal_cpu(im, pixel_size, step_size, direction,
                         l_a = (step_pix - beta_p) / cos_otheta
                         val = l_b * (dxia * im[zpb+1,:,xiap+1] + (1-dxia) * im[zpb+1,:,xiap]) + \
                             l_a * (dxib * im[zpb,:,xibp+1] + (1-dxib) * im[zpb,:,xibp])
-                        dsk[z,:,x] = val / step_pix
+                        if preserve_dtype:
+                            dsk[z,:,x] = numpy.clip(numpy.round(
+                                val / step_pix), 0, 2**16-1
+                            ).astype(im.dtype)
+                        else:
+                            dsk[z,:,x] = val / step_pix
     # zero out triangle in left-hand side of image where data was
     # (falsely) interpolated due to wrapping
     if direction < 0:
@@ -109,11 +119,14 @@ def _deskew_orthogonal_cpu(im, pixel_size, step_size, direction,
     return dsk[...,::direction]
 
 
-def _deskew_orthogonal_gpu(im, pixel_size, step_size, direction, 
-                           theta=numpy.pi/4):
+def _deskew_orthogonal_gpu(im : cupy.ndarray, 
+                           pixel_size : float, step_size : float, 
+                           direction : int, theta : float = numpy.pi/4, 
+                           preserve_dtype : bool = False):
     direction = cupy.sign(direction)
     # convert step to pixel units
-    step_pix = step_size / pixel_size
+    step_size_lat = step_size / math.cos(theta)
+    step_pix = step_size_lat / pixel_size
     # precompute useful trig quantities
     sin_theta  = cupy.float64(cupy.sin(theta))
     cos_theta  = cupy.float64(cupy.cos(theta))
