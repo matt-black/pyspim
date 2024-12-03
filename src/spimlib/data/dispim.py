@@ -3,7 +3,6 @@ with the ASI diSPIM plugin
 """
 import os
 import json
-import math
 import warnings
 from typing import List, Optional, Tuple
 from types import ModuleType
@@ -12,7 +11,7 @@ from collections.abc import Iterable
 import zarr
 import cupy
 import numpy
-import tifffile as tiff
+import tifffile
 
 from ..typing import NDArray, SliceWindow3D
 
@@ -110,11 +109,11 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
         # open the tif file, determine if there are empty frames
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            self._f = tiff.imread(self._path, aszarr=True)
+            self._f = tifffile.imread(self._path, aszarr=True)
             self._z = zarr.open(self._f, mode='r')
 
-    def get(self, head : str, channel : int, time : int = 0, 
-            window : Optional[SliceWindow3D]=None) -> NDArray:
+    def _get_single_chan(self, head : str, channel : int, time : int = 0,
+                         window : Optional[SliceWindow3D] = None) -> NDArray:
         head_idx = int(head == 'b')
         chan = self._channel_lookup[channel][head_idx]
         if len(self._z.shape) == 4:
@@ -132,6 +131,16 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
                 )
                 return self._xp.asarray(self._z[window]).squeeze()
 
+    def get(self, head : str, channels : Iterable[int]|int, time : int = 0, 
+            window : Optional[SliceWindow3D]=None) -> NDArray:
+        if isinstance(channels, int):
+            return self._get_single_chan(head, channels, time, window)
+        else:
+            return self._xp.stack(
+                [self._get_single_chan(head, c, time, window) 
+                 for c in channels], axis=0
+            )
+
 
 class uManagerAcquisitionMultiPos(_uManagerAcquision):
     """class for loading multi-position (d)iSPIM micro-manager acquisitions
@@ -142,7 +151,7 @@ class uManagerAcquisitionMultiPos(_uManagerAcquision):
         :type xp: ModuleType, optional
         :raises ValueError: if `path` does not exist
     """
-    def __init__(self, path : os.PathLike, xp : ModuleType=numpy):
+    def __init__(self, path : os.PathLike, xp : ModuleType = numpy):
         if not os.path.exists(path):
             raise ValueError('specified path does not exist')
         assert os.path.isdir(path), "multiposition datasets must be folders"
@@ -160,7 +169,7 @@ class uManagerAcquisitionMultiPos(_uManagerAcquision):
         # array that can be indexed directly (indexing will load into memory)
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            self._f = tiff.imread(
+            self._f = tifffile.imread(
                 os.path.join(self._path, 
                              self._folder_name+'_MMStack_Pos0.ome.tif'),
                 aszarr=True, is_ome=False, is_mmstack=True, is_imagej=False
@@ -174,8 +183,9 @@ class uManagerAcquisitionMultiPos(_uManagerAcquision):
         else:
             return 1
 
-    def get(self, position : int, head : str, channel : int, time : int=0,
-            window : Optional[SliceWindow3D]=None) -> NDArray:
+    def _get_single_chan(self, position : int, head : str, 
+                         channel : int, time : int = 0, 
+                         window : Optional[SliceWindow3D] = None) -> NDArray:
         head_idx = int(head == 'b')
         chan = self._channel_lookup[channel][head_idx]
         if len(self._z.shape) == 5:  # most common
@@ -195,6 +205,16 @@ class uManagerAcquisitionMultiPos(_uManagerAcquision):
                 return self._xp.asarray(self._z[window]).squeeze()
         else:
             raise NotImplementedError('multipos/multi-time is TODO')
+
+    def get(self, position : int, head : str, channels : Iterable[int]|int, 
+            time : int=0, window : Optional[SliceWindow3D]=None) -> NDArray:
+        if isinstance(channels, int):
+            return self._get_single_chan(position, head, channels, time, window)
+        else:
+            return self._xp.stack(
+                [self._get_single_chan(position, head, c, time, window)
+                 for c in channels], axis=0
+            )
 
 
 class PositionList(object):
@@ -245,7 +265,7 @@ class PositionList(object):
         filt = self._arr[:,1] == z
         ys = self._arr[filt,2]
         srt = numpy.argsort(ys)
-        idxs = self._arr[srt,0].astype(int)
+        idxs = self._arr[filt,0].astype(int)[srt]
         idxs = [int(i) for i in idxs]
         return list(zip(idxs, idxs[1:]))
 
@@ -253,9 +273,34 @@ class PositionList(object):
         filt = self._arr[:,2] == y
         zs = self._arr[filt,1]
         srt = numpy.argsort(zs)
-        idxs = self._arr[srt,0].astype(int)
+        idxs = self._arr[filt,0].astype(int)[srt]
         idxs = [int (i) for i in idxs]
         return list(zip(idxs, idxs[1:]))
+
+
+class StitchedDataset(object):
+    def __init__(self, path : os.PathLike, xp : ModuleType = numpy):
+        if not os.path.exists(path):
+            raise ValueError('specified path does not exist')
+        assert os.path.isdir(path), 'dataset path must be a folder'
+        self._path = path
+        self._xp = xp
+
+    @staticmethod
+    def make_fname(head : str, channel : int, position : int|None):
+        if position is None:
+            return "{:s}_c{:02d}.tif".format(head, channel)
+        else:
+            return "{:s}_p{:}_c{:02d}.tif".format(head, position, channel)
+        
+    def get(self, position : int|None, head : str, channel : int, 
+            window : Optional[SliceWindow3D] = None) -> NDArray:
+        fname = StitchedDataset.make_fname(head, channel, position)
+        fpath = os.path.join(self._path, fname)
+        if window is None:
+            return self._xp.asarray(tifffile.imread(fpath))
+        else:
+            return self._xp.asarray(tifffile.imread(fpath)[window])
 
 
 def _round_from_zero(x):
