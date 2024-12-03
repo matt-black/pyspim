@@ -1,5 +1,6 @@
 import os
 import math
+from itertools import product
 from typing import Iterable, List, Tuple
 
 import cupy
@@ -104,9 +105,78 @@ def decompose_transform(A : NDArray) -> Tuple[NDArray,NDArray,NDArray,NDArray]:
 
 def output_shape_for_transform(T : NDArray, 
                                input_shape : Iterable) -> List[int]:
-    _, _, scl_xyz, _ = decompose_transform(T)
-    scl_zrc = scl_xyz[::-1]
-    return [math.ceil(x*y) for x, y in zip(scl_zrc, input_shape)]
+    t = T.get() if cupy.get_array_module(T) == cupy else T
+    coord = list(product(*[(0,s) for s in input_shape[::-1]]))
+    coord = numpy.asarray(coord).T
+    coord = numpy.vstack([coord, numpy.zeros_like(coord[0,:])])
+    coordT = (t @ coord)[:-1,:]
+    ptp = numpy.ceil(numpy.ptp(coordT, axis=1))
+    return [int(v) for v in ptp[::-1]]
+
+
+def output_shape_for_inv_transform(T : NDArray, 
+                                   input_shape : Iterable) -> List[int]:
+    xp = cupy.get_array_module(T)
+    fwd = xp.linalg.inv(T).get() if xp == cupy else xp.linalg.inv(T)
+    return output_shape_for_transform(fwd, input_shape)
+
+
+def transform(A : NDArray, T : NDArray, interp_method : str, 
+              preserve_dtype : bool, out_shp : Tuple[int,int,int]|None,
+              block_size_z : int, block_size_y : int, block_size_x : int):
+    if cupy.get_array_module(A) == cupy:
+        kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
+        if out_shp is None:
+            out_shp = output_shape_for_transform(T, A.shape)
+        launch_params = launch_params_for_volume(
+            out_shp, block_size_z, block_size_y, block_size_x
+        )
+        T = cupy.asarray(T).astype(cupy.float32)
+        # preallocate output and call kernel
+        out_dtype = A.dtype if preserve_dtype else cupy.float32
+        out = cupy.zeros(out_shp, dtype=out_dtype)
+        kernel(
+            launch_params[0], launch_params[1],
+            (out, A, T, *out_shp, *A.shape)
+        )
+        return out
+    else:
+        raise ValueError('only works on cupy arrays')
+        #if interp_method == 'linear':
+        #    return linear_interp(A, T)
+        #elif interp_method == 'cubspl':
+        #    return cubspl_interp(A, T)
+        #else:
+        #    raise ValueError('invalid interpolation method')
+
+
+def maxblend_into_existing(E : cupy.ndarray, N : cupy.ndarray, T : NDArray,
+                           interp_method : str,
+                           launch_params : CuLaunchParameters):
+    if interp_method == 'linear':
+        kernel = __cuda_module_linear.get_function('affineTransformMaxBlend')
+    else:
+        kernel = __cuda_module_cubspl.get_function('affineTransformMaxBlend')
+    kernel(
+        launch_params[0], launch_params[1],
+        (E, N, T, *E.shape, *N.shape)
+    )
+
+
+def meanblend_into_existing(S : cupy.ndarray, C : cupy.ndarray,
+                            N : cupy.ndarray, T : NDArray,
+                            interp_method : str,
+                            launch_params : CuLaunchParameters):
+    if interp_method == 'linear':
+        kernel = __cuda_module_linear.get_function('affineTransformMeanBlend')
+    elif interp_method == 'cubspl':
+        kernel = __cuda_module_cubspl.get_function('affineTransformMeanBlend')
+    else:
+        raise ValueError('invalid interpolation method')
+    kernel(
+        launch_params[0], launch_params[1],
+        (S, C, N, T, *S.shape, *N.shape)
+    )
 
 
 ## NUMBA-optimized interpolation functions for CPU
@@ -214,61 +284,3 @@ def cubspl_interp(A : numpy.ndarray, T : numpy.ndarray) -> numpy.ndarray:
                     out[z,y,x] = g0[2] * data000 + g1[2] * data001
     return out
 """
-
-
-def transform(A : NDArray, T : NDArray, interp_method : str, 
-              preserve_dtype : bool, out_shp : Tuple[int,int,int]|None,
-              block_size_z : int, block_size_y : int, block_size_x : int):
-    if cupy.get_array_module(A) == cupy:
-        kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
-        if out_shp is None:
-            out_shp = output_shape_for_transform(T, A.shape)
-        launch_params = launch_params_for_volume(
-            out_shp, block_size_z, block_size_y, block_size_x
-        )
-        T = cupy.asarray(T).astype(cupy.float32)
-        # preallocate output and call kernel
-        out_dtype = A.dtype if preserve_dtype else cupy.float32
-        out = cupy.zeros(out_shp, dtype=out_dtype)
-        kernel(
-            launch_params[0], launch_params[1],
-            (out, A, T, *out_shp, *A.shape)
-        )
-        return out
-    else:
-        raise ValueError('only works on cupy arrays')
-        #if interp_method == 'linear':
-        #    return linear_interp(A, T)
-        #elif interp_method == 'cubspl':
-        #    return cubspl_interp(A, T)
-        #else:
-        #    raise ValueError('invalid interpolation method')
-
-
-def maxblend_into_existing(E : cupy.ndarray, N : cupy.ndarray, T : NDArray,
-                           interp_method : str,
-                           launch_params : CuLaunchParameters):
-    if interp_method == 'linear':
-        kernel = __cuda_module_linear.get_function('affineTransformMaxBlend')
-    else:
-        kernel = __cuda_module_cubspl.get_function('affineTransformMaxBlend')
-    kernel(
-        launch_params[0], launch_params[1],
-        (E, N, T, *E.shape, *N.shape)
-    )
-
-
-def meanblend_into_existing(S : cupy.ndarray, C : cupy.ndarray,
-                            N : cupy.ndarray, T : NDArray,
-                            interp_method : str,
-                            launch_params : CuLaunchParameters):
-    if interp_method == 'linear':
-        kernel = __cuda_module_linear.get_function('affineTransformMeanBlend')
-    elif interp_method == 'cubspl':
-        kernel = __cuda_module_cubspl.get_function('affineTransformMeanBlend')
-    else:
-        raise ValueError('invalid interpolation method')
-    kernel(
-        launch_params[0], launch_params[1],
-        (S, C, N, T, *S.shape, *N.shape)
-    )
