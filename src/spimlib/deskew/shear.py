@@ -17,6 +17,19 @@ def inv_deskew_matrix(pixel_size : float, step_size : float,
     )
 
 
+def output_shape(z : int, r : int, c : int, 
+                 pixel_size : float, step_size : float, direction : int,
+                 auto_crop : bool):
+    full_shp = output_shape_for_transform(
+        inv_deskew_matrix(pixel_size, step_size, direction),
+        [z, r, c]
+    )
+    if auto_crop:
+        return [full_shp[0], full_shp[1], full_shp[0]]
+    else:
+        return full_shp
+
+
 def deskewing_transform(z : int, r : int, c : int, 
                         pixel_size : float, step_size : float,
                         direction : int, auto_crop : bool,
@@ -48,11 +61,12 @@ def deskew_stage_scan(im : cupy.ndarray, pixel_size : float,
                       step_size : float, direction : int,
                       rotation_thetas : Tuple[int,int,int]|None,
                       interp_method : str, auto_crop : bool,
+                      preserve_dtype : bool,
                       block_size : Tuple[int,int,int]) -> cupy.ndarray:
     T, out_shape = deskewing_transform(im.shape[0], im.shape[1], im.shape[2],
                                        pixel_size, step_size, direction,
                                        auto_crop, rotation_thetas)
     T = cupy.asarray(T).astype(cupy.float32)
-    dsk = cupy.zeros(out_shape, dtype=cupy.uint16)
-    dsk = transform(im, T, interp_method, True, out_shape, *block_size)
+    dsk = transform(im, T, interp_method, preserve_dtype, 
+                    out_shape, *block_size)
     return dsk

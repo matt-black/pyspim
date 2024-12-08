@@ -12,18 +12,18 @@ from .._util import launch_params_for_volume
 
 ## CUDA kernel setup and module compilation
 # setup raw modules
-"""with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        'nearest.cu'), 'r') as f:
     __nearest_module_txt = f.read()
 
 __nearest_ker_names = (
-    'affineTransformNearest<unsigned short>'
+    'affineTransformNearest<unsigned short>',
     'affineTransformNearest<float>'
 )
 __cuda_module_nearest = cupy.RawModule(code=__nearest_module_txt,
                                        name_expressions=__nearest_ker_names)
 __cuda_module_nearest.compile()
-"""
+
 
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
                        'linear.cu'), 'r') as f:
@@ -76,11 +76,10 @@ def _get_kernel(dtype, method : str = 'linear', preserve_dtype : bool = False):
         else:
             raise ValueError('invalid datatype')
     elif method == 'nearest':
-        raise NotImplementedError('to finish')
-        #if dtype == cupy.uint16:
-        #    return __cuda_module_nearest.get_function(__nearest_ker_names[0])
-        #elif dtype == cupy.float32:
-        #    return __cuda_module_nearest.get_function(__nearest_ker_names[1])
+        if dtype == cupy.uint16 or preserve_dtype:
+            return __cuda_module_nearest.get_function(__nearest_ker_names[0])
+        elif dtype == cupy.float32:
+            return __cuda_module_nearest.get_function(__nearest_ker_names[1])
     else:
         raise ValueError('invalid interpolation method')
 

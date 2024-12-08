@@ -18,6 +18,7 @@ inline __host__ __device__ int nearestNeighbor(float coord)
     }
 }
 
+
 template<typename T>
 __global__ void affineTransformNearest(T* out, T* in, float* M_aff,
                                        size_t sz_o, size_t sy_o, size_t sx_o,
@@ -35,8 +36,9 @@ __global__ void affineTransformNearest(T* out, T* in, float* M_aff,
         int y_i = nearestNeighbor(y_t);
         float z_t = dot(voxel, make_float4(M_aff[8], M_aff[9], M_aff[10], M_aff[11]));
         int z_i = nearestNeighbor(z_t);
-        if (x_i >= 0 && x_i < sx_i-1 && y_i >= 0 && y_i < sy_i-1 && 
-            z_i >= 0 && z_i < sz_i-1) {
+        if (x_i >= 0 && x_i < sx_i && 
+            y_i >= 0 && y_i < sy_i && 
+            z_i >= 0 && z_i < sz_i) {
             size_t idxi = xyz2idx(x_i, y_i, z_i, sx_i, sy_i);
             size_t idxo = xyz2idx(x, y, z, sx_o, sy_o);
             out[idxo] = in[idxi];
