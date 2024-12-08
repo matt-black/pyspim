@@ -8,7 +8,6 @@ import numpy
 # annotate the types of these functions
 NDArray = Union[numpy.ndarray, cupy.ndarray]
 
-
 # type for bounding boxes
 # convention here is that the tuples correspond to axes and the values
 # are (lower, upper) bounds for the bounding box
@@ -23,8 +22,10 @@ BBox3D = Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
 PadType = Union[int,List[int],Tuple[int]]
 
 # type for specifying slices for windows
+SliceWindow4D = Tuple[slice,slice,slice,slice]
 SliceWindow3D = Tuple[slice,slice,slice]
 SliceWindow2D = Tuple[slice,slice]
+SliceWindow = SliceWindow4D|SliceWindow3D|SliceWindow2D
 
 # convenience type for specifying CUDA kernel launch parameters
 CuLaunchParameters = Tuple[Tuple[int,int,int], Tuple[int,int,int]]
