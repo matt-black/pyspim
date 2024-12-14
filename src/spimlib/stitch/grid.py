@@ -32,8 +32,11 @@ def register_pair(vol0 : NDArray, vol1 : NDArray,
                   **opt_kwargs):
     _, _, par0 = powell.parse_transform_string(transform)
     if pcc_prereg:
-        t0 = pcc.translation_for_volumes(vol0, vol1)
-        par0 = list(t0)
+        t0 = list(pcc.translation_for_volumes(vol0, vol1))
+    else:
+        t0 = [0,]*3
+    _, _, par0 = powell.parse_transform_string(transform)
+    par0[:3] = t0
     # do the registration
     if piecewise:
         reg_fun = powell.optimize_affine_piecewise
@@ -82,7 +85,8 @@ def register_pair_load_gpuq(idx0 : int, idx1: int,
 
 def build_slices(tile_shape : Tuple[int,int,int],
                  overlap_axes : int|Iterable[int],
-                 len_overlaps : int|Iterable[int]) -> \
+                 len_overlaps : int|Iterable[int],
+                 empty_len : Tuple[int,int] = (0,0)) -> \
                     Tuple[SliceWindow3D,SliceWindow3D]:
     fwd_slice, rev_slice = [slice(None),]*3, [slice(None),]*3
     len_rests = []
@@ -91,8 +95,8 @@ def build_slices(tile_shape : Tuple[int,int,int],
         len_overlaps = [len_overlaps]
     len_rests = [tile_shape[o]-ol for o, ol in zip(overlap_axes, len_overlaps)]
     for oa, lo, lr in zip(overlap_axes, len_overlaps, len_rests):
-        fwd_slice[oa] = slice(0, lo)
-        rev_slice[oa] = slice(lr, tile_shape[oa])
+        fwd_slice[oa] = slice(empty_len[0], lo)
+        rev_slice[oa] = slice(lr, tile_shape[oa]-empty_len[1])
     return fwd_slice, rev_slice
     
 
@@ -193,8 +197,7 @@ def accumulate_transforms_1d(tile_shape : Tuple[int,int,int],
     new_mats = list(map(numpy.squeeze, numpy.split(M, G.shape[0])))
     ## figure out output shape
     # determine largest possible image shape
-    out_shp_fun = partial(output_shape_for_transform,
-                                    input_shape=tile_shape)
+    out_shp_fun = partial(output_shape_for_transform, input_shape=tile_shape)
     shp_lrg = numpy.amax(numpy.stack(
         list(map(out_shp_fun, new_mats)), axis=0), axis=0
     )
@@ -266,13 +269,13 @@ class Grid2D(object):
             new_group = [(grp_idx, pair[0], pair[1]) for pair in pair_group]
             new_grp_idxs.append(new_group)
         reg_fun = partial(register_pair,
-                                    pcc_prereg=pcc_prereg, piecewise=piecewise,
-                                    metric=metric, transform=transform,
-                                    interp_method=interp_method,
-                                    bounds=bounds,
-                                    kernel_launch_params=launch_par_opt,
-                                    verbose=verbose,
-                                    **opt_kwargs)
+                          pcc_prereg=pcc_prereg, piecewise=piecewise,
+                          metric=metric, transform=transform,
+                          interp_method=interp_method,
+                          bounds=bounds,
+                          kernel_launch_params=launch_par_opt,
+                          verbose=verbose,
+                          **opt_kwargs)
         # initialize each group with a list containing idx -> transform
         # maps where idx0 is mapped to the identity transform
         out_lists = [[] for _ in pair_idx_groups]

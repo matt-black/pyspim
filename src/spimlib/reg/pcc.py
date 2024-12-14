@@ -6,7 +6,7 @@ import numpy
 import skimage
 
 from ..typing import NDArray
-from .._util import get_fft_module
+from .._util import get_fft_module, pad_to_same_size
 
 
 def translation(ref : NDArray, mov : NDArray,
@@ -26,6 +26,8 @@ def translation(ref : NDArray, mov : NDArray,
     # get relevant modules for cpu/gpu
     xp = cupy.get_array_module(ref)
     fft = get_fft_module(xp)
+    if any([rd!=md for rd, md in zip(ref.shape, mov.shape)]):
+        ref, mov = pad_to_same_size(ref, mov, style='right')
     # compute fft's and then do phase cross-correlation
     ref_fft = fft.fft2(ref)
     mov_fft = fft.fft2(mov)
@@ -57,6 +59,8 @@ def scale_rotation(ref : NDArray, mov : NDArray,
     xp = cupy.get_array_module(ref)
     if xp == cupy:
         ref, mov = ref.get(), mov.get()
+    if any([rd!=md for rd, md in zip(ref.shape, mov.shape)]):
+        ref, mov = pad_to_same_size(ref, mov, style='right')
     radius = min([min(ref.shape), min(mov.shape)])
     ref_polar = skimage.transform.warp_polar(ref, radius=radius,
                                              scaling='log')

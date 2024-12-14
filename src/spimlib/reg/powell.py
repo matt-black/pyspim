@@ -1,6 +1,6 @@
 from functools import partial
 from itertools import accumulate
-from typing import List
+from typing import Callable, List, Tuple
 from numbers import Number
 
 import numpy
@@ -9,7 +9,7 @@ from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
 from .._matrix import translation_matrix, \
-    rotation_about_point_matrix, \
+    rotation_matrix, rotation_about_point_matrix, \
     scale_matrix, \
     symmetric_shear_about_point_matrix, shear_about_point_matrix
 # other imports
@@ -37,8 +37,21 @@ def _rot_trans_matrix(params, x, y, z):
     return T @ R
 
 
+def _rot0_trans_matrix(params, x, y, z):
+    R = rotation_matrix(*(params[3:] * numpy.pi/180))
+    T = translation_matrix(*params[:3])
+    return T @ R
+
+
 def _rot_trans_scale_matrix(params, x, y, z):
     R = rotation_about_point_matrix(*(params[3:6] * numpy.pi/180), x, y, z)
+    S = scale_matrix(*params[6:])
+    T = translation_matrix(*params[:3])
+    return T @ R @ S
+
+
+def _rot0_trans_scale_matrix(params, x, y, z):
+    R = rotation_matrix(*(params[3:6] * numpy.pi/180))
     S = scale_matrix(*params[6:])
     T = translation_matrix(*params[:3])
     return T @ R @ S
@@ -69,7 +82,8 @@ def _shear_trans_scale_matrix(params, x, y, z):
     return T @ S @ Sh
 
 
-def parse_transform_string(string : str):
+def parse_transform_string(string : str) -> \
+    Tuple[Callable,Callable,List[float]]:
     if string in ('t', 'trans', 'translation'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]]}
         return _trans_matrix, postfix, [0,]*3
@@ -83,12 +97,23 @@ def parse_transform_string(string : str):
                              'a' : ["{:.2f}".format(v) for v in x[3:]]}
         par0 = [0,] * 6
         return _rot_trans_matrix, postfix, [0,]*6
+    elif string in ('t+r0', 'transrot0', 'translation+rotation0'):
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             'a' : ["{:.2f}".format(v) for v in x[3:]]}
+        par0 = [0,] * 6
+        return _rot0_trans_matrix, postfix, [0,]*6
     elif string in ('t+r+s', 'transrotscale', 'translation+rotation+scale'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
                              'a' : ["{:.2f}".format(v) for v in x[3:6]],
                              's' : ["{:.2f}".format(v) for v in x[6:]]}
         par0 = [0,]*6 + [1,]*3
         return _rot_trans_scale_matrix, postfix, par0
+    elif string in ('t+r0+s', 'transrot0scale', 'translation+rotation0+scale'):
+        postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
+                             'a' : ["{:.2f}".format(v) for v in x[3:6]],
+                             's' : ["{:.2f}".format(v) for v in x[6:]]}
+        par0 = [0,]*6 + [1,]*3
+        return _rot0_trans_scale_matrix, postfix, par0
     # shear + translation
     elif string in ('t+ssh', 'transsymmshear', 'translation+symmetricshear'):
         postfix = lambda x: {'t' : ["{:.2f}".format(v) for v in x[:3]],
