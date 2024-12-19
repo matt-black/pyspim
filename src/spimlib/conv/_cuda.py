@@ -74,6 +74,16 @@ def _cuda_parameters_for_kernel_radius(kernel_radius : int):
 def make_conv_module(kernel_radius : int,
                      module_txt : str = __conv_module_txt,
                      name_expr : Tuple[str] = __kernel_names) -> cupy.RawModule:
+    """make_conv_module Generate ``cupy.RawModule`` for separable convolution
+
+    Args:
+        kernel_radius (int): radius of convolution kernel
+        module_txt (str, optional): C++ code to be compiled. Defaults to __conv_module_txt.
+        name_expr (Tuple[str], optional): named expressions that are exposed by the module. Defaults to __kernel_names.
+
+    Returns:
+        cupy.RawModule
+    """
     z_pars, r_pars, c_pars = _cuda_parameters_for_kernel_radius(
         kernel_radius
     )
@@ -139,6 +149,15 @@ def _launch_pars_c(sze_z : int, sze_r : int, sze_c : int,
 
 def calc_launch_params(kernel_radius : int, 
                        vol_shape : Tuple[int,int,int]) -> CuLaunchParameters:
+    """calc_launch_params Launch parameters for convolution kernel.
+
+    Args:
+        kernel_radius (int): radius of convolution kernel
+        vol_shape (Tuple[int,int,int]): dimensions of volume to be convolved over (ZRC)
+
+    Returns:
+        CuLaunchParameters
+    """
     z_pars, r_pars, c_pars = _cuda_parameters_for_kernel_radius(
         kernel_radius
     )
@@ -161,7 +180,20 @@ def convolve_3d(x : cupy.ndarray,
                 kernel_y : cupy.ndarray, 
                 kernel_x : cupy.ndarray,
                 cuda_module : cupy.RawModule|None = None,
-                launch_pars : _TupleCLP|None = None):
+                launch_pars : _TupleCLP|None = None) -> cupy.ndarray:
+    """convolve_3d Separable 3D convolution of input volume with z, y, x kernels.
+
+    Args:
+        x (cupy.ndarray): input volume
+        kernel_z (cupy.ndarray): convolution kernel in z-direction
+        kernel_y (cupy.ndarray): convolution kernel in y-direction
+        kernel_x (cupy.ndarray): convolution kernel in x-direction
+        cuda_module (cupy.RawModule | None, optional): ``cupy.RawModule`` that implements the convolution. Defaults to None.
+        launch_pars (_TupleCLP | None, optional): kernel launch parameters. Defaults to None.
+
+    Returns:
+        cupy.ndarray
+    """
     x = cupy.asarray(x, order='F')  # kernel only works w. column-major
     # make sure all kernels are the same size
     krx = kernel_x.shape[0] // 2

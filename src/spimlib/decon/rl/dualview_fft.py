@@ -1,4 +1,11 @@
-"""deconvolution algorithms for jointly deconvolving dual-view microscopy data
+"""Deconvolution algorithms for jointly deconvolving dual-view microscopy data.
+
+References
+---
+[1] Wu, et. al., "Spatially isotropic four-dimensional...", doi:10.1038/nbt.2713
+[2] Preibsch, et al. "Efficient Bayesian-based...", doi:10.1038/nmeth.2929
+[3] Guo, et al. "Rapid image deconvolution..." doi:10.1038/s41587-020-0560-x
+[4] Anconelli, B., et al. "Reduction of boundary effects...", doi:10.1051/0004-6361:20053848
 """
 from typing import Optional, Tuple
 
@@ -26,57 +33,30 @@ def joint_rl_dispim(view_a : NDArray, view_b : NDArray,
                     boundary_sigma_b    : float = 1e-2,
                     init_constant       : bool = False,
                     verbose             : bool = False) -> NDArray:
-    """modified Richardson-Lucy joint deconvolution, as described in [1]
-        originally developed by the Shroff group at the NIH
-        for use in diSPIM imaging.
-        NOTE: boundary correction is not implemented for this method, as at
-        the time of writing, there is no known way of doing this
+    """joint_rl_dispim Modified Richardson-Lucy joint deconvolution, as described in [1]. 
+    
+    originally developed by the Shroff group at the NIH for use in diSPIM imaging.
+    NOTE: boundary correction is not implemented for this method, as at the time of writing, there is no known way of doing this
 
-    References
-    ---
-    [1] Wu, et. al., "Spatially isotropic four-dimensional...",
-        doi:10.1038/nbt.2713
+    Args:
+        view_a (NDArray): data array corresponding to first view (A)
+        view_b (NDArray): data array corresponding to second view (B)
+        psf_a (NDArray): array with real-space point spread function for view A
+        psf_b (NDArray): array with real-space point spread function for view B
+        backproj_a (NDArray, optional): array with real-space backprojector for view A. If `None`, the mirrored point spread function is used.
+        backproj_b (NDArray, optional): array with real-space backprojector for view B. If `None`, the mirrored point spread function is used.
+        num_iter (int, optional): number of iterations to deconvolve for. Defaults to 10.
+        epsilon (float, optional): small parameter to prevent division by zero errors. Defaults to 1e-5.
+        boundary_correction (bool, optional): correct boundary effects, defaults to True.
+        req_both (bool, optional): only deconvolve areas where views a & b have data, defaults to False.
+        zero_padding (PadType, optional): amount of zero-padding to add to each axis, defaults to None. if None, each axis of size N is padded on each side by N/2 so that the padded image has dimension 2N in that axis.
+        boundary_sigma_a (float, optional): threshold for determining significant pixels in view A, defaults to 1e-2.
+        boundary_sigma_b (float, optional): threshold for determining significant pixels in view B, defaults to 1e-2.
+        init_constant (bool, optional): initialize iterations with constant array, defaults to False
+        verbose (bool, optional): display progress bar, defaults to False
 
-    :param view_a: array of data corresponding to first view (A)
-    :type view_a: NDArray
-    :param view_b: array of data corresponding to second view (B)
-    :type view_b: NDArray
-    :param psf_a: array with real-space point spread function for view A
-    :type psf_a: NDArray
-    :param psf_b: array with real-space point spread function for view B
-    :type psf_b: NDArray
-    :param backproj_a: array with real-space backprojector for view A.
-        if `None`, the mirrored point spread function is used.
-    :type backproj_a: Optional[NDArray]
-    :param backproj_b: array with real-space backprojector for view B.
-        if `None`, the mirrored point spread function is used.
-    :type backproj_b: Optional[NDArray]
-    :param num_iter: number of iterations to deconvolve for
-    :type num_iter: int
-    :param epsilon: small parameter to prevent division by zero errors
-    :type epsilon: float
-    :param boundary_correction: correct boundary effects, defaults to True
-    :type boundary_correction: bool, optional
-    :param req_both: only deconvolve areas where views a & b have data,
-        defaults to False
-    :type req_both: bool, optional
-    :param zero_padding: amount of zero-padding to add to each axis,
-        defaults to None. if None, each axis of size N is padded on each side
-        by N/2 so that the padded image has dimension 2N in that axis
-    :type zero_padding: Optional[PadType], optional
-    :param boundary_sigma_a: threshold for determining significant pixels 
-        in view A, defaults to 1e-2
-    :type boundary_sigma_a: float, optional
-    :param boundary_sigma_b: threshold for determining significant pixels 
-        in view B, defaults to 1e-2
-    :type boundary_sigma_b: float, optional
-    :param init_constant: initialize iterations with constant array, 
-        defaults to False
-    :type init_constant: bool, optional
-    :param verbose: display progress bar, defaults to False
-    :type verbose: bool, optional
-    :returns: deconvolved volume
-    :rtype: NDArray
+    Returns:
+        NDArray
     """
     if boundary_correction:
         return _additive_joint_rl_boundcorr(
@@ -100,31 +80,7 @@ def _joint_rl_dispim_uncorr(view_a : NDArray, view_b : NDArray,
                             epsilon    : float = 1e-5,
                             req_both   : bool = False,
                             verbose    : bool = False) -> NDArray:
-    """
-    :param view_a: array of data corresponding to first view (A)
-    :type view_a: NDArray
-    :param view_b: array of data corresponding to second view (B)
-    :type view_b: NDArray
-    :param psf_a: array with real-space point spread function for view A
-    :type psf_a: NDArray
-    :param psf_b: array with real-space point spread function for view B
-    :type psf_b: NDArray
-    :param backproj_a: array with real-space backprojector for view A.
-        if `None`, the mirrored point spread function is used.
-    :type backproj_a: Optional[NDArray]
-    :param backproj_b: array with real-space backprojector for view B.
-        if `None`, the mirrored point spread function is used.
-    :type backproj_b: Optional[NDArray]
-    :param num_iter: number of iterations to deconvolve for
-    :type num_iter: int
-    :param epsilon: small parameter to prevent division by zero errors
-    :type epsilon: float
-    :param req_both: only deconvolve areas where views a & b have data
-    :type req_both: bool
-    :param verbose: display progress bar
-    :type verbose: bool
-    :returns: deconvolved volume
-    :rtype: NDArray
+    """joint RL deconvolution without boundary correction.
     """
     xp = cupy.get_array_module(view_a)
     # make sure all inputs are floats
@@ -163,15 +119,14 @@ def _joint_rl_dispim_uncorr(view_a : NDArray, view_b : NDArray,
 
 def efficient_bayesian_backprojectors(psf_a : NDArray, psf_b : NDArray) -> \
     Tuple[NDArray, NDArray]:
-    """calculate proper backprojectors for "Efficient Bayesian" deconvolution
+    """efficient_bayesian_backprojectors Calculate proper backprojectors for "Efficient Bayesian" deconvolution.
 
-    :param psf_a: point spread function for view A
-    :type psf_a: NDArray
-    :param psf_b: point spread function for view B
-    :type psf_b: NDArray
-    :return: (backprojector_a, backprojector_b), 
-        tuple of backprojectors, one for each view
-    :rtype: Tuple[NDArray, NDArray]
+    Args:
+        psf_a (NDArray): point spread function for view A
+        psf_b (NDArray): point spread function for view B
+
+    Returns:
+        Tuple[NDArray,NDArray]: tuple of backprojectors, one for each view.
     """
     xp = cupy.get_array_module(psf_a)
     if xp == cupy:
@@ -202,50 +157,29 @@ def efficient_bayesian(view_a : NDArray, view_b : NDArray,
                        boundary_sigma_b    : float = 1e-2,
                        init_constant       : bool = False,
                        verbose             : bool = False) -> NDArray:
-    """efficient bayesian multiview deconvolution
-        originally described in [1], this is just additive joint deconvolution
-        with backprojectors calculated as described in the
-        "quadruple-view deconvolution" section of [2]
-    
-    References
-    ---
-    [1] Preibsch, et al. "Efficient Bayesian-based...", doi:10.1038/nmeth.2929
-    [2] Guo, et al. "Rapid image deconvolution..." doi:10.1038/s41587-020-0560-x
+    """efficient_bayesian Efficient bayesian multiview deconvolution.
 
-    :param view_a: array of data corresponding to first view (A)
-    :type view_a: NDArray
-    :param view_b: array of data corresponding to second view (B)
-    :type view_b: NDArray
-    :param psf_a: array with real-space point spread function for view A
-    :type psf_a: NDArray
-    :param psf_b: array with real-space point spread function for view B
-    :type psf_b: NDArray
-    :param num_iter: number of iterations to deconvolve for
-    :type num_iter: int
-    :param epsilon: small parameter to prevent division by zero errors
-    :type epsilon: float
-    :param boundary_correction: correct boundary effects, defaults to True
-    :type boundary_correction: bool, optional
-    :param req_both: only deconvolve areas where views a & b have data,
-        defaults to False
-    :type req_both: bool, optional
-    :param zero_padding: amount of zero-padding to add to each axis,
-        defaults to None. if None, each axis of size N is padded on each side
-        by N/2 so that the padded image has dimension 2N in that axis
-    :type zero_padding: Optional[PadType], optional
-    :param boundary_sigma_a: threshold for determining significant pixels 
-        in view A, defaults to 1e-2
-    :type boundary_sigma_a: float, optional
-    :param boundary_sigma_b: threshold for determining significant pixels 
-        in view B, defaults to 1e-2
-    :type boundary_sigma_b: float, optional
-    :param init_constant: initialize iterations with constant array, 
-        defaults to False
-    :type init_constant: bool, optional
-    :param verbose: display progress bar, defaults to False
-    :type verbose: bool, optional
-    :returns: deconvolved volume
-    :rtype: NDArray
+    Originally described in [2], this is just additive joint deconvolution with backprojectors calculated as described in the "quadruple-view deconvolution" section of [3]
+
+    Args:
+        view_a (NDArray): data array corresponding to first view (A)
+        view_b (NDArray): data array corresponding to second view (B)
+        psf_a (NDArray): array with real-space point spread function for view A
+        psf_b (NDArray): array with real-space point spread function for view B
+        backproj_a (NDArray, optional): array with real-space backprojector for view A. If `None`, the mirrored point spread function is used.
+        backproj_b (NDArray, optional): array with real-space backprojector for view B. If `None`, the mirrored point spread function is used.
+        num_iter (int, optional): number of iterations to deconvolve for. Defaults to 10.
+        epsilon (float, optional): small parameter to prevent division by zero errors. Defaults to 1e-5.
+        boundary_correction (bool, optional): correct boundary effects, defaults to True.
+        req_both (bool, optional): only deconvolve areas where views a & b have data, defaults to False.
+        zero_padding (PadType, optional): amount of zero-padding to add to each axis, defaults to None. if None, each axis of size N is padded on each side by N/2 so that the padded image has dimension 2N in that axis.
+        boundary_sigma_a (float, optional): threshold for determining significant pixels in view A, defaults to 1e-2.
+        boundary_sigma_b (float, optional): threshold for determining significant pixels in view B, defaults to 1e-2.
+        init_constant (bool, optional): initialize iterations with constant array, defaults to False
+        verbose (bool, optional): display progress bar, defaults to False
+
+    Returns:
+        NDArray
     """
     # compute backprojectors
     backproj_a, backproj_b = efficient_bayesian_backprojectors(psf_a, psf_b)
@@ -269,57 +203,30 @@ def additive_joint_rl(view_a : NDArray, view_b : NDArray,
                       boundary_sigma_b    : float = 1e-2,
                       init_constant       : bool = False,
                       verbose             : bool = False) -> NDArray:
-    """additive joint deconvolution.
-        with boundary correction turned off, each view is deconvolved
-        separately and then averaged at each iteration. 
-        with boundary correction turned on, an ordered subset EM algorithm
-        from [1] is used. 
+    """additive_joint_rl Additive joint deconvolution.
+    
+    With boundary correction turned off, each view is deconvolved separately and then averaged at each iteration. 
+    With boundary correction turned on, an ordered subset EM algorithm from [4] is used. 
+    
+    Args:
+        view_a (NDArray): data array corresponding to first view (A)
+        view_b (NDArray): data array corresponding to second view (B)
+        psf_a (NDArray): array with real-space point spread function for view A
+        psf_b (NDArray): array with real-space point spread function for view B
+        backproj_a (NDArray, optional): array with real-space backprojector for view A. If `None`, the mirrored point spread function is used.
+        backproj_b (NDArray, optional): array with real-space backprojector for view B. If `None`, the mirrored point spread function is used.
+        num_iter (int, optional): number of iterations to deconvolve for. Defaults to 10.
+        epsilon (float, optional): small parameter to prevent division by zero errors. Defaults to 1e-5.
+        boundary_correction (bool, optional): correct boundary effects, defaults to True.
+        req_both (bool, optional): only deconvolve areas where views a & b have data, defaults to False.
+        zero_padding (PadType, optional): amount of zero-padding to add to each axis, defaults to None. if None, each axis of size N is padded on each side by N/2 so that the padded image has dimension 2N in that axis.
+        boundary_sigma_a (float, optional): threshold for determining significant pixels in view A, defaults to 1e-2.
+        boundary_sigma_b (float, optional): threshold for determining significant pixels in view B, defaults to 1e-2.
+        init_constant (bool, optional): initialize iterations with constant array, defaults to False
+        verbose (bool, optional): display progress bar, defaults to False
 
-    References
-    ---
-    [1] Anconelli, B., et al. "Reduction of boundary effects...",
-        doi:10.1051/0004-6361:20053848
-
-    :param view_a: array of data corresponding to first view (A)
-    :type view_a: NDArray
-    :param view_b: array of data corresponding to second view (B)
-    :type view_b: NDArray
-    :param psf_a: array with real-space point spread function for view A
-    :type psf_a: NDArray
-    :param psf_b: array with real-space point spread function for view B
-    :type psf_b: NDArray
-    :param backproj_a: array with real-space backprojector for view A.
-        if `None`, the mirrored point spread function is used.
-    :type backproj_a: Optional[NDArray]
-    :param backproj_b: array with real-space backprojector for view B.
-        if `None`, the mirrored point spread function is used.
-    :type backproj_b: Optional[NDArray]
-    :param num_iter: number of iterations to deconvolve for
-    :type num_iter: int
-    :param epsilon: small parameter to prevent division by zero errors
-    :type epsilon: float
-    :param boundary_correction: correct boundary effects, defaults to True
-    :type boundary_correction: bool, optional
-    :param req_both: only deconvolve areas where views a & b have data,
-        defaults to False
-    :type req_both: bool, optional
-    :param zero_padding: amount of zero-padding to add to each axis,
-        defaults to None. if None, each axis of size N is padded on each side
-        by N/2 so that the padded image has dimension 2N in that axis
-    :type zero_padding: Optional[PadType], optional
-    :param boundary_sigma_a: threshold for determining significant pixels 
-        in view A, defaults to 1e-2
-    :type boundary_sigma_a: float, optional
-    :param boundary_sigma_b: threshold for determining significant pixels 
-        in view B, defaults to 1e-2
-    :type boundary_sigma_b: float, optional
-    :param init_constant: initialize iterations with constant array, 
-        defaults to False
-    :type init_constant: bool, optional
-    :param verbose: display progress bar, defaults to False
-    :type verbose: bool, optional
-    :returns: deconvolved volume
-    :rtype: NDArray
+    Returns:
+        NDArray
     """
     if boundary_correction:
         return _additive_joint_rl_boundcorr(
@@ -347,54 +254,9 @@ def _additive_joint_rl_boundcorr(view_a : NDArray, view_b : NDArray,
                                  init_constant : bool = False,
                                  req_both : bool = False,
                                  verbose  : bool = False) -> NDArray:
-    """Dual-view additive joint Richardson-Lucy deconvolution 
-        with boundary correction
-        NOTE: this implementation uses ordered subset expectation maximization
-        and so doesn't iterate in the same way as the boundary-uncorrected 
-        version. 
+    """_additive_joint_rl_boundcorr Dual-view additive joint Richardson-Lucy deconvolution with boundary correction.
 
-    References
-    ---
-    [1] Anconelli, B., et al. "Reduction of boundary effects...",
-        doi:10.1051/0004-6361:20053848
-
-    :param view_a: array of data corresp. to view A
-    :type view_a: NDArray
-    :param view_b: array of data corresp. to view B
-    :type view_b: NDArray
-    :param psf_a: point spread function for view A
-    :type psf_a: NDArray
-    :param psf_b: point spread function for view B
-    :type psf_b: NDArray
-    :param backproj_a: backprojector for view A, defaults to None
-    :type backproj_a: Optional[NDArray], optional
-    :param backproj_b: backprojector for view B, defaults to None
-    :type backproj_b: Optional[NDArray], optional
-    :param num_iter: number of Richardson-Lucy iterations, defaults to 10
-    :type num_iter: int, optional
-    :param epsilon: small parameter to prevent division by small numbers, 
-        values below which intermediate results become 0, defaults to 1e-5
-    :type epsilon: float, optional
-    :param zero_padding: amount of zero-padding to add to each axis,
-        defaults to None. if None, each axis of size N is padded on each side
-        by N/2 so that the padded image has dimension 2N in that axis
-    :type zero_padding: Optional[PadType], optional
-    :param boundary_sigma_a: threshold for determining significant pixels 
-        in view A, defaults to 1e-2
-    :type boundary_sigma_a: float, optional
-    :param boundary_sigma_b: threshold for determining significant pixels 
-        in view B, defaults to 1e-2
-    :type boundary_sigma_b: float, optional
-    :param init_constant: initialize iterations with constant array, 
-        defaults to False
-    :type init_constant: bool, optional
-    :param req_both: set all pixels that dont have data from both views to 0, 
-        defaults to False
-    :type req_both: bool, optional
-    :param verbose: show progress bar, defaults to False
-    :type verbose: bool, optional
-    :return: deconvolved image/volume
-    :rtype: NDArray
+    NOTE: this implementation uses ordered subset expectation maximization and so doesn't iterate in the same way as the boundary-uncorrected version. 
     """
     xp = cupy.get_array_module(view_a)
     # make sure input views have same dimension/size
@@ -500,6 +362,8 @@ def _additive_joint_rl_uncorr(view_a : NDArray, view_b : NDArray,
                               epsilon  : float = 1e-5,
                               req_both : bool = False,
                               verbose  : bool = False) -> NDArray:
+    """_additive_joint_rl_uncorr Dual-view additive joint Richardson-Lucy deconvolution without boundary correction.
+    """
     xp = cupy.get_array_module(view_a)
     # make sure all inputs are floats
     float_type = supported_float_type(view_a.dtype)

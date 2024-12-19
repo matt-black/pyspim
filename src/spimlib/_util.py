@@ -529,3 +529,8 @@ class NumpyArrayEncoder(json.JSONEncoder):
         elif isinstance(obj, numpy.integer):
             return int(obj)
         return super().default(obj)
+    
+
+def uint16_to_uint8(a : NDArray, max_val : float = 65535):
+    xp = cupy.get_array_module(a)
+    return xp.clip(xp.round(a*(255.0/max_val)), 0, 255).astype(xp.uint8)

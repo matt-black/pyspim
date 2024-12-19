@@ -50,6 +50,13 @@ def _page_calculator(shape : Iterable[int], head : str,
 
 def uManagerAcquisition(path : os.PathLike, multi_pos : bool = False,
                         xp : ModuleType=numpy):
+    """uManagerAcquisition Create new acquisition object for fetching raw acquisition data.
+
+    Args:
+        path (os.PathLike): path to root directory of acquisition
+        multi_pos (bool, optional): flag for if this is a multi-position acquisition. Defaults to False.
+        xp (ModuleType, optional): array module to load data into (``numpy`` or ``cupy``). Defaults to numpy.
+    """
     if multi_pos:
         return uManagerAcquisitionMultiPos(path, xp)
     else:
@@ -85,15 +92,6 @@ class _uManagerAcquision(object):
 
 
 class uManagerAcquisitionOnePos(_uManagerAcquision):
-    """class for loading single position (d)iSPIM smicro-manager acquisitions
-
-    :param path: filepath
-    :type path: os.PathLike
-    :param xp: array module to load files into, either numpy or cupy, 
-        defaults to numpy
-    :type xp: ModuleType, optional
-    :raises ValueError: if path does not exist
-    """
     
     def __init__(self, path : os.PathLike, xp : ModuleType=numpy):
         if not os.path.exists(path):
@@ -143,14 +141,7 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
 
 
 class uManagerAcquisitionMultiPos(_uManagerAcquision):
-    """class for loading multi-position (d)iSPIM micro-manager acquisitions
 
-        :param path: path to folder containing *.ome.tif files from acquisition
-        :type path: os.PathLike
-        :param xp: module to load data with, defaults to numpy
-        :type xp: ModuleType, optional
-        :raises ValueError: if `path` does not exist
-    """
     def __init__(self, path : os.PathLike, xp : ModuleType = numpy):
         if not os.path.exists(path):
             raise ValueError('specified path does not exist')
@@ -308,6 +299,14 @@ def _round_from_zero(x):
 
 
 def parse_position_list(path : os.PathLike) -> numpy.ndarray:
+    """parse_position_list Parse uManager position list into numpy array
+
+    Args:
+        path (os.PathLike): path to the PositionList.pos file
+
+    Returns:
+        numpy.ndarray: 6-column array [position_index, grid_z, grid_y, z, y, x]
+    """
     with open(path, 'r') as f:
         pos_dict = json.load(f)
     positions = pos_dict['POSITIONS']
@@ -338,16 +337,14 @@ def __label_to_grid_location(label : str) -> Tuple[int, int]:
 
 
 def subtract_constant_uint16arr(arr : NDArray, const : int) -> NDArray:
-    """subtract constant value from uint16 input array
-        useful when handling unsigned integer data as it typically is formatted
-        by the cameras used in diSPIM imaging
+    """subtract_constant_uint16arr Subtract constant value from uint16 array, preventing underflow.
 
-    :param arr: input array
-    :type arr: NDArray
-    :param const: constant to subtract
-    :type const: int
-    :returns: input array less the constant value
-    :rtype: NDArray
+    Args:
+        arr (NDArray): input array
+        const (int): value to subtract
+
+    Returns:
+        NDArray
     """
     xp = cupy.get_array_module(arr)
     return (arr.astype(xp.int32) - const).clip(0, 2**16).astype(xp.uint16)

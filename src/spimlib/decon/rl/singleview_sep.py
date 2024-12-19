@@ -1,3 +1,7 @@
+"""Separable deconvolution for single view volumes.
+
+TODO: more detail here. 
+"""
 from contextlib import nullcontext
 from typing import Optional
 
@@ -19,6 +23,30 @@ def deconvolve(volume : NDArray,
                boundary_padding : Optional[int],
                boundary_sigma : float,
                verbose : bool) -> NDArray:
+    """deconvolve do deconvolution of ``volume``.
+
+    Args:
+        volume (NDArray): input volume to be deconvolved
+        psf_z (NDArray): PSF kernel in z-direction
+        psf_y (NDArray): PSF kernel in y-direction
+        psf_x (NDArray): PSF kernel in x-direction
+        bp_z (NDArray): backprojector kernel in z-direction
+        bp_y (NDArray): backprojector kernel in y-direction
+        bp_x (NDArray): backprojector kernel in x-direction
+        num_iter (int): number of iterations to do deconvolution for
+        boundary_correction (bool): whether or not to do boundary correction
+        epsilon (Optional[float]): small parameter to prevent division by zero
+        init_constant (bool): initialize deconvolution with a constant array (if ``False``, will use input volume)
+        boundary_padding (Optional[int]): zero-padding for boundary correction
+        boundary_sigma (float): significance value for pixels when doing boundary correction
+        verbose (bool): show progress bar
+
+    Raises:
+        NotImplementedError: boundary correction
+
+    Returns:
+        NDArray
+    """
     volume = cupy.asarray(volume, dtype=cupy.float32, order='F')
     psf_z  = cupy.asarray(psf_z,  dtype=cupy.float32)
     psf_y  = cupy.asarray(psf_y,  dtype=cupy.float32)
@@ -71,16 +99,3 @@ def _deconvolve_uncorrected(
                                  bp_z, bp_y, bp_x)
             )
     return est_i
-
-
-def _deconvolve_corrected(volume : cupy.ndarray, 
-                          psf_z : cupy.ndarray, psf_y : cupy.ndarray, psf_x : cupy.ndarray,
-                          bp_z  : cupy.ndarray, bp_y  : cupy.ndarray, bp_x  : cupy.ndarray,
-                          num_iter : int,
-                          boundary_correction : bool,
-                          epsilon : Optional[float],
-                          init_constant : bool,
-                          boundary_padding : Optional[int],
-                          boundary_sigma : float,
-                          verbose : bool):
-    pass

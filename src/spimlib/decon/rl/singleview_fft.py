@@ -1,3 +1,9 @@
+""" Single-view Richardson Lucy deconvolution using FFT-space convolution. 
+
+References
+---
+[1] Bertero & Boccacci, "A simple method...", doi:10.1051/0004-6361:20052717
+"""
 from typing import Optional
 
 import cupy
@@ -6,70 +12,68 @@ from cuypx.scipy.signal import fftconvolve as fftconv_gpu
 from tqdm.auto import trange
 
 from ...typing import NDArray, PadType
-from ..._util import get_skimage_module, supported_float_type
+from ..._util import supported_float_type
 
 
 def richardson_lucy(image : NDArray, psf : NDArray, bp : NDArray,
                     num_iter : int = 50, 
                     boundary_correction : bool = True,
-                    clip : bool = False,
-                    filter_epsilon : Optional[float] = None,
+                    epsilon : Optional[float] = None,
                     boundary_padding : Optional[int] = None,
                     boundary_sigma : float = 1e-2,
                     verbose : bool = False) -> NDArray:
+    """richardson_lucy Richardson-Lucy deconvolution.
+
+    Args:
+        image (NDArray): input volume to be deconvolved
+        psf (NDArray): point spread function
+        bp (NDArray): back projector for deconvolution
+        num_iter (int, optional): number of iterations. Defaults to 50.
+        boundary_correction (bool, optional): whether or not to do boundary correction. Defaults to True.
+        epsilon (Optional[float], optional): small parameter to prevent division by zero. Defaults to None.
+        boundary_padding (Optional[int], optional): zero-padding for boundary correction. Defaults to None.
+        boundary_sigma (float, optional): significance level for pixels when doing boundary correction. Defaults to 1e-2.
+        verbose (bool, optional): show a progress bar. Defaults to False.
+
+    Raises:
+        NotImplementedError: uncorrected version of RL deconvolution.
+
+    Returns:
+        NDArray
+    """
     if boundary_correction:
         return richardson_lucy_boundcorr(image, psf, bp, 
-                                         num_iter, filter_epsilon, 
+                                         num_iter, epsilon, 
                                          boundary_padding, boundary_sigma, 
                                          init_constant=False,
                                          verbose=verbose)
     else:
-        return richardson_lucy_skimage(
-            image, psf, num_iter, clip, filter_epsilon
-        )
+        raise NotImplementedError('TODO')
 
 
 def richardson_lucy_boundcorr(image : NDArray, psf : NDArray,
                               bp : Optional[NDArray] = None,
                               num_iter : int = 50, 
-                              filter_epsilon : float = 1e-4,
+                              epsilon : float = 1e-4,
                               zero_padding : Optional[PadType] = None,
                               boundary_sigma : float = 1e-2,
                               init_constant : bool = False,
                               verbose : bool = False) -> NDArray:
-    """Richardson-Lucy deconvolution with boundary correction
-        described in [1], this method reduces Gibbs oscillations that occur
-        due to boundary effects when doing RL deconvolution. 
-        
-    References
-    ---
-    [1] Bertero & Boccacci, "A simple method...", 
-        doi:10.1051/0004-6361:20052717
+    """richardson_lucy_boundcorr Richardson-Lucy deconvolution with boundary correction described in [1], this method reduces Gibbs oscillations that occur due to boundary effects when doing RL deconvolution. 
 
-    :param image: input image or volume to be deconvolved
-    :type image: NDArray
-    :param psf: point spread function
-    :type psf: NDArray
-    :param bp: backprojector, defaults to None
-    :type bp: Optional[NDArray], optional
-    :param num_iter: number of iterations, defaults to 50
-    :type num_iter: int, optional
-    :param filter_epsilon: values below which intermediate results become 0, 
-        defaults to 1e-4
-    :type filter_epsilon: float, optional
-    :param zero_padding: amount of zero-padding to add to each axis, 
-        defaults to None. if None, each axis of size N is padded on each side
-        by N/2 so that the padded image has dimension 2N in that axis
-    :type zero_padding: Optional[PadType], optional
-    :param boundary_sigma: threshold for determining significant pixels 
-        to include in window, defaults to 1e-2. 
-    :type boundary_sigma: float, optional
-    :param init_constant: initialize iterations with constant array, defaults to False
-    :type init_constant: bool, optional
-    :param verbose: show progress, defaults to False
-    :type verbose: bool, optional
-    :return: deconvolved image/volume
-    :rtype: NDArray
+    Args:
+        image (NDArray): input volume to be deconvolved
+        psf (NDArray): point spread function
+        bp (Optional[NDArray], optional): backprojector. Defaults to None, if so will used mirrored PSF.    
+        num_iter (int, optional): number of iterations. Defaults to 50.
+        epsilon (float, optional): small parameter to prevent division by zero. Defaults to 1e-4.
+        zero_padding (Optional[PadType], optional): amount of zero-padding. Defaults to None.
+        boundary_sigma (float, optional): significance level for pixels when doing boundary correction. Defaults to 1e-2.
+        init_constant (bool, optional): whether to make the inital guess a constant array, (``True``) or (A+B)/2 (``False``). Defaults to False.
+        verbose (bool, optional): show progress bar. Defaults to False.
+
+    Returns:
+        NDArray
     """
     assert len(image.shape) == 2 or len(image.shape) == 3, \
         "RL deconvolution only implemented for 2- and 3d inputs"
@@ -118,7 +122,7 @@ def richardson_lucy_boundcorr(image : NDArray, psf : NDArray,
         con = conv(psf, est)
         est = xp.multiply(
             xp.multiply(window, est),  # conv(window, est)
-            conv(bp, xp.where(con < filter_epsilon, 0, image / con))
+            conv(bp, xp.where(con < epsilon, 0, image / con))
         )
     # trim out padding
     if len(est) == 2:
@@ -127,32 +131,3 @@ def richardson_lucy_boundcorr(image : NDArray, psf : NDArray,
         return est[pad[0][0]:-pad[0][1],
                    pad[1][0]:-pad[1][1],
                    pad[2][0]:-pad[2][1]]
-
-
-def richardson_lucy_skimage(image : NDArray, psf : NDArray,
-                            num_iter : int=50, clip : bool=False,
-                            filter_epsilon : Optional[float]=None) -> NDArray:
-    """Richardson-Lucy deconvolution
-        this is just a thin wrapper around cucim/skimage that dispatches
-        to the correct library based on the input being already on the
-        cpu (`skimage`) or gpu (`cucim`)
-
-    :param image: input image/volume
-    :type image: NDArray
-    :param psf: point spread function
-    :type psf: NDArray
-    :param num_iter: number of iterations
-    :type num_iter: int
-    :param clip: if `True`, pixel values >1 or <-1 are thresholded
-        (for skimage pipeline compatability)
-    :type clip: bool
-    :param filter_epsilon: values below which intermediate results become 0
-        (avoids division by small numbers errors)
-    :type filter_epsilon: Optional[float]
-    :returns: deconvolved image
-    :rtype: NDArray
-    """
-    skimage = get_skimage_module(image)
-    return skimage.restoration.richardson_lucy(
-        image, psf, num_iter, clip, filter_epsilon
-    )

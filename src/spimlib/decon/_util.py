@@ -9,7 +9,16 @@ from ..typing import NDArray, BBox3D, SliceWindow
 __tup3 = Tuple[int,int,int]  # convenience type for output
 
 
-def gaussian_kernel_1d(sigma : float, radius : int):
+def gaussian_kernel_1d(sigma : float, radius : int) -> numpy.ndarray:
+    """gaussian_kernel_1d 1D Gaussian kernel.
+
+    Args:
+        sigma (float): standard deviation of Gaussian.
+        radius (int): radius of kernel
+
+    Returns:
+        numpy.ndarray
+    """
     sigma2 = sigma * sigma
     x = numpy.arange(-radius, radius+1)
     phi = numpy.exp(-0.5 / sigma2 * x**2)
@@ -18,26 +27,25 @@ def gaussian_kernel_1d(sigma : float, radius : int):
 
 def crop_and_pad_for_deconv(vol : NDArray,
                             bbox : Optional[BBox3D], pad : int) -> NDArray:
-    """crop and pad input volume in preparation for deconvolution
-        deconvolution will produce artifacts at the edges of images (volumes)
-        to help remedy this, the input can be padded, deconvolved, and then
-        the padded regions cropped out post-deconvolution.
-        this function will take the input volume, crop it, and then pad the
-        edges such that after deconvolution, one can re-crop it to get
-        rid of the aforementioned artifacts. instead of just cropping and
-        padding, if the bbox and padding are still contained in the original
-        volume, this function will under-crop the appropriate amount such that
-        original parts of the volume are kept (instead of padding)
+    """crop_and_pad_for_deconv Crop and pad input volume in preparation for deconvolution.
+
+    deconvolution will produce artifacts at the edges of images (volumes)
+    to help remedy this, the input can be padded, deconvolved, and then
+    the padded regions cropped out post-deconvolution.
+    this function will take the input volume, crop it, and then pad the
+    edges such that after deconvolution, one can re-crop it to get
+    rid of the aforementioned artifacts. instead of just cropping and
+    padding, if the bbox and padding are still contained in the original
+    volume, this function will under-crop the appropriate amount such that
+    original parts of the volume are kept (instead of padding)
+
+    Args:
+        vol (NDArray): input volume to be deconvolved
+        bbox (Optional[BBox3D]): bounding box to crop volume down to. If ``None``, cropping is not done.
+        pad (int): amount of padding past bbox (same for all axes)
     
-    :param vol: input volume to be deconvolved
-    :type vol: NDArray
-    :param bbox: bounding box to crop volume down to
-        if `None`, cropping is not done
-    :type bbox: Optional[BBox3D]
-    :param pad: amount of padding past bbox (same for all axes)
-    :type pad: int
-    :returns: (under)cropped and possibly-padded volume ready for deconvolution
-    :rtype: NDArray
+    Returns:
+        NDArray
     """
     if bbox is None:
         bbox = tuple(zip([0,0,0], list(vol.shape)))
@@ -79,22 +87,6 @@ def _crop_bounds_and_padding(vol : NDArray, bbox : BBox3D, pad : int) -> \
 def _crop_and_pad(vol : NDArray,
                   padl : __tup3, padr : __tup3,
                   lowb : __tup3, uppb : __tup3):
-    """crop and pad the input volume w. specified parameters
-        padding is done with option 'symmetric' for (see : `numpy.pad`)
-
-    :param vol: input volume to be deconvolved
-    :type vol: NDArray
-    :param padl: left paddings for each axis
-    :type padl: Tuple[int,int,int]
-    :param padr: right paddings for each axis
-    :type padr: Tuple[int,int,int]
-    :param lowb: lower crop bounds for each axis
-    :type lowb: Tuple[int,int,int]
-    :param uppb: upper crop bounds for each axis
-    :type uppb: Tuple[int,int,int]
-    :returns: cropped and padded volume suitable for deconvolution
-    :rtype: NDArray
-    """
     xp = cupy.get_array_module(vol)
     return xp.pad(vol[lowb[0]:uppb[0],lowb[1]:uppb[1],lowb[2]:uppb[2]],
                   [(l, r) for l, r in zip(padl, padr)],
@@ -112,7 +104,17 @@ div_stable = cupy.ElementwiseKernel(
 )
 
 
-def initialize_estimate(a : cupy.ndarray, b : cupy.ndarray, order : str = 'F'):
+def initialize_estimate(a : cupy.ndarray, b : cupy.ndarray, order : str = 'F') -> cupy.ndarray:
+    """initialize_estimate Initialize deconvolution estimate (A + B)/2.
+
+    Args:
+        a (cupy.ndarray): volume for view A
+        b (cupy.ndarray): volume for view B
+        order (str, optional): memory order of output array. Defaults to 'F'.
+
+    Returns:
+        cupy.ndarray
+    """
     out = cupy.zeros(a.shape, dtype=cupy.float32, order=order)
     _initialize_estimate_kernel(a, b, out)
     return out
@@ -163,6 +165,19 @@ def calculate_decon_chunks(
     overlap : int|Tuple[int,int,int],
     channel_slice : slice|None,
 ) -> dict[int,ChunkProps]:
+    """calculate_decon_chunks Compute how an array to be deconvolved should be chunked into parts for chunkwise deconvolution
+
+    Args:
+        z (int): linear shape of volume, in z-direction
+        r (int): linear shape of volume, in r-direction (# rows)
+        c (int): linear shape of volume, in c-direction (# columns)
+        chunk_shape (int | Tuple[int,int,int]): shape of chunk. If ``int``, chunks are assumed cubic, otherwise a tuple with int for each dimension. 
+        overlap (int | Tuple[int,int,int]): amount of overlap (in pixels) between chunks.
+        channel_slice (slice | None): how to slice channels in output. If ``None``, all channels are taken. 
+
+    Returns:
+        dict[int,ChunkProps]
+    """
     shape = tuple([z, r, c])
     if isinstance(chunk_shape, int):
         chunk_shape = tuple([chunk_shape,]*3)

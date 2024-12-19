@@ -1,4 +1,7 @@
-import time
+""" Separable deconvolution of dual-view volumes.
+
+TODO: add more detail here.
+"""
 import multiprocessing
 import concurrent.futures
 from warnings import warn
@@ -138,6 +141,41 @@ def deconvolve(
     boundary_sigma_b : float,
     verbose : bool
 ) -> NDArray:
+    """deconvolve Joint deconvolution of the 2 input views into a single volume.
+
+    Input volumes should be either 3D (ZRC) or 4D (CZRC). 
+
+    Args:
+        view_a (NDArray): input volume from first view (A)
+        view_b (NDArray): input volume from second view (B)
+        est_i (NDArray | None): initial estimate for deconvolution. If ``None``, will be initialized as (A + B)/2.
+        psf_az (NDArray | Iterable[NDArray]): psf for view a in z-direction
+        psf_ay (NDArray | Iterable[NDArray]): psf for view a in y-direction
+        psf_ax (NDArray | Iterable[NDArray]): psf for view a in x-direction
+        psf_bz (NDArray | Iterable[NDArray]): psf for view b in z-direction
+        psf_by (NDArray | Iterable[NDArray]): psf for view b in y-direction
+        psf_bx (NDArray | Iterable[NDArray]): psf for view b in x-direction
+        bp_az (NDArray | Iterable[NDArray]): backprojector for view a in z-direction
+        bp_ay (NDArray | Iterable[NDArray]): backprojector for view a in y-direction
+        bp_ax (NDArray | Iterable[NDArray]): backprojector for view a in x-direction
+        bp_bz (NDArray | Iterable[NDArray]): backprojector for view b in z-direction
+        bp_by (NDArray | Iterable[NDArray]): backprojector for view b in y-direction
+        bp_bx (NDArray | Iterable[NDArray]): backprojector for view b in x-direction
+        decon_function (str): deconvolution function to use. One of ``"additive", "dispim"``.
+        num_iter (int): number of deconvolution iterations
+        epsilon (float): small parameter for preventing division by zero
+        boundary_correction (bool): whether or not to do boundary correction
+        zero_padding (Optional[PadType]): zero padding for boundary correction
+        boundary_sigma_a (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        boundary_sigma_b (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        verbose (bool): show progress bar for iterations
+
+    Raises:
+        ValueError: if input volume isn't 3- (single channel) or 4D (multichannel).
+
+    Returns:
+        NDArray
+    """
     if len(view_a.shape) == 4:
         fun = _deconvolve_multichannel
     elif len(view_a.shape) == 3:
@@ -169,6 +207,37 @@ def additive_joint_rl(
     launch_pars : Optional[CuLaunchParameters],
     verbose : bool,
 ) -> cupy.ndarray:
+    """additive_joint_rl Additive joint RL deconvolution.
+
+    Args:
+        view_a (cupy.ndarray): input volume for view A
+        view_b (cupy.ndarray): input volume for view B
+        est_i (cupy.ndarray): initial estimate
+        psf_az (cupy.ndarray): PSF for view A, z-direction
+        psf_ay (cupy.ndarray): PSF for view A, y-direction
+        psf_ax (cupy.ndarray): PSF for view A, x-direction
+        psf_bz (cupy.ndarray): PSF for view B, z-direction
+        psf_by (cupy.ndarray): PSF for view B, y-direction
+        psf_bx (cupy.ndarray): PSF for view B, x-direction
+        bp_az (cupy.ndarray): backprojector for view A, z-direction
+        bp_ay (cupy.ndarray): backprojector for view A, y-direction
+        bp_ax (cupy.ndarray): backprojector for view A, x-direction
+        bp_bz (cupy.ndarray): backprojector for view B, z-direction
+        bp_by (cupy.ndarray): backprojector for view B, y-direction
+        bp_bx (cupy.ndarray): backprojector for view B, x-direction
+        num_iter (int): number of deconvolution iterations
+        epsilon (float): small parameter to prevent division by zero
+        boundary_correction (bool): whether or not to do boundary correction
+        zero_padding (Optional[PadType]): zero-padding for boundary correction
+        boundary_sigma_a (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        boundary_sigma_b (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        conv_module (Optional[cupy.RawModule]): ``cupy.RawModule`` that implements separable convolution for appropriate kernel. If ``None``, will be generated on the fly.
+        launch_pars (Optional[CuLaunchParameters]): kernel launch parameters. If ``None``, will be computed for the input volume. 
+        verbose (bool): _description_
+
+    Returns:
+        cupy.ndarray
+    """
     # compile the convolution module
     if conv_module is None:
         conv_module = make_conv_module(len(psf_az)//2)
@@ -380,6 +449,37 @@ def joint_rl_dispim(
     launch_pars : Optional[CuLaunchParameters],
     verbose : bool
 ) -> cupy.ndarray:
+    """joint_rl_dispim Joint deconvolution specifically for diSPIM volumes.
+
+    Args:
+        view_a (cupy.ndarray): input volume for view A
+        view_b (cupy.ndarray): input volume for view B
+        est_i (cupy.ndarray): initial estimate
+        psf_az (cupy.ndarray): PSF for view A, z-direction
+        psf_ay (cupy.ndarray): PSF for view A, y-direction
+        psf_ax (cupy.ndarray): PSF for view A, x-direction
+        psf_bz (cupy.ndarray): PSF for view B, z-direction
+        psf_by (cupy.ndarray): PSF for view B, y-direction
+        psf_bx (cupy.ndarray): PSF for view B, x-direction
+        bp_az (cupy.ndarray): backprojector for view A, z-direction
+        bp_ay (cupy.ndarray): backprojector for view A, y-direction
+        bp_ax (cupy.ndarray): backprojector for view A, x-direction
+        bp_bz (cupy.ndarray): backprojector for view B, z-direction
+        bp_by (cupy.ndarray): backprojector for view B, y-direction
+        bp_bx (cupy.ndarray): backprojector for view B, x-direction
+        num_iter (int): number of deconvolution iterations
+        epsilon (float): small parameter to prevent division by zero
+        boundary_correction (bool): whether or not to do boundary correction
+        zero_padding (Optional[PadType]): zero-padding for boundary correction
+        boundary_sigma_a (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        boundary_sigma_b (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        conv_module (Optional[cupy.RawModule]): ``cupy.RawModule`` that implements separable convolution for appropriate kernel. If ``None``, will be generated on the fly.
+        launch_pars (Optional[CuLaunchParameters]): kernel launch parameters. If ``None``, will be computed for the input volume. 
+        verbose (bool): _description_
+
+    Returns:
+        cupy.ndarray
+    """
     # compile the convolution module
     if conv_module is None:
         conv_module = make_conv_module(len(psf_az)//2)
@@ -473,7 +573,33 @@ def deconvolve_chunkwise(
     zero_padding : Optional[PadType],
     boundary_sigma_a : float, boundary_sigma_b : float,
     verbose : bool,
-    ):
+):
+    """deconvolve_chunkwise Joint deconvolution of the input views A & B, done chunk-by-chunk.
+
+    Args:
+        view_a (zarr.Array): zarr array for view A data
+        view_b (zarr.Array): zarr array for view B data
+        out (zarr.Array): zarr array to place deconvolved, output data into
+        chunk_size (int | Tuple[int,int,int]): size of chunks
+        overlap (int | Tuple[int,int,int]): amount of overlap between chunks
+        sigma_az (float): standard deviation of PSF (assumed Gaussian) for view A in z-direction
+        sigma_ay (float): standard deviation of PSF (assumed Gaussian) for view A in y-direction
+        sigma_ax (float): standard deviation of PSF (assumed Gaussian) for view A in x-direction
+        sigma_bz (float): standard deviation of PSF (assumed Gaussian) for view B in z-direction
+        sigma_by (float): standard deviation of PSF (assumed Gaussian) for view B in y-direction
+        sigma_bx (float): standard deviation of PSF (assumed Gaussian) for view B in x-direction
+        kernel_radius_z (int): radius of PSF kernel in z-direction
+        kernel_radius_y (int): radius of PSF kernel in y-direction
+        kernel_radius_x (int): radius of PSF kernel in x-direction
+        decon_function (str): deconvolution function to use. Either ``"dispim","additive"``.
+        num_iter (int): number of deconvolution iterations.
+        epsilon (float): small parameter to prevent division by zero
+        boundary_correction (bool): whether or not to do boundary correction
+        zero_padding (Optional[PadType]): zero-padding for boundary correction
+        boundary_sigma_a (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        boundary_sigma_b (float): threshold for determining significant pixels in view A, defaults to 1e-2.
+        verbose (bool): display a progress bar showing how many chunks have been/will be computed. 
+    """
     if len(view_a.shape) == 4:
         channel_slice = slice(None)
         ch_a, z_a, r_a, c_a = view_a.shape
@@ -602,9 +728,5 @@ def _decon_chunk(
             ).get()[chunk_props.out_window]
     gpu_queue.put(gpu_id)
     # crop down and write
-    #print("", flush=True)
-    #print(chunk_props.data_window, flush=True)
-    #print(chunk_props.read_window, flush=True)
-    #print(chunk_props.out_window, flush=True)
     out.set_orthogonal_selection(chunk_props.data_window, d)
     return 1

@@ -1,5 +1,13 @@
+"""Deskew stage-scanned volume into "normal" diSPIM coordinate system (see [1], esp. Figure 1).
+
+We mimic the original Shroff lab Fiji plugin, but use a CUDA kernel for speed.
+Note that interpolation is done using CUDA texture memory. 
+
+References
+---
+[1]  Kumar, et. al, "Using Stage- and Slit-...", doi: 10.1086/689589
 """
-"""
+
 import os
 import cupy
 
@@ -22,39 +30,41 @@ __cuda_module = cupy.RawModule(code=__module_txt,
 __cuda_module.compile()  # throw compiler errors here, if problems
 
 
-
 def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
                       direction : int, **kwargs) -> NDArray:
-    """deskew stage-scanned volume into "normal" diSPIM coordinate system
-        (see [1], esp. Figure 1)
-        this function will dispatch to a CUDA-kernel based implementation that
-        mimics that of the original Shroff lab Fiji plugin
+    """deskew_stage_scan Deskew the input volume, ``im``.
 
-    References
-    ---
-    [1]  Kumar, et. al, "Using Stage- and Slit-...", doi: 10.1086/689589
-
-    :param im: input volume
-    :type im: NDArray
-    :param pixel_size: pixel size, in real (space) units
-    :type pixel_size: float
-    :param step_size: step size, in real (space) units
-    :type step_size: float
-    :param direction: 
-    :type direction: int
-    :returns: deskewed volume
-    :rtype: NDArray
+    Args:
+        im (NDArray): input volume
+        pixel_size (float): pixel size, in real (space) units
+        step_size (float): step size, in real (space) units
+        direction (int): +/-1, direction of objective movement rel. to x-axis.
+        **kwargs: ``block_size`` will be passed as kernel launch parameter.
+    
+    Returns:
+        NDArray
     """
-    return deskew_texture(im, pixel_size, step_size, direction, **kwargs)
+    return _deskew_texture(im, pixel_size, step_size, direction, **kwargs)
 
 
 def output_width(depth : int, width : int, 
-                 step_size : float, pixel_size : float):
+                 step_size : float, pixel_size : float) -> int:
+    """output_width Compute output width of deskewed volume
+
+    Args:
+        depth (int): depth of input (pre-deskewing) volume
+        width (int): width of input (pre-deskewing) volume
+        step_size (float): step size, in real (space) units
+        pixel_size (float): pixel size, in real (space) units
+
+    Returns:
+        int
+    """
     return width + round(depth * abs(step_size / pixel_size))
 
 
-def deskew_texture(im : NDArray, pixel_size : float, step_size : float,
-                   direction : int, block_size : int=4) -> cupy.ndarray:
+def _deskew_texture(im : NDArray, pixel_size : float, step_size : float,
+                    direction : int, block_size : int=4) -> cupy.ndarray:
     assert direction == 1 or direction == -1, "direction must be +/- 1"
     depth, height, width = im.shape
     # convert image to 32-bit float
