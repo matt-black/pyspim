@@ -24,12 +24,13 @@ from .typing import NDArray, BBox2D, BBox3D, CuLaunchParameters
 
 
 def get_fft_module(arr_or_xp) -> types.ModuleType:
-    """fft module for input arguments
+    """get_fft_module FFT Module for input arguments
 
-    :param arr_or_xp: input to determine whether scipy or cupyx should be used
-    :type arr_or_xp: NDArray or numpy/cupy module
-    :returns: `scipy.fft` or `cupyx.scipy.fft` based on types of the arguments
-    :rtype: module
+    Args:
+        arr_or_xp (NDArray or numpy/cupy module): input to determine whether scipy (cpu) or cupyx (gpu) should be used.
+
+    Returns:
+        types.ModuleType: `scipy.fft` or `cupyx.scipy.fft`
     """
     if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
         xp = cupy.get_array_module(arr_or_xp)
@@ -42,12 +43,13 @@ def get_fft_module(arr_or_xp) -> types.ModuleType:
 
 
 def get_scipy_module(arr_or_xp) -> types.ModuleType:
-    """scipy module for input arguments
+    """get_scipy_module Scipy module for input arguments.
 
-    :param arr_or_xp: input to determine whether scipy or cupyx should be used
-    :type arr_or_xp: NDArray or numpy/cupy module
-    :returns: `scipy` or `cupyx.scipy` based on types of the arguments
-    :rtype: module
+    Args:
+        arr_or_xp (NDArray or numpy/cupy module): input to determine whether scipy (cpu) or cupyx (gpu) should be used.
+
+    Returns:
+        types.ModuleType: `scipy` or `cupyx.scipy`
     """
     if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
         xp = cupy.get_array_module(arr_or_xp)
@@ -60,12 +62,13 @@ def get_scipy_module(arr_or_xp) -> types.ModuleType:
 
 
 def get_ndimage_module(arr_or_xp) -> types.ModuleType:
-    """scipy.ndimage module for input arguments
+    """get_ndimage_module NDImage module for input arguments
 
-    :param arr_or_xp: input to determine whether scipy or cupyx should be used
-    :type arr_or_xp: NDArray or numpy/cupy module
-    :returns: `scipy.ndimage` or `cupyx.scipy.ndimage` based on types of the arguments
-    :rtype: module
+    Args:
+        arr_or_xp (NDArray or numpy/cupy module): input to determine whether scipy (cpu) or cupyx (gpu) should be used.
+
+    Returns:
+        types.ModuleType: `scipy.ndimage` or `cupyx.scipy.ndimage`
     """
     if isinstance(arr_or_xp, (numpy.ndarray, cupy.ndarray)):
         xp = cupy.get_array_module(arr_or_xp)
@@ -79,23 +82,21 @@ def get_ndimage_module(arr_or_xp) -> types.ModuleType:
 
 ## misc. support functions
 def supported_float_type(input_dtype, allow_complex : bool=False):
-    """Return an appropriate floating-point dtype for a given dtype.
+    """supported_float_type Return an appropriate floating-point dtype for given dtype.
+        float32, float64, complex64, complex128 are preserved.
+        float16 is promoted to float32.
+        complex256 is demoted to complex128.
+        Other types are cast to float64.
+    
+    Args:
+        input_dtype (_type_): the input dtype.
+        allow_complex (bool, optional): let this function return a complex dtype. Defaults to False.
 
-    float32, float64, complex64, complex128 are preserved.
-    float16 is promoted to float32.
-    complex256 is demoted to complex128.
-    Other types are cast to float64.
+    Raises:
+        ValueError: `allow_complex=False` and input is complex
 
-    :param input_dtype: the input dtype.
-        If a sequence of multiple dtypes is provided, each dtype is first
-        converted to a supported floating point type and the final dtype
-        is then determined by applying `cupy.result_type` on the sequence
-        of supported floating point types.
-    :type input_dtype: cupy.dtype or Iterable of cupy.dtype
-    :param allow_complex: 
-    :type allow_complex: bool
-    :returns: floating-point dtype for the image
-    :rtype: float
+    Returns:
+        dtype
     """
     new_float_type = {
         # preserved types
@@ -124,27 +125,27 @@ def supported_float_type(input_dtype, allow_complex : bool=False):
 
 
 def is_floating_point(x : NDArray) -> bool:
-    """boolean indicator for if the input is/not floating point
+    """is_floating_point Boolean indicator for if input is a floating point dtype
 
-    :param x: input array to check
-    :type x: NDArray
-    :return: whether (`True`) or not (`False`) the array is floating point
-    :rtype: bool
+    Args:
+        x (NDArray): array to check type of
+
+    Returns:
+        bool
     """
     xp = cupy.get_array_module(x)
     return x.dtype in (xp.float16, xp.float32, xp.float64)
 
 
 ## padding/shape utilities
-def shape_for_divisible(shp, *div) -> typing.List[int]:
-    """compute the shape >= input that is divisible in each dimension
+def shape_for_divisible(shp : Iterable[int], *div) -> typing.List[int]:
+    """shape_for_divisible Compute the shape >= input that is divisible in each dimension.
 
-    :param shp: shape of volume
-    :type shp: tuple or Iterable
-    :param *div: divisor in each dimension
-    :type *div: int
-    :returns: largest size smaller than dimension divisible by input arg
-    :rtype: list
+    Args:
+        shp (Iterable[int]): shape of input volume
+        *div (int): divisor in each dimension
+    Returns:
+        typing.List[int]: largest size smaller than dimension divisible by input arg
     """
     out = []
     assert len(shp) == len(div), \
@@ -157,7 +158,16 @@ def shape_for_divisible(shp, *div) -> typing.List[int]:
     return out
 
 
-def pad_to_shape_right(vol : NDArray, shape, **kwargs) -> NDArray:
+def pad_to_shape_right(vol : NDArray, shape : Iterable[int], **kwargs) -> NDArray:
+    """pad_to_shape_right Pad input volume only on RHS so that it has specified `shape`.
+
+    Args:
+        vol (NDArray): input volume
+        shape (Iterable[int]): desired output shape
+        **kwargs: keyword arguments passed to `numpy.pad` or `cupy.pad`
+    Returns:
+        NDArray: 
+    """
     xp = cupy.get_array_module(vol)
     s_, v_ = list(shape), []
     for i, _ in enumerate(s_):
@@ -168,7 +178,7 @@ def pad_to_shape_right(vol : NDArray, shape, **kwargs) -> NDArray:
     return xp.pad(vol, pads, **kwargs)
 
 
-def unpad_to_shape_right(vol : NDArray, shape, **kwargs) -> NDArray:
+def unpad_to_shape_right(vol : NDArray, shape : Iterable[int]) -> NDArray:
     s_, v_ = list(shape), []
     for i, _ in enumerate(s_):
         v_.append(vol.shape[i])
@@ -392,18 +402,16 @@ def create_texture_object(data : NDArray,
                           address_mode: str,
                           filter_mode: str,
                           read_mode: str):
-    """make a texture object from the input array, `data`
+    """create_texture_object Make a texture object from input array.
 
-    :param data: array to copy into texture memory
-    :type data: NDArray
-    :param address_mode: one of ('wrap', 'clamp', 'mirror', 'border')
-    :type address_mode: str
-    :param filter_mode: one of ('nearest', 'linear')
-    :type filter_mode: str
-    :param read_mode: one of ('element_type', 'normalized_float')
-    :type read_mode: str
-    :returns: tuple of the texture object and CUDAarray
-    
+    Args:
+        data (NDArray): array to copy into texture memory
+        address_mode (str): one of ('wrap', 'clamp', 'mirror', 'border')
+        filter_mode (str): one of ('nearest', 'linear')
+        read_mode (str): one of ('element_type', 'normalized_float')
+
+    Returns:
+        (cupy.cuda.texture.TextureObject, cupy.cuda.texture.CUDAarray): tuple of the texture object and CUDAarray
     """
     if cupy.issubdtype(data.dtype, cupy.unsignedinteger):
         fmt_kind = runtime.cudaChannelFormatKindUnsigned
@@ -454,16 +462,14 @@ def create_texture_object(data : NDArray,
 
 ## image processing utilities
 def threshold_triangle(im : NDArray, nbins : int=256) -> float:
-    """compute threshold value by triangle method
-        copied from `skimage.filters` but modified so that
-        numpy or cupy is used depending on input type
+    """threshold_triangle Compute threshold value by triangle method. Copied from `skimage.filters` but modified so that numpy or cupy is used based on input device.
 
-    :param im: array to calculate threshold for
-    :type im: NDArray
-    :param nbins: number of bins to use in histogram
-    :type nbins: int
-    :returns: threshold value
-    :rtype: float
+    Args:
+        im (NDArray): array to calculate threshold for
+        nbins (int, optional): number of bins to use in histogram. Defaults to 256.
+
+    Returns:
+        float
     """
     xp = cupy.get_array_module(im)
     
@@ -514,6 +520,17 @@ def launch_params_for_volume(shp : Iterable[int],
                              block_size_z : int, 
                              block_size_r : int,
                              block_size_c : int) -> CuLaunchParameters:
+    """launch_params_for_volume Automatically calculate good launch parameters for CUDA kernel that will be run on a volume of specified `shape`.
+
+    Args:
+        shp (Iterable[int]): shape of input volume kernel will be run over (ZRC).
+        block_size_z (int): block size in z dimension (0 axis)
+        block_size_r (int): block size in r dimension (1 axis)
+        block_size_c (int): block size in c dimension (2 axis)
+
+    Returns:
+        CuLaunchParameters
+    """
     gz = _cuda_gridsize_for_blocksize(shp[0], block_size_z)
     gr = _cuda_gridsize_for_blocksize(shp[1], block_size_r)
     gc = _cuda_gridsize_for_blocksize(shp[2], block_size_c)
@@ -531,6 +548,15 @@ class NumpyArrayEncoder(json.JSONEncoder):
         return super().default(obj)
     
 
-def uint16_to_uint8(a : NDArray, max_val : float = 65535):
+def uint16_to_uint8(a : NDArray, max_val : float = 65535) -> NDArray:
+    """uint16_to_uint8 Convert input of type uint16 to uint8.
+
+    Args:
+        a (NDArray): input volume
+        max_val (float, optional): maximum value of input array. Defaults to 65535.
+
+    Returns:
+        NDArray
+    """
     xp = cupy.get_array_module(a)
     return xp.clip(xp.round(a*(255.0/max_val)), 0, 255).astype(xp.uint8)

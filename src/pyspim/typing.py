@@ -1,6 +1,9 @@
 from typing import List, Tuple, Union
 
-import cupy
+try:
+    import cupy
+except ImportError:
+    import numpy as cupy    
 import numpy
 
 # many of the functions in this library will accept either a NumPy or CuPy

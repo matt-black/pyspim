@@ -1,4 +1,4 @@
-# spimlib
+# pyspim
 Python library & napari plugin for analyzing SPIM microscopy data.
 
 ## development environment setup
@@ -14,8 +14,8 @@ Compilation of CUB kernels requires CUDA >=12.6. To ensure this works, `cupy` ha
 ```
 module load anaconda3/2024.6
 module load cudatoolkit/12.6
-conda create -p /tigress/[user name]/conda/spimlib python=3.12
-conda activate /tigress/[user name]/conda/spimlib
+conda create -p /tigress/[user name]/conda/pyspim python=3.12
+conda activate /tigress/[user name]/conda/pyspim
 CUDA_PATH=/usr/local/cuda-12.6 pip install cupy
 pip install tqdm
 ```

@@ -37,12 +37,6 @@ def _deconvolve_single_channel(view_a : NDArray, view_b : NDArray,
                                boundary_sigma_a : float,
                                boundary_sigma_b : float,
                                verbose : bool) -> NDArray:
-    if decon_function == 'additive':
-        fun = additive_joint_rl
-    elif decon_function == 'dispim':
-        fun = joint_rl_dispim
-    else:
-        raise ValueError('invalid deconvolution function')
     view_a = cupy.asarray(view_a, dtype=cupy.float32, order='F')
     view_b = cupy.asarray(view_b, dtype=cupy.float32, order='F')
     if est_i is None:
@@ -61,19 +55,24 @@ def _deconvolve_single_channel(view_a : NDArray, view_b : NDArray,
     bp_bz  = cupy.asarray(bp_bz , dtype=cupy.float32)
     bp_by  = cupy.asarray(bp_by , dtype=cupy.float32)
     bp_bx  = cupy.asarray(bp_bx , dtype=cupy.float32)
-    return fun(view_a, view_b, est_i,
-               psf_az, psf_ay, psf_ax,
-               psf_bz, psf_by, psf_bx,
-               bp_az, bp_ay, bp_ax,
-               bp_bz, bp_by, bp_bx,
-               num_iter,
-               epsilon,
-               boundary_correction,
-               zero_padding,
-               boundary_sigma_a,
-               boundary_sigma_b,
-               None, None,
-               verbose)
+    if decon_function == "additive":
+        return additive_joint_rl(view_a, view_b, est_i,
+                                 psf_az, psf_ay, psf_ax,
+                                 psf_bz, psf_by, psf_bx,
+                                 bp_az, bp_ay, bp_ax, bp_bz, bp_by, bp_bx,
+                                 num_iter, epsilon, boundary_correction,
+                                 zero_padding,
+                                 boundary_sigma_a, boundary_sigma_b,
+                                 None, None, verbose)
+    elif decon_function == "dispim":
+        return joint_rl_dispim(view_a, view_b, est_i, psf_az, psf_ay, psf_ax,
+                               psf_bz, psf_by, psf_bx, bp_az, bp_ay, bp_ax,
+                               bp_bz, bp_by, bp_bx, num_iter, epsilon,
+                               boundary_correction, zero_padding,
+                               boundary_sigma_a, boundary_sigma_b, None, None,
+                               verbose)
+    else:
+        raise ValueError('invalid deconvolution function')
 
 
 def _deconvolve_multichannel(

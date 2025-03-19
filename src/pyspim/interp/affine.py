@@ -1,11 +1,12 @@
 import os
-import math
+import multiprocessing
+import concurrent.futures
 from itertools import product
 from typing import Iterable, List, Tuple
 
 import cupy
+import zarr
 import numpy
-from numba import njit, prange
 
 from ..typing import NDArray, CuLaunchParameters
 from .._util import launch_params_for_volume
@@ -103,18 +104,37 @@ def decompose_transform(A : NDArray) -> Tuple[NDArray,NDArray,NDArray,NDArray]:
 
 
 def output_shape_for_transform(T : NDArray, 
-                               input_shape : Iterable) -> List[int]:
+                               input_shape : Iterable) -> Tuple[int,int,int]:
+    """output_shape_for_transform Calculate output shape of transformed volume.
+
+    Args:
+        T (NDArray): affine transform matrix
+        input_shape (Iterable): shape of input volume (ZRC)
+
+    Returns:
+        Tuple[int,int,int]: output shape (ZRC)
+    """
     t = T.get() if cupy.get_array_module(T) == cupy else T
     coord = list(product(*[(0,s) for s in input_shape[::-1]]))
     coord = numpy.asarray(coord).T
     coord = numpy.vstack([coord, numpy.zeros_like(coord[0,:])])
     coordT = (t @ coord)[:-1,:]
     ptp = numpy.ceil(numpy.ptp(coordT, axis=1))
-    return [int(v) for v in ptp[::-1]]
+    return tuple([int(v) for v in ptp[::-1]])
 
 
-def output_shape_for_inv_transform(T : NDArray, 
-                                   input_shape : Iterable) -> List[int]:
+def output_shape_for_inv_transform(
+    T : NDArray, input_shape : Iterable
+) -> Tuple[int,int,int]:
+    """output_shape_for_inv_transform Calculate output shape of (inverse)-transformed volume.
+
+    Args:
+        T (NDArray): affine transform matrix (to be inverted)
+        input_shape (Iterable): shape of input volume (ZRC)
+
+    Returns:
+        Tuple[int,int,int]: shape of output volume (ZRC)
+    """
     xp = cupy.get_array_module(T)
     fwd = xp.linalg.inv(T).get() if xp == cupy else xp.linalg.inv(T)
     return output_shape_for_transform(fwd, input_shape)
@@ -122,7 +142,25 @@ def output_shape_for_inv_transform(T : NDArray,
 
 def transform(A : NDArray, T : NDArray, interp_method : str, 
               preserve_dtype : bool, out_shp : Tuple[int,int,int]|None,
-              block_size_z : int, block_size_y : int, block_size_x : int):
+              block_size_z : int, block_size_y : int, block_size_x : int) -> cupy.ndarray:
+    """transform Apply affine transform to input volume.
+
+    Args:
+        A (NDArray): input volume (ZRC)
+        T (NDArray): affine transform matrix (4x4), rows of matrix corresp. to XYZ
+        interp_method (str): interpolation method to use when interpolating points in the transformed volume. One of ``'nearest','linear','cubspl'``.
+        preserve_dtype (bool): make output datatype match that of the input (uint16), if False, output is single-precision float.
+        out_shp (Tuple[int,int,int] | None): shape of output volume. if ``None``, will be calculated by this function
+        block_size_z (int): size of kernel launch block, in z dimension
+        block_size_y (int): size of kernel launch block, in y dimension
+        block_size_x (int): size of kernel launch block, in x dimension
+
+    Raises:
+        ValueError: if input is not a ``cupy.ndarray``
+
+    Returns:
+        cupy.ndarray: transformed volume
+    """
     if cupy.get_array_module(A) == cupy:
         kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
         if out_shp is None:
@@ -147,6 +185,69 @@ def transform(A : NDArray, T : NDArray, interp_method : str,
         #    return cubspl_interp(A, T)
         #else:
         #    raise ValueError('invalid interpolation method')
+
+
+def _transform_distributed(A : zarr.Array, out_path : str, T : NDArray, 
+                           interp_method : str, preserve_dtype : bool, 
+                           out_shp : Tuple[int,int,int]|None,
+                           chunk_size : Tuple[int,int,int],
+                           block_size : Tuple[int,int,int]):
+    if cupy.get_array_module(A) == cupy:
+        kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
+        T = cupy.asarray(T).astype(cupy.float32)
+        if out_shp is None:
+            out_shp = output_shape_for_transform(T, A.shape)
+        out_dtype = A.dtype if preserve_dtype else numpy.float32
+        out = zarr.creation.open_array(out_path, mode='w', shape=out_shp,
+                                       dtype=out_dtype, fill_value=0)
+        chunks = _calculate_array_chunks(*out_shp, chunk_size)
+        n_gpu = cupy.cuda.runtime.getDeviceCount()
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=n_gpu, mp_context=multiprocessing.get_context('spawn')
+        ) as executor, multiprocessing.Manager() as manager:
+            gpu_queue = manager.Queue()
+            for gpu_id in range(n_gpu):
+                gpu_queue.put(gpu_id)
+            
+
+def _transform_chunk(A : zarr.Array, out : zarr.Array,
+                     T : cupy.ndarray, interp_method : str,
+                     preserve_dtype : bool,
+                     block_size : Tuple[int,int,int],
+                     chunk : Tuple[slice,slice,slice]):
+    raise NotImplementedError()
+
+
+def _pad_amount(dim : int, chunk_dim : int) -> int:
+    assert dim >= chunk_dim, \
+        "dim : {:d}, chunk_dim : {:d}".format(dim, chunk_dim)
+    n = 1
+    while chunk_dim * n < dim:
+        n += 1
+    return chunk_dim * n - dim
+
+
+def _calculate_array_chunks(z : int, r : int, c : int,
+                            chunk_shape : int|Tuple[int,int,int]):
+    shape = tuple([z, r, c])
+    if isinstance(chunk_shape, int):
+        chunk_shape = tuple([chunk_shape,]*3)
+    pad_size = [_pad_amount(s, cs) for s, cs in zip(shape, chunk_shape)] 
+    padded_shape = [s+p for s, p in zip(shape, pad_size)]
+    n_chunk = [s//c for s, c in zip(padded_shape, chunk_shape)]
+    chunk_mults = product(*[range(n) for n in n_chunk])
+    chunk_windows = []
+    for chunk_mult in chunk_mults:
+        idx0 = [m * s for m, s in zip(chunk_mult, chunk_shape)]
+        idx1 = [i0 + s for i0, s in zip(idx0, chunk_shape)]
+        idxs = []
+        for dim_idx, (i0, i1) in enumerate(zip(idx0, idx1)):
+            left = i0
+            right = shape[dim_idx] if i1 > shape[dim_idx] else i1
+            idxs.append((left, right))
+        chunk_window = [slice(l, r) for l, r in idxs]
+        chunk_windows.append(chunk_window)
+    return chunk_windows
 
 
 def maxblend_into_existing(E : cupy.ndarray, N : cupy.ndarray, T : NDArray,

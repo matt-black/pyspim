@@ -1,5 +1,6 @@
 import operator
 import functools
+import itertools
 from typing import Optional, Tuple
 from collections.abc import Sequence
 
@@ -157,7 +158,8 @@ def single_section_fsc(vol1 : NDArray, vol2 : NDArray,
 
 def sectioned_fourier_shell_correlation(vol1 : NDArray, vol2 : NDArray,
                                         r_bin_edges : Sequence,
-                                        alpha_bin_edges : Sequence):
+                                        alpha_bin_edges : Sequence,
+                                        voxel_size : float):
     voxel_size = 1.0 if voxel_size is None else voxel_size
     assert len(vol1.shape) == 3 and len(vol2.shape) == 3, \
         "both inputs must be 3D volumes"
@@ -179,9 +181,8 @@ def sectioned_fourier_shell_correlation(vol1 : NDArray, vol2 : NDArray,
     A = xp.arccos(grid[-1]/R)
     nyq_frq = xp.floor(vol1.shape[0]*voxel_size / 2.)  # Nyquist frequency
     r_bin_centers = (r_bin_edges[1:] + r_bin_edges[:-1]) / 2.0
-    a_bin_centers = (alpha_bin_edges[1:] + alpha_bin_edges[:-1]) / 2.0
-    spt_frq = bin_centers / nyq_frq
-    hist_vals = xp.meshgrid(spt_frq, a_bin_centers)
+    spt_frq = r_bin_centers / nyq_frq
+    #hist_vals = xp.meshgrid(spt_frq, a_bin_centers)
     fsc, npts = __sectioned_fourier_correlation(fft1, fft2, R, A,
                                                 r_bin_edges,
                                                 alpha_bin_edges)
@@ -191,7 +192,7 @@ def sectioned_fourier_shell_correlation(vol1 : NDArray, vol2 : NDArray,
 def __sectioned_fourier_correlation(fft1, fft2, R, A,
                                     r_bin_edges, a_bin_edges):
     xp = cupy.get_array_module(fft1)
-    Br = xp.digitize(R, r_bin_edegs, right=False)
+    Br = xp.digitize(R, r_bin_edges, right=False)
     Ba = xp.digitize(A, a_bin_edges, right=False)
     f1_dot_f2 = xp.zeros((len(r_bin_edges)-1, len(a_bin_edges)-1), dtype=float)
     f1sq = xp.zeros_like(f1_dot_f2)

@@ -8,6 +8,7 @@ References
 [2] github.com/QI2lab/OPM
 """
 import math
+from typing import Tuple
 
 import cupy
 import numpy
@@ -115,6 +116,34 @@ def _deskew_orthogonal_cpu(im : numpy.ndarray,
     return dsk[...,::direction]
 
 
+def output_shape(z : int, r : int, c : int, 
+                 pixel_size : float, step_size : float, 
+                 theta : float=math.pi/4) -> Tuple[int,int,int]:
+    """output_shape Calculate output shape of deskewing a volume.
+
+    Args:
+        z (int): size of input volume in z-direction
+        r (int): size of input volume in r-direction (# rows)
+        c (int): size of input volume in c-direction (# cols)
+        pixel_size (float): pixel size, in real units
+        step_size (float): step size, in real units
+        theta (float, optional): angle of objective w.r.t coverslip. Defaults to math.pi/4.
+
+    Returns:
+        Tuple[int,int,int]: (n_z, n_y, n_x) shape of deskewed volume
+    """
+    step_size_lat = step_size / math.cos(theta)
+    step_pix = step_size_lat / pixel_size
+    # precompute useful trig quantities
+    # determine output shape & preallocate
+    cos_theta = math.cos(theta)
+    sin_theta = math.sin(theta)
+    n_x = numpy.int64(numpy.ceil(z * step_pix + c * cos_theta))
+    n_y = numpy.int64(r)
+    n_z = numpy.int64(numpy.ceil(c * sin_theta))
+    return (n_z, n_y, n_x)
+
+
 def _deskew_orthogonal_gpu(im : cupy.ndarray, 
                            pixel_size : float, step_size : float, 
                            direction : int, theta : float = numpy.pi/4, 
@@ -124,17 +153,18 @@ def _deskew_orthogonal_gpu(im : cupy.ndarray,
     step_size_lat = step_size / math.cos(theta)
     step_pix = step_size_lat / pixel_size
     # precompute useful trig quantities
-    sin_theta  = cupy.float64(cupy.sin(theta))
-    cos_theta  = cupy.float64(cupy.cos(theta))
-    tan_theta  = cupy.float64(cupy.tan(theta))
-    tan_otheta = cupy.float64(cupy.tan(cupy.pi/2 - theta))
-    cos_otheta = cupy.float64(cupy.cos(cupy.pi/2 - theta))
+    sin_theta  = numpy.float64(numpy.sin(theta))
+    cos_theta  = numpy.float64(numpy.cos(theta))
+    tan_theta  = numpy.float64(numpy.tan(theta))
+    tan_otheta = numpy.float64(numpy.tan(numpy.pi/2 - theta))
+    cos_otheta = numpy.float64(numpy.cos(numpy.pi/2 - theta))
     # determine output shape & preallocate
     n_planes, n_y, h = im.shape  # unpack shape
-    n_x = cupy.int64(cupy.ceil(n_planes * step_pix + h * cos_theta))
-    n_y = cupy.int64(n_y)
-    n_z = cupy.int64(cupy.ceil(h * sin_theta))
-    dsk = cupy.zeros((n_z, n_y, n_x), dtype=cupy.float64)
+    n_x = numpy.int64(numpy.ceil(n_planes * step_pix + h * cos_theta))
+    n_y = numpy.int64(n_y)
+    n_z = numpy.int64(numpy.ceil(h * sin_theta))
+    dsk = cupy.zeros((n_z, n_y, n_x), 
+                     dtype=(im.dtype if preserve_dtype else cupy.float32))
     for z in range(0, n_z):
         for x in range(0, n_x):
             # compute where we are in "raw" coordinates (x'=xpr, z'=zpr)
@@ -147,18 +177,18 @@ def _deskew_orthogonal_gpu(im : cupy.ndarray,
                 xpr = z / sin_theta - h
                 zpr = (x + z / tan_theta - h * cos_theta) / step_pix
             # get plane in raw data before z'
-            zpb = cupy.int64(cupy.floor(zpr))
-            if cupy.abs(zpb+1) < n_planes:
+            zpb = numpy.int64(numpy.floor(zpr))
+            if numpy.abs(zpb+1) < n_planes:
                 # beta_p = distance to raw plane in z' axis
                 beta_p = step_pix * (zpr - zpb)
                 # find x' in before & after planes
                 xib  = xpr + direction * beta_p * tan_otheta
-                xibp = cupy.int64(cupy.floor(xib))
-                if cupy.abs(xibp+1) < h:
+                xibp = numpy.int64(numpy.floor(xib))
+                if numpy.abs(xibp+1) < h:
                     dxib = xib - xibp
                     xia  = xpr - direction * (step_pix - beta_p) * tan_otheta
-                    xiap = cupy.int64(cupy.floor(xia))
-                    if cupy.abs(xiap+1) < h:
+                    xiap = numpy.int64(numpy.floor(xia))
+                    if numpy.abs(xiap+1) < h:
                         dxia = xia - xiap
                         # calculate distances along the x-axis from point
                         # (x',z') to before/after planes in raw data
@@ -166,7 +196,12 @@ def _deskew_orthogonal_gpu(im : cupy.ndarray,
                         l_a = (step_pix - beta_p) / cos_otheta
                         val = l_b * (dxia * im[zpb+1,:,xiap+1] + (1-dxia) * im[zpb+1,:,xiap]) + \
                             l_a * (dxib * im[zpb,:,xibp+1] + (1-dxib) * im[zpb,:,xibp])
-                        dsk[z,:,x] = val / step_pix
+                        if preserve_dtype:
+                            dsk[z,:,x] = cupy.clip(numpy.round(
+                                val / step_pix), 0, 2**16-1
+                            ).astype(im.dtype)
+                        else:
+                            dsk[z,:,x] = val / step_pix
     # zero out triangle in left-hand side of image where data was
     # (falsely) interpolated due to wrapping
     if direction < 0:

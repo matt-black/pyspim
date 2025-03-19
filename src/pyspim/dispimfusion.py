@@ -1,4 +1,4 @@
-"""reimplementation of the diSPIMFusion API, as first described in [1]
+"""Reimplementation of the diSPIMFusion API, as first described in [1].
 
 References
 ---

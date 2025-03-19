@@ -1,3 +1,15 @@
+""" Isotropization utilities. 
+
+Individual views from diSPIM volumes are typically acquired with uneven spacing in one of the directions, but analysis requires cubic pixels.
+These are utilities to upsample the axis with uneven spacing relative to the camera pixel size. 
+
+This can be done either by direct interpolation (`interpolate`) or by upsampling in Fourier space (`fourier_upsample`), using the technique described in [1].
+
+References
+---
+[1] Stein, et al. "Fourier interpolation stochastic..."
+    doi:10.1364/OE.23.016154
+"""
 import math
 
 import cupy
@@ -7,22 +19,18 @@ from ._util import get_fft_module, get_ndimage_module
 
 
 def interpolate(vol : NDArray, pixel_size : float, step_size : float,
-                axis : int=0, **kwargs):
-    """upsample an axis by interpolation.
-        function will upsample the specified `axis` by assuming it has
-        spacing `step_size` such that the output voxel is `pixel_size**3`
-        `**kwargs` are passed to `ndimage.zoom`
+                axis : int=0, **kwargs) -> NDArray:
+    """interpolate Upsample an axis by interpolation. Function will upsample specified `axis` by assuming it has spacing `step_size` such that the output voxel is cubic, `pixel_size**3`.
 
-    :param vol: input volume
-    :type vol: NDArray
-    :param pixel_size: pixel size in real (space) units
-    :type pixel_size: float
-    :param step_size: step size in real (space) units
-    :type step_size: float
-    :param axis: axis to upsample
-    :type axis: int
-    :returns: upsampled volume
-    :rtype: NDArray
+    Args:
+        vol (NDArray): input volume
+        pixel_size (float): pixel size in real (space) units
+        step_size (float): step size in real (space) units
+        axis (int, optional): axis to upsample. Defaults to 0.
+        **kwargs: passed to `ndimage.zoom`
+    
+    Returns:
+        NDArray: 
     """
 
     n_dim = len(vol.shape)
@@ -35,29 +43,17 @@ def interpolate(vol : NDArray, pixel_size : float, step_size : float,
 
 
 def fourier_upsample(vol : NDArray, pixel_size : float, step_size : float,
-                     axis : int=0):
-    """upsample an axis by fourier upsampling.
-        function will upsample the specified `axis` by assuming it has
-        spacing `step_size` such that the output voxel is `pixel_size**3`
+                     axis : int=0) -> NDArray:
+    """fourier_upsample Upsample an axis by Fourier upsampling.
 
-        originally described in [1], this technique will preserve the
-        input spectrum by zero-padding the fourier transform of the input
+    Args:
+        vol (NDArray): input volume
+        pixel_size (float): pixel size in real (space) units.
+        step_size (float): step size in real (space) units
+        axis (int, optional): axis to upsample. Defaults to 0.
 
-    References
-    ---
-    [1] Stein, et al. "Fourier interpolation stochastic..."
-        doi:10.1364/OE.23.016154
-
-    :param vol: input volume
-    :type vol: NDArray
-    :param pixel_size: pixel size in real (space) units
-    :type pixel_size: float
-    :param step_size: step size in real (space) units
-    :type step_size: float
-    :param axis: axis to upsample
-    :type axis: int
-    :returns: upsampled volume
-    :rtype: NDArray
+    Returns:
+        NDArray
     """
 
     n_dim = len(vol.shape)

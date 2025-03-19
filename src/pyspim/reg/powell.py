@@ -306,7 +306,7 @@ def optimize_affine_piecewise(ref : cupy.ndarray, mov : cupy.ndarray,
                               metric : str, transform : str, 
                               interp_method : str, par0 : List[float],
                               bounds : OptBounds|OptBoundMargins|None,
-                              kernel_launch_params : CuLaunchParameters|None,
+                              kernel_launch_params : CuLaunchParameters|None=None,
                               verbose : bool = False,
                               **opt_kwargs):
     # split at the '+' in the transform string to generate sub-problems

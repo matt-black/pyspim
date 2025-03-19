@@ -4,7 +4,7 @@ nb/
 **/._*
 # ignore SLURM outputs
 **/*.out
-src/napari_spimlib/
+src/napari_pyspim/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

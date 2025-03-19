@@ -34,7 +34,7 @@ def inv_deskew_matrix(pixel_size : float, step_size : float,
 
 def output_shape(z : int, r : int, c : int, 
                  pixel_size : float, step_size : float, direction : int,
-                 auto_crop : bool):
+                 auto_crop : bool) -> Tuple[int,int,int]:
     """output_shape Compute output shape of deskewing transform.
 
     Args:
@@ -47,16 +47,16 @@ def output_shape(z : int, r : int, c : int,
         auto_crop (bool): automatically crop the output to account for rotation of B-view
 
     Returns:
-        List[int]
+        Tuple[int,int,int]
     """
     full_shp = output_shape_for_transform(
         inv_deskew_matrix(pixel_size, step_size, direction),
         [z, r, c]
     )
     if auto_crop:
-        return [full_shp[0], full_shp[1], full_shp[0]]
+        return tuple([full_shp[0], full_shp[1], full_shp[0]])
     else:
-        return full_shp
+        return tuple(full_shp)
 
 
 def deskewing_transform(z : int, r : int, c : int, 

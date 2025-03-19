@@ -4,12 +4,15 @@ with the ASI diSPIM plugin
 import os
 import json
 import warnings
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 from types import ModuleType
 from collections.abc import Iterable
 
 import zarr
-import cupy
+try:
+    import cupy
+except ImportError as e:
+    warnings.warn('cupy not available')
 import numpy
 import tifffile
 
@@ -83,11 +86,11 @@ class _uManagerAcquision(object):
         self._f.close()
 
     @property
-    def shape(self):
+    def shape(self) -> Sequence[int]:
         return self._z.shape
     
     @property
-    def image_shape(self):
+    def image_shape(self) -> Tuple[int,int,int]:
         return self._z.shape[-3:]
 
 

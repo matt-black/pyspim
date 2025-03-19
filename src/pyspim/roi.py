@@ -8,20 +8,14 @@ from ._util import get_ndimage_module
 
 def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
                   **kwargs) -> BBox2D:
-    """determine ROI in 2d image by thresholding
-        if using `method=threshold` then `threshold=[value]` must be passed as
-        a keyword argument
-        
-    :param im: image to find ROI in
-    :type im: NDArray
-    :param method: thresholding method
-       one of ('triangle', 'otsu', 'threshold')
-    :type method: str
-    :param quantile: quantile to truncate coordinates with
-        this helps get rid of outlier values
-    :type quantile: float
-    :returns: bounding box ROI
-    :rtype: Tuple[Tuple[int,int],Tuple[int,int]]
+    """detect_roi_2d Determine ROI in 2D image by thresholding. If using `method=threshold`, the `threshold=[value]` keyword arg must be passed into function.
+    Args:
+        im (NDArray): image to find ROI in
+        method (str, optional): thresholding method, one of ('triangle', 'otsu', 'threshold'). Defaults to 'triangle'.
+        quantile (float, optional): quantile to truncate coordinates with (helps get rid of outliers). Defaults to 0.
+
+    Returns:
+        BBox2D: bounding box ROI
     """
     assert method in ('triangle', 'otsu', 'threshold'), \
         "invalid segmentation method specified"
@@ -64,22 +58,16 @@ def detect_roi_2d(im : NDArray, method : str='triangle', quantile : float=0,
 def detect_roi_3d(im : NDArray, method : str='triangle',
                   quantile_rc : float=0, quantile_zc : float=0,
                   **kwargs) -> BBox3D:
-    """determine 3d bounding box by combining ROIs of 2D max-projections
-        if using `method=threshold` then `threshold=[value]` must be passed as
-        a keyword argument
-        
-    :param im: image to find ROI in
-    :type im: NDArray
-    :param method: thresholding method
-       one of ('triangle', 'otsu', 'threshold')
-    :type method: str
-    :param quantile_rc: quantile used for determining row-column bounding box
-    :type quantile_rc: float
-    :param quantile_zc: quantile used for determining z-row bounding box
-    :type quantile_zc: float
-    :returns: bounding box ROI
-       format is `((lb_z, ub_z), (lb_r,ub_r), (lb_c,ub_c))`
-    :rtype: Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+    """detect_roi_3d Detect ROI of 3D volume by combining ROIs of 2D max-projections.
+
+    Args:
+        im (NDArray): volume to find ROI of
+        method (str, optional): thresholding method. Defaults to 'triangle'.
+        quantile_rc (float, optional): qunatile used for determining row-col bounding box. Defaults to 0.
+        quantile_zc (float, optional): quantile used for determine z-row bounding box. Defaults to 0.
+
+    Returns:
+        BBox3D: format is `((lb_z, ub_z), (lb_r,ub_r), (lb_c,ub_c))`
     """
     xp = cupy.get_array_module(im)
     rc = xp.amax(im, axis=0)
@@ -90,16 +78,15 @@ def detect_roi_3d(im : NDArray, method : str='triangle',
 
 
 def combine_rois(a : BBox3D, b : BBox3D, ensure_even : bool=False) -> BBox3D:
-    """make the smallest ROI that encompasses both ROI's `a` & `b`
+    """combine_rois Combine 2 ROIs into smallest possible one that encompasses both.
 
-    :param a: bounding box for first ROI
-    :type a: BBox3D
-    :param b: bounding box for second ROI
-    :type b: BBox3D
-    :param ensure_even: make all dimensions of output ROI even
-    :type ensure_even: bool
-    :returns: bounding box ROI
-    :rtype: Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+    Args:
+        a (BBox3D): 3d bounding box for first ROI
+        b (BBox3D): 3d bounding box for second ROI
+        ensure_even (bool, optional): make all dimensions of output ROI even. Defaults to False.
+
+    Returns:
+        BBox3D
     """
     (azs, aze), (ars, are), (acs, ace) = a
     (bzs, bze), (brs, bre), (bcs, bce) = b
@@ -116,7 +103,19 @@ def combine_rois(a : BBox3D, b : BBox3D, ensure_even : bool=False) -> BBox3D:
     return (zs, ze), (rs, re), (cs, ce)
 
 
-def crop_with_roi(a : NDArray, roi : BBox3D|BBox2D):
+def crop_with_roi(a : NDArray, roi : BBox3D|BBox2D) -> NDArray:
+    """crop_with_roi Utility function to crop input using specified bounding box ROI.
+
+    Args:
+        a (NDArray): input to be cropped
+        roi (BBox3D | BBox2D): bounding box ROI
+
+    Raises:
+        ValueError: if input isn't 2 or 3D
+
+    Returns:
+        NDArray: cropped input
+    """
     if len(a.shape) == 3:
         return a[roi[0][0]:roi[0][1],
                  roi[1][0]:roi[1][1],

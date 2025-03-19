@@ -10,11 +10,10 @@ profile = "black"
 line_length = 79
 
 [project]
-name = "spimlib"
+name = "pyspim"
 version = "0.0.1"
 authors = [
     {name = "Matthew Black"},
-    {name = "Scott Wolf"},
 ]
 license = {text = "GPL-3.0-only"}
 description = "Core functionality for analyzing and visualizing single plane illumination microscopy (spim) data with special emphasis on dual-view SPIM (diSPIM) microscopy."
@@ -51,11 +50,11 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/matt-black/napari-dispim"
-BugTracker = "https://github.com/matt-black/napari-dispim/issues"
-Documentation = "https://github.com/matt-black/napari-dispim/wiki"
-SourceCode = "https://github.com/matt-black/napari-dispim"
-UserSupport = "https://github.com/matt-black/napari-dispim/issues"
+Repository = "https://github.com/matt-black/pyspim"
+BugTracker = "https://github.com/matt-black/pyspim/issues"
+Documentation = "https://github.com/matt-black/pyspim/wiki"
+SourceCode = "https://github.com/matt-black/pyspim"
+UserSupport = "https://github.com/matt-black/pyspim/issues"
 
 [tool.setuptools.package-data]
 mypkg = ["*.yaml"]
