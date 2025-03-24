@@ -266,9 +266,11 @@ __global__ void correlationRatio(U* prods, float* M_aff,
                     U rval = g0.z * data000 + g1.z * data001;
                     // grab equivalent value from moving
                     U mval = (U)moving[xyz2idx(x, y, z, sx_m, sy_m)];
-                    vals[0] += rval * mval;
-                    vals[1] += (rval - mu_ref) * (rval - mu_ref);
-                    vals[2] += mval * mval;
+                    if (abs(mval) > 0.00001) {
+                        vals[0] += rval * mval;
+                        vals[1] += (rval - mu_ref) * (rval - mu_ref);
+                        vals[2] += mval * mval;
+                    }
                 } // else { do nothing; out of range }
             }
         }
