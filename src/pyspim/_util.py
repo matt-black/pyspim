@@ -206,7 +206,8 @@ def pad_to_same_size(a : NDArray, b : NDArray, style='center', **kwargs) -> \
         fn = partial(pad_fun, shape=[z, y, x], **kwargs)
         return fn(a), fn(b)
     else:
-        assert len(a.shape) == 2, 'must be 2d image if not a 3d volume'
+        assert len(a.shape) == 2, \
+            'must be 2d image if not a 3d volume, is {:d}d'.format(len(a.shape))
         ya, xa = a.shape
         yb, xb = b.shape
         y, x = max([ya, yb]), max([xa, xb])

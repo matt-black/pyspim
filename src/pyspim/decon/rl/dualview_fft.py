@@ -23,7 +23,7 @@ from tqdm.auto import tqdm, trange
 
 from ...typing import NDArray, PadType
 from ..._util import supported_float_type
-from .._util import div_stable, calculate_decon_chunks, ChunkProps
+from .._util import div_stable, calculate_conv_chunks, ChunkProps
 
 
 def _deconvolve_single_channel(view_a : NDArray, view_b : NDArray, 
@@ -574,7 +574,7 @@ def deconvolve_chunkwise(
         z_b, r_b, c_b = view_b.shape
     assert all([a==b for a, b in zip([z_a, r_a, c_a],[z_b, r_b, c_b])]), \
         "input volumes must be same shape"
-    chunks = calculate_decon_chunks(z_a, r_a, c_a,
+    chunks = calculate_conv_chunks(z_a, r_a, c_a,
                                     chunk_size, overlap, channel_slice)
     n_gpu = cupy.cuda.runtime.getDeviceCount()
     with concurrent.futures.ProcessPoolExecutor(

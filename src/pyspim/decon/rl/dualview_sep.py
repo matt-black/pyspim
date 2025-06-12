@@ -15,7 +15,7 @@ import cupy
 import zarr
 from tqdm.auto import tqdm, trange
 
-from .._util import calculate_decon_chunks, ChunkProps
+from .._util import calculate_conv_chunks, ChunkProps
 from .._util import gaussian_kernel_1d, div_stable, initialize_estimate
 from ...conv._cuda import make_conv_module, calc_launch_params, convolve_3d
 from ...typing import NDArray, PadType, CuLaunchParameters
@@ -610,8 +610,9 @@ def deconvolve_chunkwise(
         z_b, r_b, c_b = view_b.shape
     assert all([a==b for a, b in zip([z_a, r_a, c_a],[z_b, r_b, c_b])]), \
         "input volumes must be same shape"
-    chunks = calculate_decon_chunks(z_a, r_a, c_a,
-                                    chunk_size, overlap, channel_slice)
+    chunks = calculate_conv_chunks(
+        z_a, r_a, c_a, chunk_size, overlap, channel_slice
+    )
     n_gpu = cupy.cuda.runtime.getDeviceCount()
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=n_gpu, mp_context=multiprocessing.get_context('spawn')

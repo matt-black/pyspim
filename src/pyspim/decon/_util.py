@@ -159,13 +159,13 @@ class ChunkProps(object):
         self.out_window = out_window
 
 
-def calculate_decon_chunks(
+def calculate_conv_chunks(
     z : int, r : int, c : int,
     chunk_shape : int|Tuple[int,int,int],
     overlap : int|Tuple[int,int,int],
     channel_slice : slice|None,
 ) -> dict[int,ChunkProps]:
-    """calculate_decon_chunks Compute how an array to be deconvolved should be chunked into parts for chunkwise deconvolution
+    """Compute how an array to be convolved should be chunked into parts for chunkwise convolution.
 
     Args:
         z (int): linear shape of volume, in z-direction
