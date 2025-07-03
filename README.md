@@ -1,5 +1,5 @@
 # pyspim
-Python library & napari plugin for analyzing SPIM microscopy data.
+Python library for analyzing SPIM microscopy data.
 
 ## development environment setup
 
