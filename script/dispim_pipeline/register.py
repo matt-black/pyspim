@@ -67,8 +67,8 @@ def main(
         raise Exception("input folder is not a directory")
     if verbose:
         print("Reading in deskewed views...", flush=True)
-    a_zarr = zarr.open(os.path.join(input_folder, "a.zarr"))
-    b_zarr = zarr.open(os.path.join(input_folder, "b.zarr"))
+    a_zarr = zarr.open_array(os.path.join(input_folder, "a.zarr"))
+    b_zarr = zarr.open_array(os.path.join(input_folder, "b.zarr"))
     if crop_box_a is not None:
         a_dsk = a_zarr.oindex[
             reg_channel,

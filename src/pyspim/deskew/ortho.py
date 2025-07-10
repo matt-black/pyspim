@@ -20,7 +20,7 @@ from ..typing import NDArray
 def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
                       direction : int, theta : float=math.pi/4,
                       preserve_dtype : bool = False) -> NDArray:
-    """deskew_stage_scan Deskew stage scan data into xyz coordinate system.
+    """Deskew stage scan data into xyz coordinate system.
     
     Output format is zyx where z is normal to the coverslip, and x & y are the coverslip, y is along the long axis of the sheet, x along is the scan direction.
 

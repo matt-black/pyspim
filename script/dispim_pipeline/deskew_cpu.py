@@ -11,11 +11,10 @@ from contextlib import nullcontext
 from argparse import ArgumentParser
 
 import zarr
-import cupy
 import numpy
 from tqdm.auto import tqdm
 
-from pyspim.deskew import shear, ortho
+from pyspim.deskew import ortho
 from pyspim.data.dispim import StitchedDataset
 from pyspim.data.dispim import uManagerAcquisitionOnePos
 from pyspim.data.dispim import subtract_constant_uint16arr
@@ -63,7 +62,6 @@ def deskew_ortho(
 def load_deskew_save(
     input_folder: os.PathLike,
     data_type: str,
-    gpu_queue,
     camera_offset: int,
     crop_box_a: Tuple[int, int, int, int, int, int] | None,
     crop_box_b: Tuple[int, int, int, int, int, int] | None,
@@ -85,7 +83,7 @@ def load_deskew_save(
     if verbose:
         print("\nLoading data took {:.2f} sec".format(end - start), flush=True)
     direction = 1 if head == "a" else -1
-    dsk = deskew_ortho(step_size, pixel_size, direction, gpu_queue, raw)
+    dsk = deskew_ortho(step_size, pixel_size, direction, raw)
     start = time.time()
     (out_a if head == "a" else out_b).set_orthogonal_selection(
         tuple([[out_channel], slice(None), slice(None), slice(None)]),
@@ -97,7 +95,7 @@ def load_deskew_save(
 
 
 def input_validation(
-    input_folder: os.PathLike, data_type: str, deskew_method: str
+    input_folder: os.PathLike, data_type: str
 ):
     if not os.path.exists(input_folder):
         raise Exception("input folder does not exist")
@@ -117,7 +115,6 @@ def main(
     pixel_size: float,
     channels: List[int],
     # other parameters
-    block_size: Tuple[int, int, int],
     verbose: bool,
 ):
     # input validation
@@ -160,24 +157,18 @@ def main(
     if verbose:
         print("Setup complete, zarr output arrays created", flush=True)
     # setup the multiprocessor/work queue
-    n_gpu = cupy.cuda.runtime.getDeviceCount()
     with concurrent.futures.ProcessPoolExecutor(
-        max_workers=n_gpu, mp_context=multiprocessing.get_context("spawn")
-    ) as executor, multiprocessing.Manager() as manager:
-        gpu_queue = manager.Queue()
-        for gpu_id in range(n_gpu):
-            gpu_queue.put(gpu_id)
+        max_workers=2, mp_context=multiprocessing.get_context("spawn")
+    ) as executor:
         fun = partial(
             load_deskew_save,
             input_folder,
             data_type,
-            gpu_queue,
             camera_offset,
             crop_box_a,
             crop_box_b,
             step_size,
             pixel_size,
-            block_size,
             a,
             b,
             verbose,
@@ -288,7 +279,7 @@ if __name__ == "__main__":
         args.step_size,
         args.pixel_size,
         args.channels,
-        args.block_size,
         args.verbose,
     )
     exit(exit_code)
+

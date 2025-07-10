@@ -492,7 +492,7 @@ def _additive_joint_rl_uncorr(view_a : NDArray, view_b : NDArray,
                               epsilon  : float = 1e-5,
                               req_both : bool = False,
                               verbose  : bool = False) -> NDArray:
-    """_additive_joint_rl_uncorr Dual-view additive joint Richardson-Lucy deconvolution without boundary correction.
+    """Dual-view additive joint Richardson-Lucy deconvolution without boundary correction.
     """
     xp = cupy.get_array_module(view_a)
     # make sure all inputs are floats

@@ -447,7 +447,13 @@ def generate_decon_dist_fft(
             )
             store = tifffile.imread(out_path, mode="r+", aszarr=True)
             z = zarr.open(store, mode="r+")
-            z[:] = out[:]
+            # NOTE: if the output only has 1 channel, some weird "correction"
+            # happens where it gets eliminated when opening the zarr store and
+            # z is 3D instead of 4D, the below "if" statement is for this case
+            if len(z.shape) == 3: 
+                z[:] = out[0,...]
+            else: 
+                z[:] = out[:]
             store.close()
         if verbose:
             print("\tDone with transfer - DONE", flush=True)
@@ -623,3 +629,4 @@ if __name__ == "__main__":
             args.verbose,
         )
     exit(exit_code)
+
