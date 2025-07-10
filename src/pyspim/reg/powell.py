@@ -14,9 +14,9 @@ from .._matrix import translation_matrix, \
     symmetric_shear_about_point_matrix, shear_about_point_matrix
 # other imports
 from .met import _cub as met_cub
-from .met import _linear as met_linear
-from .met import _cubspl as met_cubspl
-from .met import _nearest as met_nearest
+from .met import linear as met_linear
+from .met import cubspl as met_cubspl
+from .met import nearest as met_nearest
 from ..typing import CuLaunchParameters, OptBounds, OptBoundMargins
 from ..util import launch_params_for_volume
 

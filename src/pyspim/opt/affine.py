@@ -12,9 +12,9 @@ from .powell import powell, powell_record
 from ..typing import CuLaunchParameters
 from ..reg.powell import parse_transform_string
 from ..reg.met import _cub as met_cub
-from ..reg.met import _linear as met_linear
-from ..reg.met import _cubspl as met_cubspl
-from ..reg.met import _nearest as met_nearest
+from ..reg.met import linear as met_linear
+from ..reg.met import cubspl as met_cubspl
+from ..reg.met import nearest as met_nearest
 from ..util import launch_params_for_volume
 
 
