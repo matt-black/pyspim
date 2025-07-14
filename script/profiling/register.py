@@ -77,7 +77,7 @@ def main(
                 sz_r, sy_r, sx_r, sz_m, sy_m, sx_m)),
                 n_repeat=num_repeat
             )
-        print(perf_case, flush=True)    
+        print(perf_case, flush=True)
     for _ in range(num_repeat):
         if use_cub:
             kernel(
