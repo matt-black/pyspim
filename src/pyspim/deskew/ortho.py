@@ -127,17 +127,15 @@ def _zero_triangle_cpu(dsk: numpy.ndarray, direction: int):
     (falsely) interpolated due to wrapping."""
     if direction < 0:
         dsk = numpy.flipud(dsk)
+
     n_z, n_y, n_x = dsk.shape
-    
-    # Vectorized approach: zero out triangle region using slicing
-    # For each z slice, zero out x coordinates from 0 to z+1
-    # Get z where z is within x bounds
-    
     for z in prange(n_z):
-        if z < n_x:  # Only process if z is within x bounds
-            dsk[z, :, :z+1] = 0 
-    
+        if z < n_x:
+            dsk[z, :, :z+1] = 0
+
+
     dsk = numpy.flipud(dsk)
+    
     return dsk[..., ::direction]
 
 
