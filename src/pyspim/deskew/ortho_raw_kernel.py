@@ -356,6 +356,8 @@ def deskew_stage_scan(
 # Shape utility
 # -----------------------------------------------------------------------------
 
+
+# Same as ortho.py:output_shape
 def output_shape(
     z: int,
     y: int,

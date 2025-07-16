@@ -17,15 +17,17 @@ module load cudatoolkit/12.6
 ACQ_PATH="/scratch/gpfs/SHAEVITZ/out/mito002_t/a_c00.tif"
 
 ncu --set full --clock-control none \
-    -k regex:deskew_stage_scan \
+    -k deskew_kernel_u16,cupy_fill,cupy_copy__uint16_uint16 \
     -c 10 \
     -f -o ncu_deskew_output \
     --launch-skip-before-match 20 \
-    python deskew_large.py \
+    python deskew_compare.py \
         --input-path=$ACQ_PATH \
         --direction=1 \
         --preserve-data-type \
-        --num-repeat=5
+        --num-repeat=3 \
+        --methods orthogonal raw \
+        --use-tiff
 
 # nsys profile \
 #     --force-overwrite=true \
