@@ -123,19 +123,18 @@ def _deskew_orthogonal_cpu(im: numpy.ndarray,
 
 @njit(parallel=True)
 def _zero_triangle_cpu(dsk: numpy.ndarray, direction: int):
-    """Zero out triangle in left-hand side of image where data was
-    (falsely) interpolated due to wrapping."""
     if direction < 0:
         dsk = numpy.flipud(dsk)
 
-    n_z, n_y, n_x = dsk.shape
-    for z in prange(n_z):
-        if z < n_x:
-            dsk[z, :, :z+1] = 0
-
+    n_z, _, n_x = dsk.shape
+    stop = min(n_z, n_x)
+    
+    # Zero out triangle in left-hand side of image where data was
+    # (falsely) interpolated due to wrapping
+    for z in prange(stop):
+        dsk[z, :, :z+1] = 0
 
     dsk = numpy.flipud(dsk)
-    
     return dsk[..., ::direction]
 
 
