@@ -21,13 +21,14 @@ ncu --set full --clock-control none \
     -c 10 \
     -f -o ncu_deskew_output \
     --launch-skip-before-match 20 \
-    python deskew.py \
+    python deskew_compare.py \
         --input-path=$ACQ_PATH \
         --direction=1 \
         --preserve-data-type \
-        --num-repeat=5
+        --num-repeat=5 \
+        --methods ortho raw
 
 # nsys profile \
 #     --force-overwrite=true \
 #     --trace=cuda,nvtx,osrt \
-#     --stats=true \
+#     --stats=true
