@@ -4,6 +4,7 @@ import time
 from argparse import ArgumentParser
 
 import numpy
+from tqdm import tqdm
 
 from pyspim.data.dispim import uManagerAcquisitionOnePos
 from pyspim.deskew import ortho
@@ -19,7 +20,7 @@ def main(
     with uManagerAcquisitionOnePos(input_path, numpy) as acq:
         vol = acq.get(head, 0, 0)
     exec_times = numpy.zeros((num_repeat,))
-    for idx in range(num_repeat):
+    for idx in tqdm(range(num_repeat), desc="Profiling deskew"):
         start_time = time.perf_counter()
         _ = ortho.deskew_stage_scan(
             vol, 0.1625, 0.5, direction, math.pi/4, preserve_dtype
