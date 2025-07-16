@@ -4,8 +4,8 @@ import time
 from argparse import ArgumentParser
 
 import numpy
-from tifffile import imread
 
+from pyspim.data.dispim import uManagerAcquisitionOnePos
 from pyspim.deskew import ortho
 
 
@@ -15,7 +15,9 @@ def main(
     preserve_dtype: bool,
     num_repeat: int,
 ) -> int:
-    vol = imread(input_path)
+    head = 'a' if direction == 1 else 'b'
+    with uManagerAcquisitionOnePos(input_path, numpy) as acq:
+        vol = acq.get(head, 0, 0)
     exec_times = numpy.zeros((num_repeat,))
     for idx in range(num_repeat):
         start_time = time.perf_counter()
