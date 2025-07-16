@@ -5,10 +5,11 @@ from argparse import ArgumentParser
 
 import numpy
 from tqdm import tqdm
-import cupy as cp
 
-from pyspim.data.dispim import uManagerAcquisitionOnePos
 from pyspim.deskew import ortho
+
+import tifffile
+import cupy as cp
 
 
 def main(
@@ -17,9 +18,8 @@ def main(
     preserve_dtype: bool,
     num_repeat: int,
 ) -> int:
-    head = 'a' if direction == 1 else 'b'
-    with uManagerAcquisitionOnePos(input_path, numpy) as acq:
-        vol = acq.get(head, 0, 0)
+    vol = tifffile.imread(input_path)
+    print(vol.shape)
     exec_times = numpy.zeros((num_repeat,))
     for idx in tqdm(range(num_repeat), desc="Profiling deskew"):
         start_time = time.perf_counter()
