@@ -36,10 +36,12 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
     """
     xp = cupy.get_array_module(im)
     if xp == numpy:
+        print("Using CPU")
         dsk = _deskew_orthogonal_cpu(
             im, pixel_size, step_size, direction, theta, preserve_dtype
         )
     else:
+        print("Using GPU")
         dsk = _deskew_orthogonal_gpu(
             im, pixel_size, step_size, direction, theta, preserve_dtype
         )

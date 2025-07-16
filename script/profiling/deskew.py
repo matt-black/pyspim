@@ -30,7 +30,7 @@ def main(
     sd_exec_time = numpy.std(exec_times)
     print(f"Executed {num_repeat} times, {mean_exec_time:.2f} +/- {sd_exec_time:.2f}", flush=True)
     print(f"Exec Times: {exec_times.tolist()}", flush=True)
-    return 0
+    return
 
 
 if __name__ == "__main__":
