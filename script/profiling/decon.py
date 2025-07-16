@@ -61,7 +61,7 @@ if __name__ == "__main__":
                         help="use CPU (NumPy) arrays")
     args = parser.parse_args()
     ec = main(
-        args.view_a, args.view_b,
+        args.view_a, args.view_b, args.psf_a, args.psf_b,
         args.algorithm, args.boundary_correction, args.num_iter,
         args.num_repeat, args.cpu
     )
