@@ -14,12 +14,10 @@ def deskew_stage_scan(im, pixel_size: float, step_size: float,
                       **kwargs):
     gpu_in = cupy.get_array_module(im) == cupy
     if method == 'orthogonal' or method == 'ortho':
-        print("Using orthogonal deskew")
         return deskew_stage_scan_orthogonal(
             im, pixel_size, step_size, direction, theta, True
         )
     elif method == 'raw':
-        print("Using raw deskew")
         return deskew_stage_scan_raw(
             im, pixel_size, step_size, direction, theta, True
         )
