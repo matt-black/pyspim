@@ -4,7 +4,8 @@ nb/
 **/._*
 # ignore SLURM outputs
 **/*.out
-src/napari_pyspim/
+# ignore profiling results
+script/profiling/test_deskew_results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
