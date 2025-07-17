@@ -37,7 +37,7 @@ def main(
         fun = dv.additive_joint_rl
         bp_a = psf_a[::-1,::-1,::-1]
         bp_b = psf_b[::-1,::-1,::-1]
-    for _ in num_repeat:
+    for _ in range(num_repeat):
         _ = fun(view_a, view_b, (view_a + view_b) / 2, 
                 psf_a, psf_b, bp_a, bp_b,
                 num_iter, 1e-6, boundary_correction, 
@@ -61,7 +61,7 @@ if __name__ == "__main__":
                         help="use CPU (NumPy) arrays")
     args = parser.parse_args()
     ec = main(
-        args.view_a, args.view_b,
+        args.view_a, args.view_b, args.psf_a, args.psf_b,
         args.algorithm, args.boundary_correction, args.num_iter,
         args.num_repeat, args.cpu
     )
