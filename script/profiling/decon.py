@@ -37,7 +37,7 @@ def main(
         fun = dv.additive_joint_rl
         bp_a = psf_a[::-1,::-1,::-1]
         bp_b = psf_b[::-1,::-1,::-1]
-    for _ in num_repeat:
+    for _ in range(num_repeat):
         _ = fun(view_a, view_b, (view_a + view_b) / 2, 
                 psf_a, psf_b, bp_a, bp_b,
                 num_iter, 1e-6, boundary_correction, 
@@ -48,10 +48,10 @@ def main(
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("-a", "--view-a", type=str, required=True)
-    parser.add_argument("-b", "--view-b", type=str, required=True)
-    parser.add_argument("-pa", "--psf-a", type=str, required=True)
-    parser.add_argument("-pb", "--psf-b", type=str, required=True)
+    parser.add_argument("-a", "--view-a", type=str, required=True, help="Path to view A")
+    parser.add_argument("-b", "--view-b", type=str, required=True, help="Path to view B")
+    parser.add_argument("-pa", "--psf-a", type=str, required=True, help="Point Spread Function for view A")
+    parser.add_argument("-pb", "--psf-b", type=str, required=True, help="Point Spread Function for view B")
     parser.add_argument("-f", "--algorithm", type=str, required=True,
                         choices=["shroff","efficient","additive"])
     parser.add_argument("-c", "--boundary-correction", action="store_true")
