@@ -45,7 +45,13 @@ dependencies = [
     "tifffile",
     "tqdm",
     "typing_extensions",
-    "zarr"
+    "zarr",
+    "napari>=0.4.0",
+    "napari-plugin-engine>=0.2.0",
+    "qtpy>=1.9.0",
+    "PyQt5>=5.15.0",
+    "cupy-cuda12x",
+    "matplotlib>=3.5.0"
 ]
 
 [project.urls]
@@ -63,7 +69,16 @@ testing = [
     "tox",
     "pytest",  # https://docs.pytest.org/en/latest/contents.html
     "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
+    "pytest-qt",
+    "napari[testing]",
 ]
+
+# napari plugin entry points
+[project.entry-points."napari.manifest"]
+pyspim = "napari_pyspim:manifest"
+
+[project.entry-points."napari.plugin"]
+pyspim = "napari_pyspim"
 
 [tool.pyright]
 typeCheckingMode = "off"

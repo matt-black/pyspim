@@ -1,0 +1,1 @@
+# Tests for napari-pyspim plugin 

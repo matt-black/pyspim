@@ -4,7 +4,8 @@ nb/
 **/._*
 # ignore SLURM outputs
 **/*.out
-src/napari_pyspim/
+# ignore profiling results
+script/profiling/test_deskew_results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -185,3 +186,5 @@ cython_debug/
 # Ignore all local history of files
 .history
 .ionide
+data/example_dispim_data/
+script/profiling/test_deskew_results/
