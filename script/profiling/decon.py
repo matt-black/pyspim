@@ -37,7 +37,7 @@ def main(
         fun = dv.additive_joint_rl
         bp_a = psf_a[::-1,::-1,::-1]
         bp_b = psf_b[::-1,::-1,::-1]
-    for _ in num_repeat:
+    for _ in range(num_repeat):
         _ = fun(view_a, view_b, (view_a + view_b) / 2, 
                 psf_a, psf_b, bp_a, bp_b,
                 num_iter, 1e-6, boundary_correction, 
