@@ -47,6 +47,8 @@ void deskew_kernel(const unsigned short* __restrict__ im, // raw uint16 input
                    const float h_f,       // h as float
                    const float h_cos_t)   // h * cos_t precomputed
 {
+    // Comments in the _deskew_kernel_u16_src kernel apply here too.
+    // only difference is the output type
     long long total = (long long)nz * ny * nx;
 
     for (long long tid = (blockDim.x * blockIdx.x + threadIdx.x);
@@ -133,17 +135,24 @@ void deskew_kernel_u16(const unsigned short* __restrict__ im,
                        const float h_f,
                        const float h_cos_t)
 {
+    // Total number of points to process
     long long total = (long long)nz * ny * nx;
 
+    // 1-D grid-stride loop (https://developer.nvidia.com/blog/cuda-pro-tip-write-flexible-kernels-grid-stride-loops/)
     for (long long tid = (blockDim.x * blockIdx.x + threadIdx.x);
          tid < total;
          tid += (long long)blockDim.x * gridDim.x)
     {
+
+        // Convert 1D thread ID to 3D coordinates (x,y,z)
         int x = tid % nx;
         long long tmp = tid / nx;
         int y = tmp % ny;
         int z = tmp / ny;
 
+        // NOTE: possible to avoid if-statement, but make code less readable?
+        //       for (x + direction * (z / tan_t)) * inv_step_pix
+        //       and 2*(direction-1)* h_cos_t
         float xpr, zpr;
         if (direction > 0) {
             xpr = z / sin_t;
@@ -153,6 +162,7 @@ void deskew_kernel_u16(const unsigned short* __restrict__ im,
             zpr = (x + (z / tan_t) - h_cos_t) * inv_step_pix;
         }
 
+        // Determine the z0 plane index and check bounds, if so re-use thread with next point
         int z0 = (int)floorf(zpr);
         if (z0 < 0 || z0 >= n_planes - 1) {
             out[tid] = 0u;
@@ -161,6 +171,8 @@ void deskew_kernel_u16(const unsigned short* __restrict__ im,
 
         float beta = step_pix * (zpr - (float)z0);
 
+        // NOTE, any speedup from storing ternary operator result since reused?
+        // or have direction as a float?
         float xib = xpr + (direction > 0 ? +1.0f : -1.0f) * beta * tan_ot;
         int xb0 = (int)floorf(xib);
         if (xb0 < 0 || xb0 >= h - 1) {
@@ -223,7 +235,7 @@ def _deskew_gpu(
     global _deskew_kernel, _deskew_kernel_u16
 
     xim = cp.asarray(im)  # host->device if needed
-    assert xim.ndim == 3
+    assert xim.ndim == 3, f"Input must be a 3D array (z,y,x), received shape: {xim.shape}"
     n_planes, ny, h = xim.shape
 
     direction = 1 if direction >= 0 else -1
@@ -244,13 +256,15 @@ def _deskew_gpu(
     in_dtype = im.dtype if isinstance(im, np.ndarray) else xim.dtype
     want_u16 = preserve_dtype and (in_dtype == np.uint16 or in_dtype == cp.uint16)
 
+
+    # SUGGESTION: Used 3D structure for kernel(?)
     total = nz * ny * nx
-    threads = 256
-    blocks = min((total + threads - 1) // threads, 65535)
+    threads = 256 #consider [8, 8 8] to get x,y,z values in the kernel instead of having to do % and / to get 3D from 1D
+    blocks = min((total + threads - 1) // threads, 65535) # same [8, 8, 8] consideration idea for these blocks
 
     if want_u16:
         if _deskew_kernel_u16 is None:
-            _deskew_kernel_u16 = cp.RawKernel(_deskew_kernel_u16_src, 'deskew_kernel_u16')
+            _deskew_kernel_u16 = cp.RawKernel(_deskew_kernel_u16_src, 'deskew_kernel_u16', options = ("-lineinfo",)) #compile for debugging with ncu for "source" tab
         out = cp.empty((nz, ny, nx), dtype=cp.uint16)
         args = (
             xim, out,
