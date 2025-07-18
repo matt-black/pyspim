@@ -74,9 +74,6 @@ testing = [
 ]
 
 # napari plugin entry points
-[project.entry-points."napari.manifest"]
-pyspim = "napari_pyspim:manifest"
-
 [project.entry-points."napari.plugin"]
 pyspim = "napari_pyspim"
 

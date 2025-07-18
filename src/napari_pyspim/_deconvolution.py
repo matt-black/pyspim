@@ -251,15 +251,17 @@ class DeconvolutionWidget(QWidget):
             missing = []
             if not self.input_data:
                 missing.append("registered data")
-            if not self.psf_a:
+            if self.psf_a is None:
                 missing.append("PSF A")
-            if not self.psf_b:
+            if self.psf_b is None:
                 missing.append("PSF B")
             self.status_label.setText(f"Missing: {', '.join(missing)}")
             
     def deconvolve_data(self):
         """Deconvolve the data using background worker."""
-        if not self._check_ready():
+        if not (self.input_data is not None and 
+                self.psf_a is not None and 
+                self.psf_b is not None):
             QMessageBox.warning(self, "Error", "Please provide all required inputs")
             return
             
