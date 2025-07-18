@@ -20,9 +20,9 @@ conda activate /scratch/gpfs/AKEY/rbierman/pyspim/conda
 ACQ_PATH="/scratch/gpfs/rb3242/a_c00.tif"
 
 # Determine whether to run each comparison and profiling step (0 = no, 1 = yes)
-RUN_COMPARE=0
+RUN_COMPARE=1
 RUN_NSYS=0
-RUN_NCU=1
+RUN_NCU=0
 
 # Compare deskew methods raw (cuda raw kernel) and orthogonal (numpy CPU)
 # Timings July 17 2025 on the a_c00.tif dataset:
