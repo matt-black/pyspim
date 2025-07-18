@@ -5,9 +5,8 @@ Deskewing widget for deskewing dual-view SPIM data.
 import numpy as np
 import math
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QPushButton, QComboBox, QLabel, QGroupBox, QMessageBox,
-    QProgressBar, QCheckBox, QDoubleSpinBox
+    QWidget, QVBoxLayout, QFormLayout, QPushButton, QComboBox,
+    QLabel, QGroupBox, QMessageBox, QProgressBar, QCheckBox
 )
 from qtpy.QtCore import Signal, QThread
 from PyQt5.QtCore import pyqtSignal
@@ -23,7 +22,7 @@ class DeskewingWorker(QThread):
     error_occurred = pyqtSignal(str)
     
     def __init__(self, a_raw, b_raw, pixel_size, step_size, theta, 
-                 method='orthogonal', recrop=False):
+                 method='orthogonal', recrop=False, process_single_channel=None):
         super().__init__()
         self.a_raw = a_raw
         self.b_raw = b_raw
@@ -32,6 +31,8 @@ class DeskewingWorker(QThread):
         self.theta = theta
         self.method = method
         self.recrop = recrop
+        # 'a', 'b', or None for both
+        self.process_single_channel = process_single_channel
         
     def run(self):
         """Deskew data in background thread."""
@@ -39,44 +40,66 @@ class DeskewingWorker(QThread):
             # Calculate step sizes
             step_size_lat = self.step_size / math.cos(self.theta)
             
-            # Deskew head A (direction = 1)
-            a_dsk = dsk.deskew_stage_scan(
-                self.a_raw, self.pixel_size, step_size_lat, 1,
-                method=self.method
-            )
-            
-            # Deskew head B (direction = -1)
-            b_dsk = dsk.deskew_stage_scan(
-                self.b_raw, self.pixel_size, step_size_lat, -1,
-                method=self.method
-            )
+            if self.process_single_channel == 'a':
+                # Process only channel A
+                a_dsk = dsk.deskew_stage_scan(
+                    self.a_raw, self.pixel_size, step_size_lat, 1,
+                    method=self.method
+                )
+                b_dsk = None
+                
+            elif self.process_single_channel == 'b':
+                # Process only channel B
+                b_dsk = dsk.deskew_stage_scan(
+                    self.b_raw, self.pixel_size, step_size_lat, -1,
+                    method=self.method
+                )
+                a_dsk = None
+                
+            else:
+                # Process both channels
+                # Deskew head A (direction = 1)
+                a_dsk = dsk.deskew_stage_scan(
+                    self.a_raw, self.pixel_size, step_size_lat, 1,
+                    method=self.method
+                )
+                
+                # Deskew head B (direction = -1)
+                b_dsk = dsk.deskew_stage_scan(
+                    self.b_raw, self.pixel_size, step_size_lat, -1,
+                    method=self.method
+                )
             
             # Optional re-cropping
             if self.recrop:
-                roia = roi.detect_roi_3d(a_dsk, 'triangle')
-                roib = roi.detect_roi_3d(b_dsk, 'triangle')
+                if a_dsk is not None:
+                    roia = roi.detect_roi_3d(a_dsk, 'triangle')
+                    a_dsk = a_dsk[
+                        roia[0][0]:roia[0][1],
+                        roia[1][0]:roia[1][1],
+                        roia[2][0]:roia[2][1]
+                    ].astype(np.float32)
                 
-                a_dsk = a_dsk[
-                    roia[0][0]:roia[0][1],
-                    roia[1][0]:roia[1][1],
-                    roia[2][0]:roia[2][1]
-                ].astype(np.float32)
-                
-                b_dsk = b_dsk[
-                    roib[0][0]:roib[0][1],
-                    roib[1][0]:roib[1][1],
-                    roib[2][0]:roib[2][1]
-                ].astype(np.float32)
+                if b_dsk is not None:
+                    roib = roi.detect_roi_3d(b_dsk, 'triangle')
+                    b_dsk = b_dsk[
+                        roib[0][0]:roib[0][1],
+                        roib[1][0]:roib[1][1],
+                        roib[2][0]:roib[2][1]
+                    ].astype(np.float32)
             else:
-                a_dsk = a_dsk.astype(np.float32)
-                b_dsk = b_dsk.astype(np.float32)
+                if a_dsk is not None:
+                    a_dsk = a_dsk.astype(np.float32)
+                if b_dsk is not None:
+                    b_dsk = b_dsk.astype(np.float32)
             
             result = {
                 'a_deskewed': a_dsk,
                 'b_deskewed': b_dsk,
                 'method': self.method,
                 'recrop': self.recrop,
-                'step_size_lat': step_size_lat
+                'step_size_lat': step_size_lat,
+                'process_single_channel': self.process_single_channel
             }
             
             self.deskewed.emit(result)
@@ -162,9 +185,33 @@ class DeskewingWidget(QWidget):
         
     def _update_parameters_from_layers(self):
         """Update parameters from napari layer metadata."""
+        # First try to get parameters from input data if available
+        if self.input_data:
+            # Check if parameters are passed through from previous step
+            if 'step_size' in self.input_data:
+                step_size = self.input_data['step_size']
+                pixel_size = self.input_data.get('pixel_size', 'Not set')
+                theta_rad = self.input_data.get('theta', 'Not set')
+                
+                self.step_size_label.setText(f"{step_size} μm")
+                self.pixel_size_label.setText(f"{pixel_size} μm")
+                
+                if theta_rad != 'Not set':
+                    theta_deg = theta_rad * 180 / math.pi
+                    self.theta_label.setText(f"{theta_deg:.1f}°")
+                else:
+                    self.theta_label.setText("Not set")
+                return
+        
+        # If not in input data, try to get from napari layers
         try:
-            # Look for A_cropped or A_raw layer
-            for layer_name in ['A_cropped', 'A_raw']:
+            # Look for various possible layer names
+            layer_names_to_check = [
+                'A_cropped', 'B_cropped', 'A_full', 'B_full', 
+                'A_raw', 'B_raw', 'A_deskewed', 'B_deskewed'
+            ]
+            
+            for layer_name in layer_names_to_check:
                 if layer_name in self.viewer.layers:
                     layer = self.viewer.layers[layer_name]
                     metadata = layer.metadata
@@ -174,17 +221,23 @@ class DeskewingWidget(QWidget):
                         pixel_size = metadata.get('pixel_size', 'Not set')
                         theta_rad = metadata.get('theta', 'Not set')
                         
-                        self.step_size_label.setText(f"{step_size} μm")
-                        self.pixel_size_label.setText(f"{pixel_size} μm")
-                        
-                        if theta_rad != 'Not set':
-                            theta_deg = theta_rad * 180 / math.pi
-                            self.theta_label.setText(f"{theta_deg:.1f}°")
-                        else:
-                            self.theta_label.setText("Not set")
-                        break
+                        if step_size != 'Not set':
+                            self.step_size_label.setText(f"{step_size} μm")
+                            self.pixel_size_label.setText(f"{pixel_size} μm")
+                            
+                            if theta_rad != 'Not set':
+                                theta_deg = theta_rad * 180 / math.pi
+                                self.theta_label.setText(f"{theta_deg:.1f}°")
+                            else:
+                                self.theta_label.setText("Not set")
+                            return
         except Exception:
             pass
+        
+        # Fallback: Set default values if no parameters found
+        self.step_size_label.setText("0.5 μm")
+        self.pixel_size_label.setText("0.1625 μm")
+        self.theta_label.setText("45.0°")
             
     def deskew_data(self):
         """Deskew the data using background worker."""
@@ -192,20 +245,45 @@ class DeskewingWidget(QWidget):
             QMessageBox.warning(self, "Error", "No input data available")
             return
             
-        # Get parameters from labels
+        # Get parameters from labels with fallback to input data
         try:
-            step_size = float(self.step_size_label.text().split()[0])
-            pixel_size = float(self.pixel_size_label.text().split()[0])
-            theta_deg = float(self.theta_label.text().split()[0])
-            theta_rad = theta_deg * math.pi / 180
-        except (ValueError, IndexError):
-            QMessageBox.warning(self, "Error", "Invalid parameters. Please load data first.")
-            return
+            step_size_text = self.step_size_label.text()
+            pixel_size_text = self.pixel_size_label.text()
+            theta_text = self.theta_label.text()
             
-        a_raw = self.input_data['a_cropped']
-        b_raw = self.input_data['b_cropped']
+            # Try to extract from labels first
+            if step_size_text != "Not set":
+                step_size = float(step_size_text.split()[0])
+            else:
+                # Fallback to input data
+                step_size = self.input_data.get('step_size', 0.5)
+                
+            if pixel_size_text != "Not set":
+                pixel_size = float(pixel_size_text.split()[0])
+            else:
+                # Fallback to input data
+                pixel_size = self.input_data.get('pixel_size', 0.1625)
+                
+            if theta_text != "Not set":
+                theta_deg = float(theta_text.split()[0])
+                theta_rad = theta_deg * math.pi / 180
+            else:
+                # Fallback to input data
+                theta_rad = self.input_data.get('theta', 45 * math.pi / 180)
+                
+        except (ValueError, IndexError):
+            # Final fallback to input data or defaults
+            step_size = self.input_data.get('step_size', 0.5)
+            pixel_size = self.input_data.get('pixel_size', 0.1625)
+            theta_rad = self.input_data.get('theta', 45 * math.pi / 180)
+            
+        a_raw = self.input_data.get('a_cropped')
+        b_raw = self.input_data.get('b_cropped')
         method = self.method_combo.currentText()
         recrop = self.recrop_check.isChecked()
+        
+        # Get single channel processing info from input data
+        process_single_channel = self.input_data.get('process_single_channel')
         
         self.deskew_button.setEnabled(False)
         self.progress_bar.setVisible(True)
@@ -215,7 +293,7 @@ class DeskewingWidget(QWidget):
         # Create and start worker
         self.worker = DeskewingWorker(
             a_raw, b_raw, pixel_size, step_size, theta_rad,
-            method, recrop
+            method, recrop, process_single_channel
         )
         self.worker.deskewed.connect(self.on_deskewed)
         self.worker.error_occurred.connect(self.on_error)
@@ -234,40 +312,65 @@ class DeskewingWidget(QWidget):
             except (KeyError, ValueError):
                 pass
         
-        # Add deskewed data as new layers
-        self.viewer.add_image(
-            a_deskewed,
-            name="A_deskewed",
-            metadata={
-                'method': result['method'],
-                'recrop': result['recrop'],
-                'step_size_lat': result['step_size_lat']
-            }
-        )
+        # Add deskewed data as new layers (only for processed channels)
+        if a_deskewed is not None:
+            self.viewer.add_image(
+                a_deskewed,
+                name="A_deskewed",
+                metadata={
+                    'method': result['method'],
+                    'recrop': result['recrop'],
+                    'step_size_lat': result['step_size_lat']
+                }
+            )
         
-        self.viewer.add_image(
-            b_deskewed,
-            name="B_deskewed",
-            metadata={
-                'method': result['method'],
-                'recrop': result['recrop'],
-                'step_size_lat': result['step_size_lat']
-            }
-        )
+        if b_deskewed is not None:
+            self.viewer.add_image(
+                b_deskewed,
+                name="B_deskewed",
+                metadata={
+                    'method': result['method'],
+                    'recrop': result['recrop'],
+                    'step_size_lat': result['step_size_lat']
+                }
+            )
         
         # Update status and results
-        self.status_label.setText(
-            f"Deskewing completed! A: {a_deskewed.shape}, B: {b_deskewed.shape}"
-        )
-        
-        results_text = f"""
-        <b>Deskewing Results:</b><br>
-        Method: {result['method']}<br>
-        Re-cropped: {result['recrop']}<br>
-        Lateral step size: {result['step_size_lat']:.3f} μm<br>
-        A shape: {a_deskewed.shape}<br>
-        B shape: {b_deskewed.shape}
-        """
+        if a_deskewed is not None and b_deskewed is not None:
+            status_text = (
+                f"Deskewing completed! A: {a_deskewed.shape}, "
+                f"B: {b_deskewed.shape}"
+            )
+            results_text = f"""
+            <b>Deskewing Results:</b><br>
+            Method: {result['method']}<br>
+            Re-cropped: {result['recrop']}<br>
+            Lateral step size: {result['step_size_lat']:.3f} μm<br>
+            A shape: {a_deskewed.shape}<br>
+            B shape: {b_deskewed.shape}
+            """
+        elif a_deskewed is not None:
+            status_text = f"Deskewing completed! A: {a_deskewed.shape}"
+            results_text = f"""
+            <b>Deskewing Results:</b><br>
+            Method: {result['method']}<br>
+            Re-cropped: {result['recrop']}<br>
+            Lateral step size: {result['step_size_lat']:.3f} μm<br>
+            A shape: {a_deskewed.shape}<br>
+            B: Not processed
+            """
+        else:
+            status_text = f"Deskewing completed! B: {b_deskewed.shape}"
+            results_text = f"""
+            <b>Deskewing Results:</b><br>
+            Method: {result['method']}<br>
+            Re-cropped: {result['recrop']}<br>
+            Lateral step size: {result['step_size_lat']:.3f} μm<br>
+            A: Not processed<br>
+            B shape: {b_deskewed.shape}
+            """
+            
+        self.status_label.setText(status_text)
         self.results_label.setText(results_text)
         
         self.deskew_button.setEnabled(True)
@@ -279,7 +382,8 @@ class DeskewingWidget(QWidget):
             'b_deskewed': b_deskewed,
             'method': result['method'],
             'recrop': result['recrop'],
-            'step_size_lat': result['step_size_lat']
+            'step_size_lat': result['step_size_lat'],
+            'process_single_channel': result.get('process_single_channel')
         }
         self.deskewed.emit(output_data)
         

@@ -177,16 +177,23 @@ class DataLoaderWidget(QWidget):
         a_raw = result['a_raw']
         b_raw = result['b_raw']
         
+        # Get acquisition parameters
+        step_size = self.step_size_spin.value()
+        pixel_size = self.pixel_size_spin.value()
+        theta_deg = self.theta_spin.value()
+        theta_rad = theta_deg * np.pi / 180  # Convert to radians
+        camera_offset = self.camera_offset_spin.value()
+        
         # Add as layers with metadata
         self.viewer.add_image(
             a_raw, 
             name="A_raw", 
             metadata={
                 'data_path': result['data_path'],
-                'step_size': self.step_size_spin.value(),
-                'pixel_size': self.pixel_size_spin.value(),
-                'theta': self.theta_spin.value() * np.pi / 180,  # Convert to radians
-                'camera_offset': self.camera_offset_spin.value()
+                'step_size': step_size,
+                'pixel_size': pixel_size,
+                'theta': theta_rad,
+                'camera_offset': camera_offset
             }
         )
         
@@ -195,10 +202,10 @@ class DataLoaderWidget(QWidget):
             name="B_raw",
             metadata={
                 'data_path': result['data_path'],
-                'step_size': self.step_size_spin.value(),
-                'pixel_size': self.pixel_size_spin.value(),
-                'theta': self.theta_spin.value() * np.pi / 180,
-                'camera_offset': self.camera_offset_spin.value()
+                'step_size': step_size,
+                'pixel_size': pixel_size,
+                'theta': theta_rad,
+                'camera_offset': camera_offset
             }
         )
         
@@ -207,8 +214,17 @@ class DataLoaderWidget(QWidget):
         )
         self.load_button.setEnabled(True)
         
-        # Emit signal with loaded data
-        self.data_loaded.emit(result)
+        # Emit signal with loaded data and parameters
+        output_data = {
+            'a_raw': a_raw,
+            'b_raw': b_raw,
+            'data_path': result['data_path'],
+            'step_size': step_size,
+            'pixel_size': pixel_size,
+            'theta': theta_rad,
+            'camera_offset': camera_offset
+        }
+        self.data_loaded.emit(output_data)
         
     def on_error(self, error_msg):
         """Handle loading error."""

@@ -8,6 +8,9 @@ deconvolution.
 
 from napari_plugin_engine import napari_hook_implementation
 
+# Import main widget for direct access
+from ._main_widget import DispimPipelineWidget
+
 # Plugin manifest
 manifest = {
     "name": "napari-pyspim",
