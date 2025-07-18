@@ -8,7 +8,6 @@ References
 [2] github.com/QI2lab/OPM
 """
 import math
-import time
 from typing import Tuple
 
 import cupy
@@ -37,19 +36,10 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
     """
     xp = cupy.get_array_module(im)
     if xp == numpy:
-        # Time the CPU deskewing interpolation operation
-        time_start = time.perf_counter()
         dsk = _deskew_orthogonal_cpu(
             im, pixel_size, step_size, direction, theta, preserve_dtype
         )
-        time_end = time.perf_counter()
-        print(f"Time taken for CPU deskewing interpolation: {time_end - time_start} seconds")
-        
-        # Time the CPU triangle zeroing operation
-        time_start = time.perf_counter()
         dsk = _zero_triangle_cpu(dsk, direction)
-        time_end = time.perf_counter()
-        print(f"Time taken for CPU triangle zeroing: {time_end - time_start} seconds")
     else:
         dsk = _deskew_orthogonal_gpu(
             im, pixel_size, step_size, direction, theta, preserve_dtype

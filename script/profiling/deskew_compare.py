@@ -100,24 +100,13 @@ def main(
                 else:
                     data2 = result2
                 
-                # Calculate correlation coefficient
-                correlation = numpy.corrcoef(data1.flatten(), data2.flatten())[0, 1]
-                
                 # Calculate differences
                 diff = numpy.abs(data1 - data2)
                 max_diff = numpy.max(diff)
                 mean_diff = numpy.mean(diff)
                 
-                print(f"✓ Correlation ({method1} vs {method2}): {correlation:.6f}")
                 print(f"✓ Max difference: {max_diff:.2f}")
                 print(f"✓ Mean difference: {mean_diff:.4f}")
-                
-                if correlation > 0.99:
-                    print("✓ Results are highly correlated (>0.99)")
-                elif correlation > 0.95:
-                    print("✓ Results are well correlated (>0.95)")
-                else:
-                    print("⚠ Results have low correlation (<0.95)")
     
     return 0
 
