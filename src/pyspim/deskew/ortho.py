@@ -39,6 +39,7 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
         dsk = _deskew_orthogonal_cpu(
             im, pixel_size, step_size, direction, theta, preserve_dtype
         )
+        dsk = _zero_triangle_cpu(dsk, direction)
     else:
         dsk = _deskew_orthogonal_gpu(
             im, pixel_size, step_size, direction, theta, preserve_dtype
@@ -47,18 +48,18 @@ def deskew_stage_scan(im : NDArray, pixel_size : float, step_size : float,
     
 
 @njit(parallel=True)
-def _deskew_orthogonal_cpu(im : numpy.ndarray, 
-                           pixel_size : float, step_size : float, 
-                           direction :int, theta : float = numpy.pi/4, 
-                           preserve_dtype : bool = False):
+def _deskew_orthogonal_cpu(im: numpy.ndarray,
+                           pixel_size: float, step_size: float,
+                           direction: int, theta: float = numpy.pi/4,
+                           preserve_dtype: bool = False):
     direction = numpy.sign(direction)
     step_size_lat = step_size / math.cos(theta)
     # convert step to pixel units
     step_pix = step_size_lat / pixel_size
     # precompute useful trig quantities
-    sin_theta  = numpy.float64(numpy.sin(theta))
-    cos_theta  = numpy.float64(numpy.cos(theta))
-    tan_theta  = numpy.float64(numpy.tan(theta))
+    sin_theta = numpy.float64(numpy.sin(theta))
+    cos_theta = numpy.float64(numpy.cos(theta))
+    tan_theta = numpy.float64(numpy.tan(theta))
     tan_otheta = numpy.float64(numpy.tan(numpy.pi/2 - theta))
     cos_otheta = numpy.float64(numpy.cos(numpy.pi/2 - theta))
     # determine output shape & preallocate
@@ -67,6 +68,8 @@ def _deskew_orthogonal_cpu(im : numpy.ndarray,
     n_y = numpy.int64(n_y)
     n_z = numpy.int64(numpy.ceil(h * sin_theta))
     dsk = numpy.zeros((n_z, n_y, n_x), dtype=im.dtype)
+    
+    # Deskewing interpolation loop
     for z in prange(0, n_z):
         for x in prange(0, n_x):
             # compute where we are in "raw" coordinates (x'=xpr, z'=zpr)
@@ -84,11 +87,11 @@ def _deskew_orthogonal_cpu(im : numpy.ndarray,
                 # beta_p = distance to raw plane in z' axis
                 beta_p = step_pix * (zpr - zpb)
                 # find x' in before & after planes
-                xib  = xpr + direction * beta_p * tan_otheta
+                xib = xpr + direction * beta_p * tan_otheta
                 xibp = numpy.int64(numpy.floor(xib))
                 if numpy.abs(xibp+1) < h:
                     dxib = xib - xibp
-                    xia  = xpr - direction * (step_pix - beta_p) * tan_otheta
+                    xia = xpr - direction * (step_pix - beta_p) * tan_otheta
                     xiap = numpy.int64(numpy.floor(xia))
                     if numpy.abs(xiap+1) < h:
                         dxia = xia - xiap
@@ -96,24 +99,33 @@ def _deskew_orthogonal_cpu(im : numpy.ndarray,
                         # (x',z') to before/after planes in raw data
                         l_b = beta_p / cos_otheta
                         l_a = (step_pix - beta_p) / cos_otheta
-                        val = l_b * (dxia * im[zpb+1,:,xiap+1] + (1-dxia) * im[zpb+1,:,xiap]) + \
-                            l_a * (dxib * im[zpb,:,xibp+1] + (1-dxib) * im[zpb,:,xibp])
+                        val = l_b * (dxia * im[zpb+1, :, xiap+1] + (1-dxia) * im[zpb+1, :, xiap]) + \
+                            l_a * (dxib * im[zpb, :, xibp+1] + (1-dxib) * im[zpb, :, xibp])
                         if preserve_dtype:
-                            dsk[z,:,x] = numpy.clip(numpy.round(
+                            dsk[z, :, x] = numpy.clip(numpy.round(
                                 val / step_pix), 0, 2**16-1
                             ).astype(im.dtype)
                         else:
-                            dsk[z,:,x] = val / step_pix
-    # zero out triangle in left-hand side of image where data was
-    # (falsely) interpolated due to wrapping
+                            dsk[z, :, x] = val / step_pix
+    
+    return dsk
+
+
+@njit(parallel=True)
+def _zero_triangle_cpu(dsk: numpy.ndarray, direction: int):
     if direction < 0:
         dsk = numpy.flipud(dsk)
-    for z in prange(n_z):
-        for x in prange(n_x):
-            if x <= z:
-                dsk[z,:,x] = 0
+
+    n_z, _, n_x = dsk.shape
+    stop = min(n_z, n_x)
+    
+    # Zero out triangle in left-hand side of image where data was
+    # (falsely) interpolated due to wrapping
+    for z in prange(stop):
+        dsk[z, :, :z+1] = 0
+
     dsk = numpy.flipud(dsk)
-    return dsk[...,::direction]
+    return dsk[..., ::direction]
 
 
 def output_shape(z : int, r : int, c : int, 

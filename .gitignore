@@ -185,3 +185,5 @@ cython_debug/
 # Ignore all local history of files
 .history
 .ionide
+data/
+script/profiling/test_deskew_results/
