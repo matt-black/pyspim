@@ -1,6 +1,6 @@
 # PySPIM
 
-A comprehensive Python library for analyzing and visualizing single plane illumination microscopy (SPIM) data, with special emphasis on dual-view SPIM (diSPIM) microscopy.
+A comprehensive Python library for analyzing and visualizing Selective plane illumination microscopy (SPIM) data, with special emphasis on dual-view SPIM (diSPIM) microscopy.
 
 ## 🚀 Features
 
@@ -158,7 +158,7 @@ If you use PySPIM in your research, please cite:
 
 ```bibtex
 @software{pyspim2024,
-  title={PySPIM: Single Plane Illumination Microscopy Analysis},
+  title={PySPIM: Selective Plane Illumination Microscopy Analysis},
   author={PySPIM Team},
   year={2024},
   url={https://github.com/matt-black/pyspim}

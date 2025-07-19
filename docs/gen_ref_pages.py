@@ -43,15 +43,20 @@ def generate_api_docs():
             f.write("      heading_level: 2\n")
             f.write("      members_order: source\n")
             f.write("      docstring_style: google\n")
-            f.write("      preload_modules: true\n")
+            f.write("      preload_modules: []\n")
             f.write("      filters: ['!^_']\n")
             f.write("      merge_init_into_class: true\n")
             f.write("\n")
             
             # Add all Python files in the package
             for py_file in package_path.rglob("*.py"):
+                # Skip most underscore files, but include specific ones we want to document
                 if py_file.name.startswith("_"):
-                    continue
+                    # Allow specific underscore files to be documented
+                    if py_file.name == "_util.py" and "deskew" in str(py_file):
+                        pass  # Include this file
+                    else:
+                        continue
                     
                 # Convert file path to module path
                 module_path = py_file.relative_to(package_path.parent)
@@ -68,7 +73,7 @@ def generate_api_docs():
                 f.write("      heading_level: 3\n")
                 f.write("      members_order: source\n")
                 f.write("      docstring_style: google\n")
-                f.write("      preload_modules: true\n")
+                f.write("      preload_modules: []\n")
                 f.write("      filters: ['!^_']\n")
                 f.write("      merge_init_into_class: true\n")
                 f.write("\n")

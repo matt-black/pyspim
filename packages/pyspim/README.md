@@ -4,7 +4,7 @@ Core Python library for analyzing SPIM microscopy data.
 
 ## Description
 
-Core functionality for analyzing and visualizing single plane illumination microscopy (spim) data with special emphasis on dual-view SPIM (diSPIM) microscopy.
+Core functionality for analyzing and visualizing selective plane illumination microscopy (spim) data with special emphasis on dual-view SPIM (diSPIM) microscopy.
 
 ## Installation
 

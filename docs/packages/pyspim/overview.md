@@ -1,6 +1,6 @@
 # PySPIM Core Package
 
-The PySPIM core package provides the fundamental functionality for processing single plane illumination microscopy (SPIM) data.
+The PySPIM core package provides the fundamental functionality for processing selective plane illumination microscopy (SPIM) data.
 
 ## Overview
 
