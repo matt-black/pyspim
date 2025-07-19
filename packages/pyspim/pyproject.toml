@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyspim"
+version = "0.0.1"
+authors = [
+    {name = "Matthew Black"},
+]
+license = {text = "GPL-3.0-only"}
+description = "Core functionality for analyzing and visualizing single plane illumination microscopy (spim) data with special emphasis on dual-view SPIM (diSPIM) microscopy."
+readme = { file = "README.md", content-type = "text/markdown" }
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Testing",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)"
+]
+requires-python = ">=3.8.1"
+dependencies = [
+    "dask",
+    "dask[distributed]",
+    "fsspec>=2022.8.2",
+    "npy2bdv",
+    "numpy",
+    "pandas",
+    "pyyaml",
+    "read-roi",
+    "resource-backed-dask-array>=0.1.0",
+    "scikit-image",
+    "tifffile",
+    "tqdm",
+    "typing_extensions",
+    "zarr",
+    "cupy-cuda12x",
+    "matplotlib>=3.5.0"
+]
+
+[project.urls]
+Repository = "https://github.com/matt-black/pyspim"
+BugTracker = "https://github.com/matt-black/pyspim/issues"
+Documentation = "https://github.com/matt-black/pyspim/wiki"
+SourceCode = "https://github.com/matt-black/pyspim"
+UserSupport = "https://github.com/matt-black/pyspim/issues"
+
+[project.optional-dependencies]
+testing = [
+    "tox",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyspim"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = "pyspim"
+
+[tool.hatch.build.targets.wheel.include]
+"src/pyspim/*.yaml" = "pyspim" 

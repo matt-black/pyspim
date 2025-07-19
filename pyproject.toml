@@ -1,93 +1,52 @@
-[build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
+[project]
+name = "pyspim-monorepo"
+version = "0.1.0"
+description = "PySPIM monorepo containing core package and napari plugin"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8.1"
+authors = [
+    {name = "PySPIM Team"}
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "isort>=5.0",
+    "flake8>=6.0",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
+]
+
+[tool.uv.workspace]
+# UV workspace configuration
+members = [
+    "packages/pyspim",
+    "packages/napari-pyspim",
+]
+
+[tool.uv.sources]
+pyspim = { workspace = true }
 
 [tool.black]
-line-length = 79
+line-length = 88
+target-version = ['py38']
 
 [tool.isort]
 profile = "black"
-line_length = 79
+multi_line_output = 3
 
-[project]
-name = "pyspim"
-version = "0.0.1"
-authors = [
-    {name = "Matthew Black"},
-]
-license = {text = "GPL-3.0-only"}
-description = "Core functionality for analyzing and visualizing single plane illumination microscopy (spim) data with special emphasis on dual-view SPIM (diSPIM) microscopy."
-# readme = { file = "README.md", content-type = "text/markdown" }
-classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
-    "Intended Audience :: Developers",
-    "Topic :: Software Development :: Testing",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Operating System :: OS Independent",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)"
-]
-requires-python = ">=3.8"
-dependencies = [
-    "dask",
-    "dask[distributed]",
-    "fsspec>=2022.8.2",
-    "npy2bdv",
-    "numpy",
-    "pandas",
-    "pyyaml",
-    "read-roi",
-    "resource-backed-dask-array>=0.1.0",
-    "scikit-image",
-    "tifffile",
-    "tqdm",
-    "typing_extensions",
-    "zarr",
-    "napari>=0.4.0",
-    "napari-plugin-engine>=0.2.0",
-    "qtpy>=1.9.0",
-    "PyQt5>=5.15.0",
-    "cupy-cuda12x",
-    "matplotlib>=3.5.0"
-]
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
 
-[project.urls]
-Repository = "https://github.com/matt-black/pyspim"
-BugTracker = "https://github.com/matt-black/pyspim/issues"
-Documentation = "https://github.com/matt-black/pyspim/wiki"
-SourceCode = "https://github.com/matt-black/pyspim"
-UserSupport = "https://github.com/matt-black/pyspim/issues"
-
-[tool.setuptools.package-data]
-mypkg = ["*.yaml"]
-
-[project.optional-dependencies]
-testing = [
-    "tox",
-    "pytest",  # https://docs.pytest.org/en/latest/contents.html
-    "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
-    "pytest-qt",
-    "napari[testing]",
-]
-
-# napari plugin entry points
-[project.entry-points."napari.plugin"]
-pyspim = "napari_pyspim"
-
-[tool.pyright]
-typeCheckingMode = "off"
-reportUndefinedVariable = "error"
-reportMissingImports = "none"
-
-[tool.fawltydeps]
-ignore_unused = [
-    # None of the testing packages are imported
-    "tox",
-    "pytest",
-    "pytest-cov",
-    "pytest-qt",
-]
-output_format = "human_detailed"
+[tool.pytest.ini_options]
+testpaths = ["packages/*/tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
