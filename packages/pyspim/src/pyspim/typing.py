@@ -3,7 +3,7 @@ from typing import List, Tuple, Union
 try:
     import cupy
 except ImportError:
-    import numpy as cupy    
+    import numpy as cupy
 import numpy
 
 # many of the functions in this library will accept either a NumPy or CuPy
@@ -16,24 +16,24 @@ NDArray = Union[numpy.ndarray, cupy.ndarray]
 # are (lower, upper) bounds for the bounding box
 # example: ((0, 10), (5, 20)) is a 2d bounding box that could be used to
 #          crop `im` like im[0:10,5:20]
-BBox2D = Tuple[Tuple[int,int],Tuple[int,int]]
-BBox3D = Tuple[Tuple[int,int],Tuple[int,int],Tuple[int,int]]
+BBox2D = Tuple[Tuple[int, int], Tuple[int, int]]
+BBox3D = Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]
 
 # type for specifying padding
 # mostly used for deconvolution but useful for any function
 # that pads an image and takes the amount of padding as input
-PadType = Union[int,List[int],Tuple[int]]
+PadType = Union[int, List[int], Tuple[int]]
 
 # type for specifying slices for windows
-SliceWindow4D = Tuple[slice,slice,slice,slice]
-SliceWindow3D = Tuple[slice,slice,slice]
-SliceWindow2D = Tuple[slice,slice]
-SliceWindow = SliceWindow4D|SliceWindow3D|SliceWindow2D
+SliceWindow4D = Tuple[slice, slice, slice, slice]
+SliceWindow3D = Tuple[slice, slice, slice]
+SliceWindow2D = Tuple[slice, slice]
+SliceWindow = SliceWindow4D | SliceWindow3D | SliceWindow2D
 
 # convenience type for specifying CUDA kernel launch parameters
-CuLaunchParameters = Tuple[Tuple[int,int,int], Tuple[int,int,int]]
+CuLaunchParameters = Tuple[Tuple[int, int, int], Tuple[int, int, int]]
 
 # type for formulating optimization bounds
 # can be either specified as a range, or as a margin
-OptBounds = List[Tuple[float,float]]
+OptBounds = List[Tuple[float, float]]
 OptBoundMargins = List[float]

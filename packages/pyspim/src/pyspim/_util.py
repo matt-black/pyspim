@@ -1,5 +1,5 @@
-"""private utilities
-"""
+"""private utilities"""
+
 import json
 import types
 import typing
@@ -7,20 +7,20 @@ from collections.abc import Iterable
 from functools import partial
 
 import cupy
+import cupyx.scipy
+import cupyx.scipy.fft as fftgpu
 import numpy
 
 # scipy
 import scipy
-import cupyx.scipy
-import cupyx.scipy.fft as fftgpu
 import scipy.fft as fftcpu
-from scipy import ndimage as ndi_cpu
-from cupyx.scipy import ndimage as ndi_gpu
-# cupy.cuda
-from cupy.cuda import texture
-from cupy.cuda import runtime
 
-from .typing import NDArray, BBox2D, BBox3D, CuLaunchParameters
+# cupy.cuda
+from cupy.cuda import runtime, texture
+from cupyx.scipy import ndimage as ndi_gpu
+from scipy import ndimage as ndi_cpu
+
+from .typing import BBox2D, BBox3D, CuLaunchParameters, NDArray
 
 
 def get_fft_module(arr_or_xp) -> types.ModuleType:
@@ -81,13 +81,13 @@ def get_ndimage_module(arr_or_xp) -> types.ModuleType:
 
 
 ## misc. support functions
-def supported_float_type(input_dtype, allow_complex : bool=False):
+def supported_float_type(input_dtype, allow_complex: bool = False):
     """supported_float_type Return an appropriate floating-point dtype for given dtype.
         float32, float64, complex64, complex128 are preserved.
         float16 is promoted to float32.
         complex256 is demoted to complex128.
         Other types are cast to float64.
-    
+
     Args:
         input_dtype (_type_): the input dtype.
         allow_complex (bool, optional): let this function return a complex dtype. Defaults to False.
@@ -100,31 +100,31 @@ def supported_float_type(input_dtype, allow_complex : bool=False):
     """
     new_float_type = {
         # preserved types
-        'f': cupy.float32,     # float32
-        'd': cupy.float64,     # float64
-        'F': cupy.complex64,   # complex64
-        'D': cupy.complex128,  # complex128
+        "f": cupy.float32,  # float32
+        "d": cupy.float64,  # float64
+        "F": cupy.complex64,  # complex64
+        "D": cupy.complex128,  # complex128
         # promoted float types
-        'e': cupy.float32,     # float16
+        "e": cupy.float32,  # float16
         # truncated float types
-        'g': cupy.float64,     # float128 (doesn't exist on windows)
-        'G': cupy.complex128,  # complex256 (doesn't exist on windows)
+        "g": cupy.float64,  # float128 (doesn't exist on windows)
+        "G": cupy.complex128,  # complex256 (doesn't exist on windows)
         # integer types that can be exactly represented in float32
-        'b': cupy.float32,     # int8
-        'B': cupy.float32,     # uint8
-        'h': cupy.float32,     # int16
-        'H': cupy.float32,     # uint16
-        '?': cupy.float32,     # bool
+        "b": cupy.float32,  # int8
+        "B": cupy.float32,  # uint8
+        "h": cupy.float32,  # int16
+        "H": cupy.float32,  # uint16
+        "?": cupy.float32,  # bool
     }
     if isinstance(input_dtype, Iterable) and not isinstance(input_dtype, str):
         return cupy.result_type(*(supported_float_type(d) for d in input_dtype))
     input_dtype = cupy.dtype(input_dtype)
-    if not allow_complex and input_dtype.kind == 'c':
+    if not allow_complex and input_dtype.kind == "c":
         raise ValueError("complex valued input is not supported")
     return new_float_type.get(input_dtype.char, cupy.float64)
 
 
-def is_floating_point(x : NDArray) -> bool:
+def is_floating_point(x: NDArray) -> bool:
     """is_floating_point Boolean indicator for if input is a floating point dtype
 
     Args:
@@ -138,7 +138,7 @@ def is_floating_point(x : NDArray) -> bool:
 
 
 ## padding/shape utilities
-def shape_for_divisible(shp : Iterable[int], *div) -> typing.List[int]:
+def shape_for_divisible(shp: Iterable[int], *div) -> typing.List[int]:
     """shape_for_divisible Compute the shape >= input that is divisible in each dimension.
 
     Args:
@@ -148,8 +148,7 @@ def shape_for_divisible(shp : Iterable[int], *div) -> typing.List[int]:
         typing.List[int]: largest size smaller than dimension divisible by input arg
     """
     out = []
-    assert len(shp) == len(div), \
-        "must give one division/dimension"
+    assert len(shp) == len(div), "must give one division/dimension"
     for dim, d in zip(shp, div):
         if dim % d == 0:
             out.append(dim)
@@ -158,7 +157,7 @@ def shape_for_divisible(shp : Iterable[int], *div) -> typing.List[int]:
     return out
 
 
-def pad_to_shape_right(vol : NDArray, shape : Iterable[int], **kwargs) -> NDArray:
+def pad_to_shape_right(vol: NDArray, shape: Iterable[int], **kwargs) -> NDArray:
     """pad_to_shape_right Pad input volume only on RHS so that it has specified `shape`.
 
     Args:
@@ -166,39 +165,41 @@ def pad_to_shape_right(vol : NDArray, shape : Iterable[int], **kwargs) -> NDArra
         shape (Iterable[int]): desired output shape
         **kwargs: keyword arguments passed to `numpy.pad` or `cupy.pad`
     Returns:
-        NDArray: 
+        NDArray:
     """
     xp = cupy.get_array_module(vol)
     s_, v_ = list(shape), []
     for i, _ in enumerate(s_):
         v_.append(vol.shape[i])
-    pads = [s-v for s, v in zip(s_, v_)]
-    assert all([p>=0 for p in pads]), "all dims must be >= output shape"
+    pads = [s - v for s, v in zip(s_, v_)]
+    assert all([p >= 0 for p in pads]), "all dims must be >= output shape"
     pads = tuple([tuple([0, p]) for p in pads])
     return xp.pad(vol, pads, **kwargs)
 
 
-def unpad_to_shape_right(vol : NDArray, shape : Iterable[int]) -> NDArray:
+def unpad_to_shape_right(vol: NDArray, shape: Iterable[int]) -> NDArray:
     s_, v_ = list(shape), []
     for i, _ in enumerate(s_):
         v_.append(vol.shape[i])
-    pads = [v-s for v, s in zip(v_, s_)]
-    assert all([p>=0 for p in pads]), \
+    pads = [v - s for v, s in zip(v_, s_)]
+    assert all([p >= 0 for p in pads]), (
         "output shape must be lte than current in all dimensions"
+    )
     starts = [0 for _ in pads]
-    ends = [v-p for v, p in zip(v_, pads)]
+    ends = [v - p for v, p in zip(v_, pads)]
     slices = tuple([slice(s, e) for s, e in zip(starts, ends)])
     return vol[slices]
 
 
-def pad_to_same_size(a : NDArray, b : NDArray, style='center', **kwargs) -> \
-    typing.Tuple[NDArray, NDArray]:
-    if style == 'center':
+def pad_to_same_size(
+    a: NDArray, b: NDArray, style="center", **kwargs
+) -> typing.Tuple[NDArray, NDArray]:
+    if style == "center":
         pad_fun = pad_to_shape_center
-    elif style == 'right':
+    elif style == "right":
         pad_fun = pad_to_shape_right
     else:
-        raise ValueError('invalid padding style')
+        raise ValueError("invalid padding style")
     if len(a.shape) == 3:
         za, ya, xa = a.shape
         zb, yb, xb = b.shape
@@ -206,16 +207,17 @@ def pad_to_same_size(a : NDArray, b : NDArray, style='center', **kwargs) -> \
         fn = partial(pad_fun, shape=[z, y, x], **kwargs)
         return fn(a), fn(b)
     else:
-        assert len(a.shape) == 2, \
-            'must be 2d image if not a 3d volume, is {:d}d'.format(len(a.shape))
+        assert len(a.shape) == 2, (
+            f"must be 2d image if not a 3d volume, is {len(a.shape):d}d"
+        )
         ya, xa = a.shape
         yb, xb = b.shape
         y, x = max([ya, yb]), max([xa, xb])
-        fn = partial(pad_fun, shape=[y,x], **kwargs)
-        return fn(a), fn(b) 
+        fn = partial(pad_fun, shape=[y, x], **kwargs)
+        return fn(a), fn(b)
 
 
-def pad_to_shape_center(vol : NDArray, shape, **kwargs) -> NDArray:
+def pad_to_shape_center(vol: NDArray, shape, **kwargs) -> NDArray:
     """pad input volume to specified shape
         padding is done such that original volume is centered in the output
         `**kwargs` are passed to underlying `numpy.pad` or `cupy.pad` function
@@ -231,15 +233,15 @@ def pad_to_shape_center(vol : NDArray, shape, **kwargs) -> NDArray:
     s_, v_ = list(shape), []
     for i, s in enumerate(s_):
         v_.append(vol.shape[i])
-    pads = [s-v for s, v in zip(s_, v_)]
-    assert all([p>=0 for p in pads]), "all dims must be >= output shape"
-    left_pads = [p//2 for p in pads]
-    right_pads = [p//2 + p%2 for p in pads]
+    pads = [s - v for s, v in zip(s_, v_)]
+    assert all([p >= 0 for p in pads]), "all dims must be >= output shape"
+    left_pads = [p // 2 for p in pads]
+    right_pads = [p // 2 + p % 2 for p in pads]
     pads = tuple([tuple([l, r]) for l, r in zip(left_pads, right_pads)])
     return xp.pad(vol, pads, **kwargs)
 
 
-def unpad_to_shape_center(vol : NDArray, shape) -> NDArray:
+def unpad_to_shape_center(vol: NDArray, shape) -> NDArray:
     """inverse of `pad_to_shape`, gets rid of padding at volume edges
 
     :param vol: input, padded volume
@@ -252,17 +254,19 @@ def unpad_to_shape_center(vol : NDArray, shape) -> NDArray:
     s_, v_ = list(shape), []
     for i, _ in enumerate(s_):
         v_.append(vol.shape[i])
-    pads = [v-s for v, s in zip(v_, s_)]
-    assert all([p>=0 for p in pads]), \
+    pads = [v - s for v, s in zip(v_, s_)]
+    assert all([p >= 0 for p in pads]), (
         "output shape must be lte than current in all dimensions"
-    starts = [p//2 for p in pads]
-    ends = [v-(p//2 + p%2) for v, p in zip(v_, pads)]
+    )
+    starts = [p // 2 for p in pads]
+    ends = [v - (p // 2 + p % 2) for v, p in zip(v_, pads)]
     slices = tuple([slice(s, e) for s, e in zip(starts, ends)])
     return vol[slices]
 
 
-def pad_to_same_size_center(a : NDArray, b : NDArray,
-                            **kwargs) -> typing.Tuple[NDArray,NDArray]:
+def pad_to_same_size_center(
+    a: NDArray, b: NDArray, **kwargs
+) -> typing.Tuple[NDArray, NDArray]:
     """pad input volumes so that they are the same size
         finds smallest possible padding in each dimension to add so that the
         shared size is as small as possible
@@ -283,15 +287,15 @@ def pad_to_same_size_center(a : NDArray, b : NDArray,
         fn = partial(pad_to_shape_center, shape=[z, y, x], **kwargs)
         return fn(a), fn(b)
     else:
-        assert len(a.shape) == 2, 'must be 2d image if not a 3d volume'
+        assert len(a.shape) == 2, "must be 2d image if not a 3d volume"
         ya, xa = a.shape
         yb, xb = b.shape
         y, x = max([ya, yb]), max([xa, xb])
-        fn = partial(pad_to_shape_center, shape=[y,x], **kwargs)
+        fn = partial(pad_to_shape_center, shape=[y, x], **kwargs)
         return fn(a), fn(b)
 
 
-def center_crop(vol : NDArray, *args) -> NDArray:
+def center_crop(vol: NDArray, *args) -> NDArray:
     """crop out the center of the input volume
 
     :param vol: input volume
@@ -301,13 +305,11 @@ def center_crop(vol : NDArray, *args) -> NDArray:
     """
     # unpack args into crop_z, crop_r, crop_c
     n_dim = len(vol.shape)
-    assert n_dim == 2 or n_dim == 3, \
-        "input must be 2D image or 3D volume"
+    assert n_dim == 2 or n_dim == 3, "input must be 2D image or 3D volume"
     if len(args) == 1:
         crop_z, crop_r, crop_c = args[0], args[0], args[0]
     else:
-        assert len(args) == n_dim, \
-            "must specify either 1 or `n_dim` crop inputs"
+        assert len(args) == n_dim, "must specify either 1 or `n_dim` crop inputs"
         if n_dim == 2:
             crop_r, crop_c = args[0], args[1]
         else:  # n_dim == 3
@@ -323,12 +325,12 @@ def center_crop(vol : NDArray, *args) -> NDArray:
     sr = size_r // 2 - crop_r // 2
     sc = size_c // 2 - crop_c // 2
     if n_dim == 2:
-        return vol[sr:sr+crop_r,sc:sc+crop_c]
+        return vol[sr : sr + crop_r, sc : sc + crop_c]
     else:
-        return vol[sz:sz+crop_z,sr:sr+crop_r,sc:sc+crop_c]
+        return vol[sz : sz + crop_z, sr : sr + crop_r, sc : sc + crop_c]
 
 
-def bbox_for_mask(m : NDArray) -> typing.Union[BBox2D, BBox3D]:
+def bbox_for_mask(m: NDArray) -> typing.Union[BBox2D, BBox3D]:
     """calculate bounding box encompassing 'on' pixels of mask
 
     :param m: input mask
@@ -336,8 +338,7 @@ def bbox_for_mask(m : NDArray) -> typing.Union[BBox2D, BBox3D]:
     :returns: bounding box for mask
     :rtype: Union[BBox2D, BBox3D]
     """
-    assert len(m.shape) == 2 or len(m.shape) == 3, \
-        "input mask must be 2- or 3-D"
+    assert len(m.shape) == 2 or len(m.shape) == 3, "input mask must be 2- or 3-D"
     xp = cupy.get_array_module(m)
     if len(m.shape) == 3:
         z, y, x = xp.where(m)
@@ -353,8 +354,8 @@ def bbox_for_mask(m : NDArray) -> typing.Union[BBox2D, BBox3D]:
 
 
 def shared_bbox_from_proj_threshold(
-        v1 : NDArray, v2 : NDArray,
-        proj_fun : str='max', thresh_val : float=0) -> BBox3D:
+    v1: NDArray, v2: NDArray, proj_fun: str = "max", thresh_val: float = 0
+) -> BBox3D:
     """determine region shared by both volumes by thresholding
         'shared' means that both have data in the region
 
@@ -370,25 +371,26 @@ def shared_bbox_from_proj_threshold(
     :returns: 3d bounding box of region common to `v1` and `v2`
     :rtype: BBox3D
     """
-    assert proj_fun in ('max', 'mean', 'median'), \
+    assert proj_fun in ("max", "mean", "median"), (
         "invalid `proj_fun` must be one of ('max', 'mean', 'median')"
+    )
     xp = cupy.get_array_module(v1)
-    if proj_fun == 'max':
+    if proj_fun == "max":
         fun = xp.amax
-    elif proj_fun == 'mean':
+    elif proj_fun == "mean":
         fun = xp.mean
     else:
-        fun = 'median'
+        fun = "median"
     bb_yx = bbox_for_mask(
-        xp.logical_and(fun(v1, 0)>thresh_val, fun(v2, 0)>thresh_val)
+        xp.logical_and(fun(v1, 0) > thresh_val, fun(v2, 0) > thresh_val)
     )
     bb_yx = [0, xp.inf] + list(bb_yx[0]) + list(bb_yx[1])
     bb_zx = bbox_for_mask(
-        xp.logical_and(fun(v1, 1)>thresh_val, fun(v2, 1)>thresh_val)
+        xp.logical_and(fun(v1, 1) > thresh_val, fun(v2, 1) > thresh_val)
     )
     bb_zx = list(bb_zx[0]) + [0, xp.inf] + list(bb_zx[1])
     bb_zy = bbox_for_mask(
-        xp.logical_and(fun(v1, 2)>thresh_val, fun(v2, 2)>thresh_val)
+        xp.logical_and(fun(v1, 2) > thresh_val, fun(v2, 2) > thresh_val)
     )
     bb_zy = list(bb_zy[0]) + list(bb_zy[1]) + [0, xp.inf]
     bb = numpy.vstack([bb_yx, bb_zx, bb_zy])
@@ -399,10 +401,9 @@ def shared_bbox_from_proj_threshold(
 
 
 ## texture utilities
-def create_texture_object(data : NDArray,
-                          address_mode: str,
-                          filter_mode: str,
-                          read_mode: str):
+def create_texture_object(
+    data: NDArray, address_mode: str, filter_mode: str, read_mode: str
+):
     """create_texture_object Make a texture object from input array.
 
     Args:
@@ -421,48 +422,46 @@ def create_texture_object(data : NDArray,
     elif cupy.issubdtype(data.dtype, cupy.floating):
         fmt_kind = runtime.cudaChannelFormatKindFloat
     else:
-        raise ValueError('Unsupported data type')
-    if address_mode == 'wrap':
+        raise ValueError("Unsupported data type")
+    if address_mode == "wrap":
         address_mode = runtime.cudaAddressModeWrap
-    elif address_mode == 'clamp':
+    elif address_mode == "clamp":
         address_mode = runtime.cudaAddressModeClamp
-    elif address_mode == 'mirror':
+    elif address_mode == "mirror":
         address_mode = runtime.cudaAddressModeMirror
-    elif address_mode == 'border':
+    elif address_mode == "border":
         address_mode = runtime.cudaAddressModeBorder
     else:
         raise ValueError(
-            'Unsupported address mode '
-            '(supported: wrap, clamp, mirror, border)')
-    if filter_mode == 'nearest':
+            "Unsupported address mode (supported: wrap, clamp, mirror, border)"
+        )
+    if filter_mode == "nearest":
         filter_mode = runtime.cudaFilterModePoint
-    elif filter_mode == 'linear':
+    elif filter_mode == "linear":
         filter_mode = runtime.cudaFilterModeLinear
     else:
-        raise ValueError(
-            'Unsupported filter mode (supported: nearest, linear)')
-    if read_mode == 'element_type':
+        raise ValueError("Unsupported filter mode (supported: nearest, linear)")
+    if read_mode == "element_type":
         read_mode = runtime.cudaReadModeElementType
-    elif read_mode == 'normalized_float':
+    elif read_mode == "normalized_float":
         read_mode = runtime.cudaReadModeNormalizedFloat
     else:
         raise ValueError(
-            'Unsupported read mode '
-            '(supported: element_type, normalized_float)')
-    texture_fmt = texture.ChannelFormatDescriptor(
-        data.itemsize * 8, 0, 0, 0, fmt_kind)
+            "Unsupported read mode (supported: element_type, normalized_float)"
+        )
+    texture_fmt = texture.ChannelFormatDescriptor(data.itemsize * 8, 0, 0, 0, fmt_kind)
     array = texture.CUDAarray(texture_fmt, *data.shape[::-1])
-    res_desc = texture.ResourceDescriptor(
-        runtime.cudaResourceTypeArray, cuArr=array)
+    res_desc = texture.ResourceDescriptor(runtime.cudaResourceTypeArray, cuArr=array)
     tex_desc = texture.TextureDescriptor(
-        (address_mode, ) * data.ndim, filter_mode, read_mode)
+        (address_mode,) * data.ndim, filter_mode, read_mode
+    )
     tex_obj = texture.TextureObject(res_desc, tex_desc)
     array.copy_from(data)
     return tex_obj, array
 
 
 ## image processing utilities
-def threshold_triangle(im : NDArray, nbins : int=256) -> float:
+def threshold_triangle(im: NDArray, nbins: int = 256) -> float:
     """threshold_triangle Compute threshold value by triangle method. Copied from `skimage.filters` but modified so that numpy or cupy is used based on input device.
 
     Args:
@@ -473,7 +472,7 @@ def threshold_triangle(im : NDArray, nbins : int=256) -> float:
         float
     """
     xp = cupy.get_array_module(im)
-    
+
     hist, bin_edges = xp.histogram(im, bins=nbins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     nbins = len(hist)
@@ -492,7 +491,7 @@ def threshold_triangle(im : NDArray, nbins : int=256) -> float:
 
     # If flip == True, arg_hlev becomes incorrect
     # but we don't need it anymore.
-    del(arg_hlev)
+    del arg_hlev
 
     # set up coordinate system
     width = arg_pk_hgt - arg_llev
@@ -513,14 +512,13 @@ def threshold_triangle(im : NDArray, nbins : int=256) -> float:
     return bin_centers[arg_level]
 
 
-def _cuda_gridsize_for_blocksize(dim : int, block_size : int) -> int:
+def _cuda_gridsize_for_blocksize(dim: int, block_size: int) -> int:
     return (dim + block_size - 1) // block_size
 
 
-def launch_params_for_volume(shp : Iterable[int], 
-                             block_size_z : int, 
-                             block_size_r : int,
-                             block_size_c : int) -> CuLaunchParameters:
+def launch_params_for_volume(
+    shp: Iterable[int], block_size_z: int, block_size_r: int, block_size_c: int
+) -> CuLaunchParameters:
     """launch_params_for_volume Automatically calculate good launch parameters for CUDA kernel that will be run on a volume of specified `shape`.
 
     Args:
@@ -548,9 +546,9 @@ class NumpyArrayEncoder(json.JSONEncoder):
         elif isinstance(obj, numpy.integer):
             return int(obj)
         return super().default(obj)
-    
 
-def uint16_to_uint8(a : NDArray, max_val : float = 65535) -> NDArray:
+
+def uint16_to_uint8(a: NDArray, max_val: float = 65535) -> NDArray:
     """uint16_to_uint8 Convert input of type uint16 to uint8.
 
     Args:
@@ -561,4 +559,4 @@ def uint16_to_uint8(a : NDArray, max_val : float = 65535) -> NDArray:
         NDArray
     """
     xp = cupy.get_array_module(a)
-    return xp.clip(xp.round(a*(255.0/max_val)), 0, 255).astype(xp.uint8)
+    return xp.clip(xp.round(a * (255.0 / max_val)), 0, 255).astype(xp.uint8)

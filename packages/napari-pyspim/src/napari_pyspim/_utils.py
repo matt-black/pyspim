@@ -2,22 +2,23 @@
 Utility functions for the napari-pyspim plugin.
 """
 
-import os
 import json
+import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
 import numpy as np
 
 
 def save_workflow_parameters(output_path: str, parameters: Dict[str, Any]) -> None:
     """Save workflow parameters to a JSON file."""
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(parameters, f, indent=2, default=str)
 
 
 def load_workflow_parameters(input_path: str) -> Dict[str, Any]:
     """Load workflow parameters from a JSON file."""
-    with open(input_path, 'r') as f:
+    with open(input_path) as f:
         return json.load(f)
 
 
@@ -47,16 +48,16 @@ def validate_data_path(path: str) -> bool:
     """Validate that a data path exists and contains expected files."""
     if not os.path.exists(path):
         return False
-    
+
     # Check for common μManager file patterns
-    expected_files = ['metadata.txt', 'Pos0', 'Pos1']
+    expected_files = ["metadata.txt", "Pos0", "Pos1"]
     path_obj = Path(path)
-    
+
     # Check if any expected files exist
     for file_pattern in expected_files:
         if list(path_obj.glob(f"*{file_pattern}*")):
             return True
-    
+
     # If no expected files, check if it's a directory with subdirectories
     return any(path_obj.iterdir())
 
@@ -73,22 +74,22 @@ def get_default_psf_paths() -> tuple[str, str]:
     common_paths = [
         "/scratch/gpfs/SHAEVITZ/dispim/extract_spindles",
         "/projects/SHAEVITZ/dispim/psfs",
-        os.path.expanduser("~/dispim/psfs")
+        os.path.expanduser("~/dispim/psfs"),
     ]
-    
+
     for path in common_paths:
         psf_a = os.path.join(path, "PSFA_500.npy")
         psf_b = os.path.join(path, "PSFB_500.npy")
         if os.path.exists(psf_a) and os.path.exists(psf_b):
             return psf_a, psf_b
-    
+
     return "", ""
 
 
 def estimate_processing_time(shape: tuple, iterations: int = 20) -> str:
     """Estimate processing time based on data size and parameters."""
     total_pixels = np.prod(shape)
-    
+
     # Rough estimates based on typical processing speeds
     # These are very approximate and depend on hardware
     if total_pixels < 10**7:  # < 10M pixels
@@ -99,7 +100,7 @@ def estimate_processing_time(shape: tuple, iterations: int = 20) -> str:
         time_minutes = iterations * 2
     else:  # > 1B pixels
         time_minutes = iterations * 10
-    
+
     if time_minutes < 60:
         return f"~{time_minutes:.1f} minutes"
     else:
@@ -114,4 +115,4 @@ def format_shape_string(shape: tuple) -> str:
     elif len(shape) == 2:
         return f"{shape[0]}×{shape[1]} (Y×X)"
     else:
-        return str(shape) 
+        return str(shape)
