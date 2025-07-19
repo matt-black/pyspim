@@ -34,10 +34,12 @@ dependencies = [
     "h5py>=3.0.0",
     "zarr>=2.10.0",
     "dask>=2021.0.0",
-    "cupy>=10.0.0",
 ]
 
 [project.optional-dependencies]
+gpu = [
+    "cupy>=10.0.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
