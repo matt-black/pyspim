@@ -19,24 +19,24 @@ theme:
     # Palette toggle for automatic mode
     - media: "(prefers-color-scheme)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: deep purple
+      accent: deep purple
       toggle:
         icon: material/brightness-auto
         name: Switch to light mode
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: deep purple
+      accent: deep purple
       toggle:
         icon: material/brightness-7
         name: Switch to system preference
     # Palette toggle for dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: deep purple
+      accent: deep purple
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -78,6 +78,7 @@ theme:
   # Icon
   icon:
     repo: fontawesome/brands/github
+    logo: material/microscope
 
 # Plugins
 plugins:
@@ -152,11 +153,9 @@ markdown_extensions:
   - pymdownx.tilde
 
 # Extra CSS and JS
-extra_css:
-  - stylesheets/extra.css
+extra_css: []
 
 extra_javascript:
-  - javascripts/mathjax.js
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
@@ -177,6 +176,7 @@ nav:
     - API Reference: packages/napari-pyspim/api.md
   - Examples:
     - Basic Usage: examples/basic-usage.md
+    - Fruiting Body Workflow: examples/fruiting-body-workflow.md
     - Advanced Features: examples/advanced-features.md
     - Notebooks: examples/notebooks.md
   - Development:
