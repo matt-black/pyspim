@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "napari-pyspim"
+version = "0.0.1"
+authors = [
+    {name = "Matthew Black"},
+]
+license = {text = "GPL-3.0-only"}
+description = "A napari plugin for diSPIM processing pipeline"
+readme = { file = "README.md", content-type = "text/markdown" }
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Framework :: napari"
+]
+requires-python = ">=3.8.1"
+dependencies = [
+    "pyspim",
+    "napari>=0.4.0",
+    "npe2>=0.7.0",
+    "qtpy>=1.9.0",
+    "PyQt5>=5.15.0",
+    "cupy-cuda12x",
+    "matplotlib>=3.5.0"
+]
+
+[project.urls]
+Repository = "https://github.com/matt-black/pyspim"
+BugTracker = "https://github.com/matt-black/pyspim/issues"
+Documentation = "https://github.com/matt-black/pyspim/wiki"
+SourceCode = "https://github.com/matt-black/pyspim"
+UserSupport = "https://github.com/matt-black/pyspim/issues"
+
+[project.optional-dependencies]
+testing = [
+    "tox",
+    "pytest",
+    "pytest-cov",
+    "pytest-qt",
+    "napari[testing]",
+]
+
+# npe2 manifest is defined in napari.yaml
+
+[project.entry-points."napari.manifest"]
+napari-pyspim = "napari_pyspim:napari.yaml"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/napari_pyspim"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = "napari_pyspim"
+
+[tool.hatch.build.targets.wheel.include]
+"src/napari_pyspim/*.yaml" = "napari_pyspim"
+

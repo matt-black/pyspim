@@ -10,7 +10,6 @@ This widget provides a tabbed interface for all processing steps:
 """
 
 from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget
-
 from ._data_loader import DataLoaderWidget
 from ._roi_detection import RoiDetectionWidget
 from ._deskewing import DeskewingWidget

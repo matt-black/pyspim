@@ -14,7 +14,8 @@ from qtpy.QtWidgets import (
 from qtpy.QtCore import Signal, QThread
 from PyQt5.QtCore import pyqtSignal
 
-from pyspim.decon.rl.dualview_fft import deconvolve_chunkwise
+# Lazy import to avoid CUDA compilation at module level
+# from pyspim.decon.rl.dualview_fft import deconvolve_chunkwise
 
 
 class DeconvolutionWorker(QThread):
@@ -42,6 +43,9 @@ class DeconvolutionWorker(QThread):
     def run(self):
         """Perform deconvolution in background thread."""
         try:
+            # Lazy import to avoid CUDA compilation at module level
+            from pyspim.decon.rl.dualview_fft import deconvolve_chunkwise
+            
             self.progress_updated.emit("Setting up deconvolution...")
             
             # Create temporary zarr arrays

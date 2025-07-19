@@ -13,7 +13,8 @@ from qtpy.QtCore import Signal, QThread
 from PyQt5.QtCore import pyqtSignal
 import numpy as np
 
-from pyspim.data import dispim as data
+# Lazy import to avoid CUDA compilation at module level
+# from pyspim.data import dispim as data
 
 
 class DataLoaderWorker(QThread):
@@ -30,6 +31,9 @@ class DataLoaderWorker(QThread):
     def run(self):
         """Load the data in background thread."""
         try:
+            # Lazy import to avoid CUDA compilation at module level
+            from pyspim.data import dispim as data
+            
             with data.uManagerAcquisition(self.data_path, False, np) as acq:
                 a_raw = acq.get('a', 0, 0)
                 b_raw = acq.get('b', 0, 0)
