@@ -131,9 +131,10 @@ just check
 
 We provide sample data and scripts for testing:
 
-- **Jupyter Notebook**: `examples/data/sample_data/basic_usage.ipynb`
-- **SLURM Scripts**: `examples/data/sample_data/sh/*.sh`
-- **Documentation**: See [examples/basic-usage.md](examples/basic-usage.md)
+- **Fruiting Body Subset**: `docs/examples/data/fruiting_body_subset/` - Complete workflow demonstration
+- **Jupyter Notebook**: `docs/examples/fruiting_body_workflow.ipynb` - Step-by-step tutorial
+- **SLURM Scripts**: `examples/data/sample_data/sh/*.sh` - Batch processing examples
+- **Documentation**: See [examples/fruiting-body-workflow.md](examples/fruiting-body-workflow.md)
 
 ## Contributing
 

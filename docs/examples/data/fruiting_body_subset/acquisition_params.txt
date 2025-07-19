@@ -1,0 +1,5 @@
+step_size: 0.5
+pixel_size: 0.1625
+theta: 0.7853981633974483
+camera_offset: 100
+description: Acquisition parameters for fruiting body subset demo
