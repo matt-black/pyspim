@@ -192,3 +192,4 @@ examples/data/example_dispim_data/
 # Keep sample data for GitHub
 !examples/data/sample_data/
 tools/script/profiling/test_deskew_results/
+.vscode/
