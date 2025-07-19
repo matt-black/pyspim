@@ -9,12 +9,14 @@ packages = {
     "pyspim": {
         "path": "packages/pyspim/src/pyspim",
         "output": "packages/pyspim/api.md",
-        "title": "PySPIM Core API Reference"
+        "title": "PySPIM Core API Reference",
+        "module": "pyspim"
     },
     "napari-pyspim": {
         "path": "packages/napari-pyspim/src/napari_pyspim", 
         "output": "packages/napari-pyspim/api.md",
-        "title": "Napari PySPIM Plugin API Reference"
+        "title": "Napari PySPIM Plugin API Reference",
+        "module": "napari_pyspim"
     }
 }
 
@@ -24,6 +26,7 @@ def generate_api_docs():
     for package_name, config in packages.items():
         package_path = Path(config["path"])
         output_path = config["output"]
+        module_name = config["module"]
         
         if not package_path.exists():
             print(f"Warning: Package path {package_path} does not exist")
@@ -32,7 +35,7 @@ def generate_api_docs():
         # Create the API reference page
         with mkdocs_open(output_path, "w") as f:
             f.write(f"# {config['title']}\n\n")
-            f.write("::: pyspim\n")
+            f.write(f"::: {module_name}\n")
             f.write("    options:\n")
             f.write("      show_root_heading: true\n")
             f.write("      show_source: true\n")
@@ -60,9 +63,9 @@ def generate_api_docs():
                     
                 # Convert file path to module path
                 module_path = py_file.relative_to(package_path.parent)
-                module_name = str(module_path).replace("/", ".").replace("\\", ".").replace(".py", "")
+                full_module_name = str(module_path).replace("/", ".").replace("\\", ".").replace(".py", "")
                 
-                f.write(f"::: {module_name}\n")
+                f.write(f"::: {full_module_name}\n")
                 f.write("    options:\n")
                 f.write("      show_root_heading: true\n")
                 f.write("      show_source: true\n")

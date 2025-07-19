@@ -2,12 +2,14 @@
 ROI detection widget for automated and manual region of interest detection and cropping.
 """
 
+import math
 from PyQt5.QtCore import pyqtSignal
-from qtpy.QtCore import QThread, Signal
+from qtpy.QtCore import QThread
 from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QLabel,
@@ -15,6 +17,7 @@ from qtpy.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -99,7 +102,7 @@ class RoiDetectionWorker(QThread):
 class RoiDetectionWidget(QWidget):
     """Widget for ROI detection and cropping."""
 
-    roi_applied = Signal(dict)
+    roi_applied = pyqtSignal(dict)
 
     def __init__(self, viewer):
         super().__init__()
@@ -112,6 +115,22 @@ class RoiDetectionWidget(QWidget):
     def setup_ui(self):
         """Set up the user interface."""
         layout = QVBoxLayout()
+
+        # Layer selection
+        layer_group = QGroupBox("Layer Selection")
+        layer_layout = QFormLayout()
+
+        self.layer_a_combo = QComboBox()
+        self.layer_a_combo.addItem("Select Channel A layer...")
+        self.layer_a_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+
+        self.layer_b_combo = QComboBox()
+        self.layer_b_combo.addItem("Select Channel B layer...")
+        self.layer_b_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+
+        layer_layout.addRow("Channel A:", self.layer_a_combo)
+        layer_layout.addRow("Channel B:", self.layer_b_combo)
+        layer_group.setLayout(layer_layout)
 
         # Channel selection
         channel_group = QGroupBox("Channel Selection")
@@ -138,36 +157,43 @@ class RoiDetectionWidget(QWidget):
         method_layout = QFormLayout()
 
         self.method_combo = QComboBox()
-        self.method_combo.addItems(["otsu", "triangle", "manual"])
+        self.method_combo.addItems(["otsu", "triangle"])
         self.method_combo.setCurrentText("otsu")
         self.method_combo.currentTextChanged.connect(self.on_method_changed)
 
         method_layout.addRow("Threshold Method:", self.method_combo)
         method_group.setLayout(method_layout)
 
-        # Manual ROI instructions
-        self.manual_instructions = QLabel(
-            "For manual ROI: Use napari's rectangle selection tool to draw a ROI, "
-            "then click 'Apply Manual ROI'"
-        )
-        self.manual_instructions.setWordWrap(True)
-        self.manual_instructions.setVisible(False)
+        # Acquisition parameters (for reference and metadata)
+        acq_group = QGroupBox("Acquisition Parameters")
+        acq_layout = QFormLayout()
 
-        # Manual ROI button
-        self.manual_roi_button = QPushButton("Apply Manual ROI")
-        self.manual_roi_button.clicked.connect(self.apply_manual_roi)
-        self.manual_roi_button.setVisible(False)
-        self.manual_roi_button.setEnabled(False)
+        self.step_size_spin = QDoubleSpinBox()
+        self.step_size_spin.setRange(0.1, 10.0)
+        self.step_size_spin.setValue(0.5)
+        self.step_size_spin.setSuffix(" μm")
+        self.step_size_spin.setDecimals(3)
 
-        # Skip ROI option
-        self.skip_roi_checkbox = QCheckBox("Skip ROI detection (use full image)")
-        self.skip_roi_checkbox.toggled.connect(self.on_skip_roi_toggled)
+        self.pixel_size_spin = QDoubleSpinBox()
+        self.pixel_size_spin.setRange(0.01, 1.0)
+        self.pixel_size_spin.setValue(0.1625)
+        self.pixel_size_spin.setSuffix(" μm")
+        self.pixel_size_spin.setDecimals(4)
 
-        # Skip ROI button
-        self.skip_roi_button = QPushButton("Skip ROI and Continue")
-        self.skip_roi_button.clicked.connect(self.apply_no_roi)
-        self.skip_roi_button.setVisible(False)
-        self.skip_roi_button.setEnabled(False)
+        self.theta_spin = QDoubleSpinBox()
+        self.theta_spin.setRange(0, 90)
+        self.theta_spin.setValue(45)
+        self.theta_spin.setSuffix("°")
+        self.theta_spin.setDecimals(1)
+
+        acq_layout.addRow("Step Size:", self.step_size_spin)
+        acq_layout.addRow("Pixel Size:", self.pixel_size_spin)
+        acq_layout.addRow("Theta (angle):", self.theta_spin)
+        acq_group.setLayout(acq_layout)
+
+
+
+
 
         # Detection button
         self.detect_button = QPushButton("Detect and Apply ROI")
@@ -179,19 +205,17 @@ class RoiDetectionWidget(QWidget):
         self.progress_bar.setVisible(False)
 
         # Status label
-        self.status_label = QLabel("No input data available")
+        self.status_label = QLabel("Select layers for ROI detection")
 
         # ROI info display
         self.roi_info_label = QLabel("")
         self.roi_info_label.setWordWrap(True)
 
         # Add widgets to layout
+        layout.addWidget(layer_group)
         layout.addWidget(channel_group)
         layout.addWidget(method_group)
-        layout.addWidget(self.manual_instructions)
-        layout.addWidget(self.manual_roi_button)
-        layout.addWidget(self.skip_roi_checkbox)
-        layout.addWidget(self.skip_roi_button)  # Added skip ROI button
+        layout.addWidget(acq_group)
         layout.addWidget(self.detect_button)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
@@ -200,57 +224,167 @@ class RoiDetectionWidget(QWidget):
 
         self.setLayout(layout)
 
+        # Update layer lists when viewer layers change
+        self.viewer.layers.events.inserted.connect(self.update_layer_lists)
+        self.viewer.layers.events.removed.connect(self.update_layer_lists)
+
+    def update_layer_lists(self, event=None):
+        """Update the layer selection dropdowns."""
+        # Store current selections
+        current_a = self.layer_a_combo.currentText()
+        current_b = self.layer_b_combo.currentText()
+
+        # Clear and repopulate
+        self.layer_a_combo.clear()
+        self.layer_b_combo.clear()
+
+        # Add placeholder items
+        self.layer_a_combo.addItem("Select Channel A layer...")
+        self.layer_b_combo.addItem("Select Channel B layer...")
+
+        # Add available layers
+        for layer in self.viewer.layers:
+            if hasattr(layer, 'data') and layer.data is not None:
+                self.layer_a_combo.addItem(layer.name)
+                self.layer_b_combo.addItem(layer.name)
+
+        # Restore selections if they still exist
+        if current_a and current_a in [self.layer_a_combo.itemText(i) for i in range(self.layer_a_combo.count())]:
+            self.layer_a_combo.setCurrentText(current_a)
+        if current_b and current_b in [self.layer_b_combo.itemText(i) for i in range(self.layer_b_combo.count())]:
+            self.layer_b_combo.setCurrentText(current_b)
+
+        self.on_layer_selection_changed()
+
+    def on_layer_selection_changed(self):
+        """Handle layer selection changes."""
+        a_selected = self.layer_a_combo.currentText() != "Select Channel A layer..."
+        b_selected = self.layer_b_combo.currentText() != "Select Channel B layer..."
+
+        # Update parameters from selected layers
+        self._update_parameters_from_selected_layers()
+
+        # Update button states
+        has_data = a_selected or b_selected
+        
+        print(f"=== DEBUG: Layer selection changed ===")
+        print(f"  a_selected: {a_selected} (text: '{self.layer_a_combo.currentText()}')")
+        print(f"  b_selected: {b_selected} (text: '{self.layer_b_combo.currentText()}')")
+        print(f"  has_data: {has_data}")
+        print(f"  detect_button enabled: {has_data}")
+        
+        self.detect_button.setEnabled(has_data)
+
+        # Update status
+        if a_selected and b_selected:
+            self.status_label.setText("Ready for ROI detection")
+        elif a_selected:
+            self.status_label.setText("Channel A selected - ready for ROI detection")
+        elif b_selected:
+            self.status_label.setText("Channel B selected - ready for ROI detection")
+        else:
+            self.status_label.setText("Select layers for ROI detection")
+
+    def _update_parameters_from_selected_layers(self):
+        """Update parameters from selected layer metadata."""
+        # Check both selected layers for metadata
+        layers_to_check = []
+        
+        if self.layer_a_combo.currentText() != "Select Channel A layer...":
+            try:
+                layer_a = self.viewer.layers[self.layer_a_combo.currentText()]
+                layers_to_check.append(layer_a)
+            except (KeyError, ValueError):
+                pass
+
+        if self.layer_b_combo.currentText() != "Select Channel B layer...":
+            try:
+                layer_b = self.viewer.layers[self.layer_b_combo.currentText()]
+                layers_to_check.append(layer_b)
+            except (KeyError, ValueError):
+                pass
+
+        # Try to get parameters from layer metadata
+        for layer in layers_to_check:
+            if hasattr(layer, 'metadata') and layer.metadata:
+                metadata = layer.metadata
+                
+                if 'step_size' in metadata:
+                    self.step_size_spin.setValue(metadata['step_size'])
+                
+                if 'pixel_size' in metadata:
+                    self.pixel_size_spin.setValue(metadata['pixel_size'])
+                
+                if 'theta' in metadata:
+                    theta_rad = metadata['theta']
+                    theta_deg = theta_rad * 180 / math.pi
+                    self.theta_spin.setValue(theta_deg)
+                
+                # Found parameters, no need to check other layers
+                break
+
     def on_method_changed(self, method):
         """Handle method selection change."""
-        is_manual = method == "manual"
-        self.manual_instructions.setVisible(is_manual)
-        self.manual_roi_button.setVisible(is_manual)
-        self.detect_button.setEnabled(not is_manual and self.input_data is not None)
+        # Update button states based on layer selection
+        a_selected = self.layer_a_combo.currentText() != "Select Channel A layer..."
+        b_selected = self.layer_b_combo.currentText() != "Select Channel B layer..."
+        has_data = a_selected or b_selected
+        
+        print(f"=== DEBUG: Method changed to '{method}' ===")
+        print(f"  a_selected: {a_selected} (text: '{self.layer_a_combo.currentText()}')")
+        print(f"  b_selected: {b_selected} (text: '{self.layer_b_combo.currentText()}')")
+        print(f"  has_data: {has_data}")
+        
+        self.detect_button.setEnabled(has_data)
 
-    def on_skip_roi_toggled(self, checked):
-        """Handle skip ROI checkbox toggle."""
-        if checked:
-            self.detect_button.setEnabled(False)
-            self.method_combo.setEnabled(False)
-            self.manual_roi_button.setEnabled(False)
-            self.skip_roi_button.setVisible(True)
-            self.skip_roi_button.setEnabled(self.input_data is not None)
-        else:
-            self.detect_button.setEnabled(
-                self.input_data is not None
-                and self.method_combo.currentText() != "manual"
-            )
-            self.method_combo.setEnabled(True)
-            self.manual_roi_button.setEnabled(
-                self.method_combo.currentText() == "manual"
-            )
-            self.skip_roi_button.setVisible(False)
-            self.skip_roi_button.setEnabled(False)
+
 
     def set_input_data(self, data_dict):
-        """Set input data from previous step."""
+        """Set input data from previous step (for backward compatibility)."""
         self.input_data = data_dict
-        is_manual = self.method_combo.currentText() == "manual"
-        self.detect_button.setEnabled(True and not is_manual)
-
-        # Enable skip ROI button if checkbox is checked
-        if self.skip_roi_checkbox.isChecked():
-            self.skip_roi_button.setEnabled(True)
-
-        self.status_label.setText("Input data ready for ROI detection")
-
-        # Update ROI info if we have previous results
-        if "roi_coords" in data_dict:
-            self._update_roi_info(data_dict["roi_coords"])
+        # Automatically update parameters from input data if available
+        if data_dict:
+            if "step_size" in data_dict:
+                self.step_size_spin.setValue(data_dict["step_size"])
+            
+            if "pixel_size" in data_dict:
+                self.pixel_size_spin.setValue(data_dict["pixel_size"])
+            
+            if "theta" in data_dict:
+                theta_rad = data_dict["theta"]
+                theta_deg = theta_rad * 180 / math.pi
+                self.theta_spin.setValue(theta_deg)
 
     def detect_roi(self):
         """Detect ROI using selected method."""
-        if not self.input_data:
-            QMessageBox.warning(self, "Error", "No input data available")
+        # Get selected layers
+        a_layer_name = self.layer_a_combo.currentText()
+        b_layer_name = self.layer_b_combo.currentText()
+        
+        if a_layer_name == "Select Channel A layer..." and b_layer_name == "Select Channel B layer...":
+            QMessageBox.warning(self, "Error", "Please select at least one layer for ROI detection")
             return
 
-        a_raw = self.input_data["a_raw"]
-        b_raw = self.input_data["b_raw"]
+        # Get data from selected layers
+        a_raw = None
+        b_raw = None
+
+        if a_layer_name != "Select Channel A layer...":
+            try:
+                a_layer = self.viewer.layers[a_layer_name]
+                a_raw = a_layer.data
+            except (KeyError, ValueError) as e:
+                QMessageBox.warning(self, "Error", f"Could not get data from layer {a_layer_name}: {e}")
+                return
+
+        if b_layer_name != "Select Channel B layer...":
+            try:
+                b_layer = self.viewer.layers[b_layer_name]
+                b_raw = b_layer.data
+            except (KeyError, ValueError) as e:
+                QMessageBox.warning(self, "Error", f"Could not get data from layer {b_layer_name}: {e}")
+                return
+
         method = self.method_combo.currentText()
 
         # Determine which channel to process
@@ -271,159 +405,9 @@ class RoiDetectionWidget(QWidget):
         self.worker.error_occurred.connect(self.on_error)
         self.worker.start()
 
-    def apply_manual_roi(self):
-        """Apply manually selected ROI from napari viewer."""
-        if not self.input_data:
-            QMessageBox.warning(self, "Error", "No input data available")
-            return
 
-        # Check if there's a rectangle selection in the viewer
-        shapes_layer = None
-        for layer in self.viewer.layers:
-            if hasattr(layer, "data") and len(layer.data) > 0:
-                shapes_layer = layer
-                break
 
-        if not shapes_layer or len(shapes_layer.data) == 0:
-            msg = (
-                "Please draw a rectangle selection first using napari's rectangle tool"
-            )
-            QMessageBox.warning(self, "Error", msg)
-            return
 
-        # Get the rectangle coordinates
-        rect = shapes_layer.data[0]  # Assume first shape is the ROI
-        if len(rect) != 4:
-            QMessageBox.warning(self, "Error", "Please draw a rectangle (4 points)")
-            return
-
-        # Convert rectangle to ROI coordinates
-        # Rectangle format: [x1, y1], [x2, y2], [x3, y3], [x4, y4]
-        x_coords = [point[0] for point in rect]
-        y_coords = [point[1] for point in rect]
-
-        # Get current slice for Z coordinate
-        # Assuming Z is first dimension
-        current_z = self.viewer.dims.current_step[0]
-
-        roi_coords = [
-            (int(min(x_coords)), int(max(x_coords))),
-            (int(min(y_coords)), int(max(y_coords))),
-            (current_z, current_z + 1),  # Single Z slice for now
-        ]
-
-        # Apply ROI cropping
-        a_raw = self.input_data["a_raw"]
-        b_raw = self.input_data["b_raw"]
-
-        # Determine which channel to process
-        process_single_channel = None
-        if self.channel_a_radio.isChecked():
-            process_single_channel = "a"
-            a_cropped = a_raw[
-                roi_coords[0][0] : roi_coords[0][1],
-                roi_coords[1][0] : roi_coords[1][1],
-                roi_coords[2][0] : roi_coords[2][1],
-            ]
-            b_cropped = None
-        elif self.channel_b_radio.isChecked():
-            process_single_channel = "b"
-            b_cropped = b_raw[
-                roi_coords[0][0] : roi_coords[0][1],
-                roi_coords[1][0] : roi_coords[1][1],
-                roi_coords[2][0] : roi_coords[2][1],
-            ]
-            a_cropped = None
-        else:
-            # Process both channels
-            a_cropped = a_raw[
-                roi_coords[0][0] : roi_coords[0][1],
-                roi_coords[1][0] : roi_coords[1][1],
-                roi_coords[2][0] : roi_coords[2][1],
-            ]
-            b_cropped = b_raw[
-                roi_coords[0][0] : roi_coords[0][1],
-                roi_coords[1][0] : roi_coords[1][1],
-                roi_coords[2][0] : roi_coords[2][1],
-            ]
-
-        # Remove the shapes layer
-        self.viewer.layers.remove(shapes_layer)
-
-        # Add cropped data as new layers
-        if a_cropped is not None:
-            self._add_cropped_layer(a_cropped, "A_cropped", roi_coords, "manual")
-        if b_cropped is not None:
-            self._add_cropped_layer(b_cropped, "B_cropped", roi_coords, "manual")
-
-        # Update status and info
-        self.status_label.setText("Manual ROI applied successfully!")
-        self._update_roi_info(roi_coords)
-
-        # Emit signal with cropped data
-        output_data = {
-            "a_cropped": a_cropped,
-            "b_cropped": b_cropped,
-            "roi_coords": roi_coords,
-            "method": "manual",
-            "process_single_channel": process_single_channel,
-        }
-
-        # Pass through parameters from input data
-        for key in ["step_size", "pixel_size", "theta", "camera_offset"]:
-            if key in self.input_data:
-                output_data[key] = self.input_data[key]
-
-        self.roi_applied.emit(output_data)
-
-    def apply_no_roi(self):
-        """Skip ROI detection and use full images."""
-        a_raw = self.input_data["a_raw"]
-        b_raw = self.input_data["b_raw"]
-
-        # Determine which channel to process
-        process_single_channel = None
-        if self.channel_a_radio.isChecked():
-            process_single_channel = "a"
-            a_cropped = a_raw.copy()
-            b_cropped = None
-        elif self.channel_b_radio.isChecked():
-            process_single_channel = "b"
-            b_cropped = b_raw.copy()
-            a_cropped = None
-        else:
-            # Process both channels
-            a_cropped = a_raw.copy()
-            b_cropped = b_raw.copy()
-
-        # No ROI coordinates (full image)
-        roi_coords = None
-
-        # Add data as new layers
-        if a_cropped is not None:
-            self._add_cropped_layer(a_cropped, "A_full", roi_coords, "none")
-        if b_cropped is not None:
-            self._add_cropped_layer(b_cropped, "B_full", roi_coords, "none")
-
-        # Update status and info
-        self.status_label.setText("Using full images (no ROI applied)")
-        self._update_roi_info(roi_coords)
-
-        # Emit signal with data
-        output_data = {
-            "a_cropped": a_cropped,
-            "b_cropped": b_cropped,
-            "roi_coords": roi_coords,
-            "method": "none",
-            "process_single_channel": process_single_channel,
-        }
-
-        # Pass through parameters from input data
-        for key in ["step_size", "pixel_size", "theta", "camera_offset"]:
-            if key in self.input_data:
-                output_data[key] = self.input_data[key]
-
-        self.roi_applied.emit(output_data)
 
     def _add_cropped_layer(self, data, name, roi_coords, method):
         """Add cropped data as a new layer."""
@@ -438,15 +422,13 @@ class RoiDetectionWidget(QWidget):
         metadata = {
             "roi_coords": roi_coords,
             "method": method,
-            "original_shape": self.input_data["a_raw"].shape
-            if "a_raw" in self.input_data
-            else None,
+            "original_shape": data.shape,
         }
 
-        # Add acquisition parameters to metadata if available
-        for key in ["step_size", "pixel_size", "theta", "camera_offset"]:
-            if key in self.input_data:
-                metadata[key] = self.input_data[key]
+        # Add current spin box values to metadata
+        metadata["step_size"] = self.step_size_spin.value()
+        metadata["pixel_size"] = self.pixel_size_spin.value()
+        metadata["theta"] = self.theta_spin.value() * math.pi / 180
 
         # Add new layer
         self.viewer.add_image(data, name=name, metadata=metadata)
@@ -459,12 +441,16 @@ class RoiDetectionWidget(QWidget):
 
         # Add cropped data as new layers (only for processed channels)
         if a_cropped is not None:
+            source_name = self.layer_a_combo.currentText()
+            output_name = f"{source_name}_cropped"
             self._add_cropped_layer(
-                a_cropped, "A_cropped", roi_coords, result["method"]
+                a_cropped, output_name, roi_coords, result["method"]
             )
         if b_cropped is not None:
+            source_name = self.layer_b_combo.currentText()
+            output_name = f"{source_name}_cropped"
             self._add_cropped_layer(
-                b_cropped, "B_cropped", roi_coords, result["method"]
+                b_cropped, output_name, roi_coords, result["method"]
             )
 
         # Update status and info
@@ -483,13 +469,12 @@ class RoiDetectionWidget(QWidget):
         self.detect_button.setEnabled(True)
         self.progress_bar.setVisible(False)
 
-        # Emit signal with cropped data and pass through parameters
+        # Emit signal with cropped data
         output_data = result.copy()
-        # Pass through parameters from input data
-        for key in ["step_size", "pixel_size", "theta", "camera_offset"]:
-            if key in self.input_data:
-                output_data[key] = self.input_data[key]
-
+        # Add current parameters to output data
+        output_data["step_size"] = self.step_size_spin.value()
+        output_data["pixel_size"] = self.pixel_size_spin.value()
+        output_data["theta"] = self.theta_spin.value() * math.pi / 180
         self.roi_applied.emit(output_data)
 
     def on_error(self, error_msg):
