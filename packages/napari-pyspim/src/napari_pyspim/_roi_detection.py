@@ -10,7 +10,8 @@ from qtpy.QtWidgets import (
 from qtpy.QtCore import Signal, QThread
 from PyQt5.QtCore import pyqtSignal
 
-from pyspim import roi
+# Lazy import to avoid CUDA compilation at module level
+# from pyspim import roi
 
 
 class RoiDetectionWorker(QThread):
@@ -30,6 +31,9 @@ class RoiDetectionWorker(QThread):
     def run(self):
         """Detect ROIs in background thread."""
         try:
+            # Lazy import to avoid CUDA compilation at module level
+            from pyspim import roi
+            
             if self.process_single_channel == 'a':
                 # Process only channel A
                 roia = roi.detect_roi_3d(self.a_raw, self.method)

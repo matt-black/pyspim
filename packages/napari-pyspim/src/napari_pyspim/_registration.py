@@ -12,9 +12,10 @@ from qtpy.QtWidgets import (
 from qtpy.QtCore import Signal, QThread
 from PyQt5.QtCore import pyqtSignal
 
-from pyspim.reg import pcc, powell
-from pyspim.interp import affine
-from pyspim.util import pad_to_same_size, launch_params_for_volume
+# Lazy imports to avoid CUDA compilation at module level
+# from pyspim.reg import pcc, powell
+# from pyspim.interp import affine
+# from pyspim.util import pad_to_same_size, launch_params_for_volume
 
 
 class RegistrationWorker(QThread):
@@ -36,6 +37,11 @@ class RegistrationWorker(QThread):
     def run(self):
         """Perform registration in background thread."""
         try:
+            # Lazy imports to avoid CUDA compilation at module level
+            from pyspim.reg import pcc, powell
+            from pyspim.interp import affine
+            from pyspim.util import pad_to_same_size, launch_params_for_volume
+            
             self.progress_updated.emit("Padding volumes to same size...")
             
             # Pad volumes to same size

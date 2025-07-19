@@ -11,8 +11,9 @@ from qtpy.QtWidgets import (
 from qtpy.QtCore import Signal, QThread
 from PyQt5.QtCore import pyqtSignal
 
-from pyspim import deskew as dsk
-from pyspim import roi
+# Lazy imports to avoid CUDA compilation at module level
+# from pyspim import deskew as dsk
+# from pyspim import roi
 
 
 class DeskewingWorker(QThread):
@@ -37,6 +38,10 @@ class DeskewingWorker(QThread):
     def run(self):
         """Deskew data in background thread."""
         try:
+            # Lazy imports to avoid CUDA compilation at module level
+            from pyspim import deskew as dsk
+            from pyspim import roi
+            
             # Calculate step sizes
             step_size_lat = self.step_size / math.cos(self.theta)
             
