@@ -1,6 +1,6 @@
 # Napari PySPIM Plugin API Reference
 
-::: pyspim
+::: napari_pyspim
     options:
       show_root_heading: true
       show_source: true

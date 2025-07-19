@@ -1,11 +1,11 @@
 name: napari-pyspim
-display_name: diSPIM Processing Pipeline
+display_name: pyspim
 visibility: public
 contributions:
   commands:
     - id: napari-pyspim.main_widget
       python_name: napari_pyspim._main_widget:DispimPipelineWidget
-      title: diSPIM Processing Pipeline
+      title: pyspim
   widgets:
     - command: napari-pyspim.main_widget
-      display_name: diSPIM Pipeline 
+      display_name: pyspim

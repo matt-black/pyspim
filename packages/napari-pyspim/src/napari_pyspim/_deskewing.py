@@ -6,10 +6,11 @@ import math
 
 import numpy as np
 from PyQt5.QtCore import pyqtSignal
-from qtpy.QtCore import QThread, Signal
+from qtpy.QtCore import QThread
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QLabel,
@@ -130,7 +131,7 @@ class DeskewingWorker(QThread):
 class DeskewingWidget(QWidget):
     """Widget for deskewing dual-view data."""
 
-    deskewed = Signal(dict)
+    deskewed = pyqtSignal(dict)
 
     def __init__(self, viewer):
         super().__init__()
@@ -143,6 +144,22 @@ class DeskewingWidget(QWidget):
         """Set up the user interface."""
         layout = QVBoxLayout()
 
+        # Layer selection
+        layer_group = QGroupBox("Layer Selection")
+        layer_layout = QFormLayout()
+
+        self.layer_a_combo = QComboBox()
+        self.layer_a_combo.addItem("Select Channel A layer...")
+        self.layer_a_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+
+        self.layer_b_combo = QComboBox()
+        self.layer_b_combo.addItem("Select Channel B layer...")
+        self.layer_b_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+
+        layer_layout.addRow("Channel A:", self.layer_a_combo)
+        layer_layout.addRow("Channel B:", self.layer_b_combo)
+        layer_group.setLayout(layer_layout)
+
         # Deskewing parameters
         params_group = QGroupBox("Deskewing Parameters")
         params_layout = QFormLayout()
@@ -151,18 +168,31 @@ class DeskewingWidget(QWidget):
         self.method_combo.addItems(["orthogonal"])
         self.method_combo.setCurrentText("orthogonal")
 
+        self.step_size_spin = QDoubleSpinBox()
+        self.step_size_spin.setRange(0.1, 10.0)
+        self.step_size_spin.setValue(0.5)
+        self.step_size_spin.setSuffix(" μm")
+        self.step_size_spin.setDecimals(3)
+
+        self.pixel_size_spin = QDoubleSpinBox()
+        self.pixel_size_spin.setRange(0.01, 1.0)
+        self.pixel_size_spin.setValue(0.1625)
+        self.pixel_size_spin.setSuffix(" μm")
+        self.pixel_size_spin.setDecimals(4)
+
+        self.theta_spin = QDoubleSpinBox()
+        self.theta_spin.setRange(0, 90)
+        self.theta_spin.setValue(45)
+        self.theta_spin.setSuffix("°")
+        self.theta_spin.setDecimals(1)
+
         self.recrop_check = QCheckBox("Re-crop after deskewing")
         self.recrop_check.setChecked(False)
 
-        # These will be populated from previous step metadata
-        self.step_size_label = QLabel("Not set")
-        self.pixel_size_label = QLabel("Not set")
-        self.theta_label = QLabel("Not set")
-
         params_layout.addRow("Method:", self.method_combo)
-        params_layout.addRow("Step Size:", self.step_size_label)
-        params_layout.addRow("Pixel Size:", self.pixel_size_label)
-        params_layout.addRow("Theta:", self.theta_label)
+        params_layout.addRow("Step Size:", self.step_size_spin)
+        params_layout.addRow("Pixel Size:", self.pixel_size_spin)
+        params_layout.addRow("Theta (angle):", self.theta_spin)
         params_layout.addRow("Re-crop:", self.recrop_check)
         params_group.setLayout(params_layout)
 
@@ -176,13 +206,14 @@ class DeskewingWidget(QWidget):
         self.progress_bar.setVisible(False)
 
         # Status label
-        self.status_label = QLabel("No input data available")
+        self.status_label = QLabel("Select layers to deskew")
 
         # Results info
         self.results_label = QLabel("")
         self.results_label.setWordWrap(True)
 
         # Add widgets to layout
+        layout.addWidget(layer_group)
         layout.addWidget(params_group)
         layout.addWidget(self.deskew_button)
         layout.addWidget(self.progress_bar)
@@ -192,123 +223,159 @@ class DeskewingWidget(QWidget):
 
         self.setLayout(layout)
 
-    def set_input_data(self, data_dict):
-        """Set input data from previous step."""
-        self.input_data = data_dict
+        # Update layer lists when viewer layers change
+        self.viewer.layers.events.inserted.connect(self.update_layer_lists)
+        self.viewer.layers.events.removed.connect(self.update_layer_lists)
 
-        # Try to get parameters from napari layers
-        self._update_parameters_from_layers()
+    def update_layer_lists(self, event=None):
+        """Update the layer selection dropdowns."""
+        # Store current selections
+        current_a = self.layer_a_combo.currentText()
+        current_b = self.layer_b_combo.currentText()
 
-        self.deskew_button.setEnabled(True)
-        self.status_label.setText("Input data ready for deskewing")
+        # Clear and repopulate
+        self.layer_a_combo.clear()
+        self.layer_b_combo.clear()
 
-    def _update_parameters_from_layers(self):
-        """Update parameters from napari layer metadata."""
-        # First try to get parameters from input data if available
-        if self.input_data:
-            # Check if parameters are passed through from previous step
-            if "step_size" in self.input_data:
-                step_size = self.input_data["step_size"]
-                pixel_size = self.input_data.get("pixel_size", "Not set")
-                theta_rad = self.input_data.get("theta", "Not set")
+        # Add placeholder items
+        self.layer_a_combo.addItem("Select Channel A layer...")
+        self.layer_b_combo.addItem("Select Channel B layer...")
 
-                self.step_size_label.setText(f"{step_size} μm")
-                self.pixel_size_label.setText(f"{pixel_size} μm")
+        # Add available layers
+        for layer in self.viewer.layers:
+            if hasattr(layer, 'data') and layer.data is not None:
+                self.layer_a_combo.addItem(layer.name)
+                self.layer_b_combo.addItem(layer.name)
 
-                if theta_rad != "Not set":
+        # Restore selections if they still exist
+        if current_a and current_a in [self.layer_a_combo.itemText(i) for i in range(self.layer_a_combo.count())]:
+            self.layer_a_combo.setCurrentText(current_a)
+        if current_b and current_b in [self.layer_b_combo.itemText(i) for i in range(self.layer_b_combo.count())]:
+            self.layer_b_combo.setCurrentText(current_b)
+
+        self.on_layer_selection_changed()
+
+    def on_layer_selection_changed(self):
+        """Handle layer selection changes."""
+        a_selected = self.layer_a_combo.currentText() != "Select Channel A layer..."
+        b_selected = self.layer_b_combo.currentText() != "Select Channel B layer..."
+
+        # Enable deskew button if at least one layer is selected
+        self.deskew_button.setEnabled(a_selected or b_selected)
+
+        # Update parameters from selected layers
+        self._update_parameters_from_selected_layers()
+
+        # Update status
+        if a_selected and b_selected:
+            self.status_label.setText("Ready to deskew both channels")
+        elif a_selected:
+            self.status_label.setText("Ready to deskew Channel A only")
+        elif b_selected:
+            self.status_label.setText("Ready to deskew Channel B only")
+        else:
+            self.status_label.setText("Select layers to deskew")
+
+    def _update_parameters_from_selected_layers(self):
+        """Update parameters from selected layer metadata."""
+        # Check both selected layers for metadata
+        layers_to_check = []
+        
+        if self.layer_a_combo.currentText() != "Select Channel A layer...":
+            try:
+                layer_a = self.viewer.layers[self.layer_a_combo.currentText()]
+                layers_to_check.append(layer_a)
+            except (KeyError, ValueError):
+                pass
+
+        if self.layer_b_combo.currentText() != "Select Channel B layer...":
+            try:
+                layer_b = self.viewer.layers[self.layer_b_combo.currentText()]
+                layers_to_check.append(layer_b)
+            except (KeyError, ValueError):
+                pass
+
+        # Try to get parameters from layer metadata
+        for layer in layers_to_check:
+            if hasattr(layer, 'metadata') and layer.metadata:
+                metadata = layer.metadata
+                
+                if 'step_size' in metadata:
+                    self.step_size_spin.setValue(metadata['step_size'])
+                
+                if 'pixel_size' in metadata:
+                    self.pixel_size_spin.setValue(metadata['pixel_size'])
+                
+                if 'theta' in metadata:
+                    theta_rad = metadata['theta']
                     theta_deg = theta_rad * 180 / math.pi
-                    self.theta_label.setText(f"{theta_deg:.1f}°")
-                else:
-                    self.theta_label.setText("Not set")
-                return
+                    self.theta_spin.setValue(theta_deg)
+                
+                # Found parameters, no need to check other layers
+                break
 
-        # If not in input data, try to get from napari layers
-        try:
-            # Look for various possible layer names
-            layer_names_to_check = [
-                "A_cropped",
-                "B_cropped",
-                "A_full",
-                "B_full",
-                "A_raw",
-                "B_raw",
-                "A_deskewed",
-                "B_deskewed",
-            ]
-
-            for layer_name in layer_names_to_check:
-                if layer_name in self.viewer.layers:
-                    layer = self.viewer.layers[layer_name]
-                    metadata = layer.metadata
-
-                    if metadata:
-                        step_size = metadata.get("step_size", "Not set")
-                        pixel_size = metadata.get("pixel_size", "Not set")
-                        theta_rad = metadata.get("theta", "Not set")
-
-                        if step_size != "Not set":
-                            self.step_size_label.setText(f"{step_size} μm")
-                            self.pixel_size_label.setText(f"{pixel_size} μm")
-
-                            if theta_rad != "Not set":
-                                theta_deg = theta_rad * 180 / math.pi
-                                self.theta_label.setText(f"{theta_deg:.1f}°")
-                            else:
-                                self.theta_label.setText("Not set")
-                            return
-        except Exception:
-            pass
-
-        # Fallback: Set default values if no parameters found
-        self.step_size_label.setText("0.5 μm")
-        self.pixel_size_label.setText("0.1625 μm")
-        self.theta_label.setText("45.0°")
+    def set_input_data(self, data_dict):
+        """Set input data from previous step (for backward compatibility)."""
+        self.input_data = data_dict
+        # Automatically update parameters from input data if available
+        if data_dict:
+            if "step_size" in data_dict:
+                self.step_size_spin.setValue(data_dict["step_size"])
+            
+            if "pixel_size" in data_dict:
+                self.pixel_size_spin.setValue(data_dict["pixel_size"])
+            
+            if "theta" in data_dict:
+                theta_rad = data_dict["theta"]
+                theta_deg = theta_rad * 180 / math.pi
+                self.theta_spin.setValue(theta_deg)
 
     def deskew_data(self):
         """Deskew the data using background worker."""
-        if not self.input_data:
-            QMessageBox.warning(self, "Error", "No input data available")
+        # Get selected layers
+        a_layer_name = self.layer_a_combo.currentText()
+        b_layer_name = self.layer_b_combo.currentText()
+        
+        if a_layer_name == "Select Channel A layer..." and b_layer_name == "Select Channel B layer...":
+            QMessageBox.warning(self, "Error", "Please select at least one layer to deskew")
             return
 
-        # Get parameters from labels with fallback to input data
-        try:
-            step_size_text = self.step_size_label.text()
-            pixel_size_text = self.pixel_size_label.text()
-            theta_text = self.theta_label.text()
+        # Get data from selected layers
+        a_raw = None
+        b_raw = None
+        process_single_channel = None
 
-            # Try to extract from labels first
-            if step_size_text != "Not set":
-                step_size = float(step_size_text.split()[0])
-            else:
-                # Fallback to input data
-                step_size = self.input_data.get("step_size", 0.5)
+        if a_layer_name != "Select Channel A layer...":
+            try:
+                a_layer = self.viewer.layers[a_layer_name]
+                a_raw = a_layer.data
+            except (KeyError, ValueError) as e:
+                QMessageBox.warning(self, "Error", f"Could not get data from layer {a_layer_name}: {e}")
+                return
 
-            if pixel_size_text != "Not set":
-                pixel_size = float(pixel_size_text.split()[0])
-            else:
-                # Fallback to input data
-                pixel_size = self.input_data.get("pixel_size", 0.1625)
+        if b_layer_name != "Select Channel B layer...":
+            try:
+                b_layer = self.viewer.layers[b_layer_name]
+                b_raw = b_layer.data
+            except (KeyError, ValueError) as e:
+                QMessageBox.warning(self, "Error", f"Could not get data from layer {b_layer_name}: {e}")
+                return
 
-            if theta_text != "Not set":
-                theta_deg = float(theta_text.split()[0])
-                theta_rad = theta_deg * math.pi / 180
-            else:
-                # Fallback to input data
-                theta_rad = self.input_data.get("theta", 45 * math.pi / 180)
+        # Determine processing mode
+        if a_raw is not None and b_raw is not None:
+            process_single_channel = None  # Process both
+        elif a_raw is not None:
+            process_single_channel = "a"
+        elif b_raw is not None:
+            process_single_channel = "b"
 
-        except (ValueError, IndexError):
-            # Final fallback to input data or defaults
-            step_size = self.input_data.get("step_size", 0.5)
-            pixel_size = self.input_data.get("pixel_size", 0.1625)
-            theta_rad = self.input_data.get("theta", 45 * math.pi / 180)
-
-        a_raw = self.input_data.get("a_cropped")
-        b_raw = self.input_data.get("b_cropped")
+        # Get parameters from spin boxes
+        step_size = self.step_size_spin.value()
+        pixel_size = self.pixel_size_spin.value()
+        theta_deg = self.theta_spin.value()
+        theta_rad = theta_deg * math.pi / 180
         method = self.method_combo.currentText()
         recrop = self.recrop_check.isChecked()
-
-        # Get single channel processing info from input data
-        process_single_channel = self.input_data.get("process_single_channel")
 
         self.deskew_button.setEnabled(False)
         self.progress_bar.setVisible(True)
@@ -335,34 +402,52 @@ class DeskewingWidget(QWidget):
         a_deskewed = result["a_deskewed"]
         b_deskewed = result["b_deskewed"]
 
-        # Remove old layers if they exist
-        for layer_name in ["A_deskewed", "B_deskewed"]:
+        # Add deskewed data as new layers (only for processed channels)
+        if a_deskewed is not None:
+            source_name = self.layer_a_combo.currentText()
+            output_name = f"{source_name}_deskewed"
+            
+            # Remove old layer if it exists
             try:
-                layer = self.viewer.layers[layer_name]
+                layer = self.viewer.layers[output_name]
                 self.viewer.layers.remove(layer)
             except (KeyError, ValueError):
                 pass
-
-        # Add deskewed data as new layers (only for processed channels)
-        if a_deskewed is not None:
+            
             self.viewer.add_image(
                 a_deskewed,
-                name="A_deskewed",
+                name=output_name,
                 metadata={
                     "method": result["method"],
                     "recrop": result["recrop"],
                     "step_size_lat": result["step_size_lat"],
+                    "step_size": self.step_size_spin.value(),
+                    "pixel_size": self.pixel_size_spin.value(),
+                    "theta": self.theta_spin.value() * math.pi / 180,
                 },
             )
 
         if b_deskewed is not None:
+            source_name = self.layer_b_combo.currentText()
+            output_name = f"{source_name}_deskewed"
+            
+            # Remove old layer if it exists
+            try:
+                layer = self.viewer.layers[output_name]
+                self.viewer.layers.remove(layer)
+            except (KeyError, ValueError):
+                pass
+            
             self.viewer.add_image(
                 b_deskewed,
-                name="B_deskewed",
+                name=output_name,
                 metadata={
                     "method": result["method"],
                     "recrop": result["recrop"],
                     "step_size_lat": result["step_size_lat"],
+                    "step_size": self.step_size_spin.value(),
+                    "pixel_size": self.pixel_size_spin.value(),
+                    "theta": self.theta_spin.value() * math.pi / 180,
                 },
             )
 
@@ -402,7 +487,6 @@ class DeskewingWidget(QWidget):
 
         self.status_label.setText(status_text)
         self.results_label.setText(results_text)
-
         self.deskew_button.setEnabled(True)
         self.progress_bar.setVisible(False)
 
@@ -413,7 +497,9 @@ class DeskewingWidget(QWidget):
             "method": result["method"],
             "recrop": result["recrop"],
             "step_size_lat": result["step_size_lat"],
-            "process_single_channel": result.get("process_single_channel"),
+            "step_size": self.step_size_spin.value(),
+            "pixel_size": self.pixel_size_spin.value(),
+            "theta": self.theta_spin.value() * math.pi / 180,
         }
         self.deskewed.emit(output_data)
 

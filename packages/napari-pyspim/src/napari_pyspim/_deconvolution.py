@@ -2,13 +2,18 @@
 Deconvolution widget for Richardson-Lucy dual-view deconvolution.
 """
 
+import math
 import os
 
-import cupy as cp
+try:
+    import cupy as cp
+except ImportError:
+    import numpy as cp
+    print("Warning: CuPy not available, using NumPy (CPU only)")
 import numpy as np
 import zarr
 from PyQt5.QtCore import pyqtSignal
-from qtpy.QtCore import QThread, Signal
+from qtpy.QtCore import QThread
 from qtpy.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -162,7 +167,7 @@ class DeconvolutionWorker(QThread):
 class DeconvolutionWidget(QWidget):
     """Widget for Richardson-Lucy deconvolution."""
 
-    deconvolved = Signal(dict)
+    deconvolved = pyqtSignal(dict)
 
     def __init__(self, viewer):
         super().__init__()
@@ -176,6 +181,22 @@ class DeconvolutionWidget(QWidget):
     def setup_ui(self):
         """Set up the user interface."""
         layout = QVBoxLayout()
+
+        # Layer selection
+        layer_group = QGroupBox("Layer Selection")
+        layer_layout = QFormLayout()
+
+        self.layer_a_combo = QComboBox()
+        self.layer_a_combo.addItem("Select Channel A layer...")
+        self.layer_a_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+
+        self.layer_b_combo = QComboBox()
+        self.layer_b_combo.addItem("Select Channel B layer...")
+        self.layer_b_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+
+        layer_layout.addRow("Channel A:", self.layer_a_combo)
+        layer_layout.addRow("Channel B:", self.layer_b_combo)
+        layer_group.setLayout(layer_layout)
 
         # PSF loading
         psf_group = QGroupBox("Point Spread Functions")
@@ -238,6 +259,33 @@ class DeconvolutionWidget(QWidget):
         params_layout.addRow("Overlap:", self.overlap_spin)
         params_group.setLayout(params_layout)
 
+        # Acquisition parameters (for reference and metadata)
+        acq_group = QGroupBox("Acquisition Parameters")
+        acq_layout = QFormLayout()
+
+        self.step_size_spin = QDoubleSpinBox()
+        self.step_size_spin.setRange(0.1, 10.0)
+        self.step_size_spin.setValue(0.5)
+        self.step_size_spin.setSuffix(" μm")
+        self.step_size_spin.setDecimals(3)
+
+        self.pixel_size_spin = QDoubleSpinBox()
+        self.pixel_size_spin.setRange(0.01, 1.0)
+        self.pixel_size_spin.setValue(0.1625)
+        self.pixel_size_spin.setSuffix(" μm")
+        self.pixel_size_spin.setDecimals(4)
+
+        self.theta_spin = QDoubleSpinBox()
+        self.theta_spin.setRange(0, 90)
+        self.theta_spin.setValue(45)
+        self.theta_spin.setSuffix("°")
+        self.theta_spin.setDecimals(1)
+
+        acq_layout.addRow("Step Size:", self.step_size_spin)
+        acq_layout.addRow("Pixel Size:", self.pixel_size_spin)
+        acq_layout.addRow("Theta (angle):", self.theta_spin)
+        acq_group.setLayout(acq_layout)
+
         # Deconvolve button
         self.deconvolve_button = QPushButton("Deconvolve Data")
         self.deconvolve_button.clicked.connect(self.deconvolve_data)
@@ -248,15 +296,17 @@ class DeconvolutionWidget(QWidget):
         self.progress_bar.setVisible(False)
 
         # Status label
-        self.status_label = QLabel("No input data available")
+        self.status_label = QLabel("Select layers and PSFs")
 
         # Results info
         self.results_label = QLabel("")
         self.results_label.setWordWrap(True)
 
         # Add widgets to layout
+        layout.addWidget(layer_group)
         layout.addWidget(psf_group)
         layout.addWidget(params_group)
+        layout.addWidget(acq_group)
         layout.addWidget(self.deconvolve_button)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
@@ -264,6 +314,100 @@ class DeconvolutionWidget(QWidget):
         layout.addStretch()
 
         self.setLayout(layout)
+
+        # Update layer lists when viewer layers change
+        self.viewer.layers.events.inserted.connect(self.update_layer_lists)
+        self.viewer.layers.events.removed.connect(self.update_layer_lists)
+
+    def update_layer_lists(self, event=None):
+        """Update the layer selection dropdowns."""
+        # Store current selections
+        current_a = self.layer_a_combo.currentText()
+        current_b = self.layer_b_combo.currentText()
+
+        # Clear and repopulate
+        self.layer_a_combo.clear()
+        self.layer_b_combo.clear()
+
+        # Add placeholder items
+        self.layer_a_combo.addItem("Select Channel A layer...")
+        self.layer_b_combo.addItem("Select Channel B layer...")
+
+        # Add available layers
+        for layer in self.viewer.layers:
+            if hasattr(layer, 'data') and layer.data is not None:
+                self.layer_a_combo.addItem(layer.name)
+                self.layer_b_combo.addItem(layer.name)
+
+        # Restore selections if they still exist
+        if current_a and current_a in [self.layer_a_combo.itemText(i) for i in range(self.layer_a_combo.count())]:
+            self.layer_a_combo.setCurrentText(current_a)
+        if current_b and current_b in [self.layer_b_combo.itemText(i) for i in range(self.layer_b_combo.count())]:
+            self.layer_b_combo.setCurrentText(current_b)
+
+        self.on_layer_selection_changed()
+
+    def on_layer_selection_changed(self):
+        """Handle layer selection changes."""
+        a_selected = self.layer_a_combo.currentText() != "Select Channel A layer..."
+        b_selected = self.layer_b_combo.currentText() != "Select Channel B layer..."
+
+        # Update parameters from selected layers
+        self._update_parameters_from_selected_layers()
+
+        # Update ready status
+        self._check_ready()
+
+        # Update status
+        if a_selected and b_selected:
+            if self.psf_a is not None and self.psf_b is not None:
+                self.status_label.setText("Ready to deconvolve")
+            else:
+                self.status_label.setText("Please load PSF files")
+        elif a_selected:
+            self.status_label.setText("Please select Channel B layer")
+        elif b_selected:
+            self.status_label.setText("Please select Channel A layer")
+        else:
+            self.status_label.setText("Select layers and PSFs")
+
+    def _update_parameters_from_selected_layers(self):
+        """Update parameters from selected layer metadata."""
+        # Check both selected layers for metadata
+        layers_to_check = []
+        
+        if self.layer_a_combo.currentText() != "Select Channel A layer...":
+            try:
+                layer_a = self.viewer.layers[self.layer_a_combo.currentText()]
+                layers_to_check.append(layer_a)
+            except (KeyError, ValueError):
+                pass
+
+        if self.layer_b_combo.currentText() != "Select Channel B layer...":
+            try:
+                layer_b = self.viewer.layers[self.layer_b_combo.currentText()]
+                layers_to_check.append(layer_b)
+            except (KeyError, ValueError):
+                pass
+
+        # Try to get parameters from layer metadata
+        for layer in layers_to_check:
+            if hasattr(layer, 'metadata') and layer.metadata:
+                metadata = layer.metadata
+                
+                if 'step_size' in metadata:
+                    self.step_size_spin.setValue(metadata['step_size'])
+                
+                if 'pixel_size' in metadata:
+                    self.pixel_size_spin.setValue(metadata['pixel_size'])
+                
+                if 'theta' in metadata:
+                    theta_rad = metadata['theta']
+                    theta_deg = theta_rad * 180 / math.pi
+                    self.theta_spin.setValue(theta_deg)
+                
+                # Found parameters, no need to check other layers
+                break
 
     def browse_psf(self, psf_type):
         """Browse for PSF file."""
@@ -280,15 +424,28 @@ class DeconvolutionWidget(QWidget):
             self._check_ready()
 
     def set_input_data(self, data_dict):
-        """Set input data from previous step."""
+        """Set input data from previous step (for backward compatibility)."""
         self.input_data = data_dict
-        self._check_ready()
-        self.status_label.setText("Input data ready for deconvolution")
+        # Automatically update parameters from input data if available
+        if data_dict:
+            if "step_size" in data_dict:
+                self.step_size_spin.setValue(data_dict["step_size"])
+            
+            if "pixel_size" in data_dict:
+                self.pixel_size_spin.setValue(data_dict["pixel_size"])
+            
+            if "theta" in data_dict:
+                theta_rad = data_dict["theta"]
+                theta_deg = theta_rad * 180 / math.pi
+                self.theta_spin.setValue(theta_deg)
 
     def _check_ready(self):
         """Check if all inputs are ready for deconvolution."""
+        a_selected = self.layer_a_combo.currentText() != "Select Channel A layer..."
+        b_selected = self.layer_b_combo.currentText() != "Select Channel B layer..."
+        
         ready = (
-            self.input_data is not None
+            a_selected and b_selected
             and self.psf_a is not None
             and self.psf_b is not None
         )
@@ -298,8 +455,10 @@ class DeconvolutionWidget(QWidget):
             self.status_label.setText("Ready to deconvolve")
         else:
             missing = []
-            if not self.input_data:
-                missing.append("registered data")
+            if not a_selected:
+                missing.append("Channel A layer")
+            if not b_selected:
+                missing.append("Channel B layer")
             if self.psf_a is None:
                 missing.append("PSF A")
             if self.psf_b is None:
@@ -308,16 +467,27 @@ class DeconvolutionWidget(QWidget):
 
     def deconvolve_data(self):
         """Deconvolve the data using background worker."""
-        if not (
-            self.input_data is not None
-            and self.psf_a is not None
-            and self.psf_b is not None
-        ):
-            QMessageBox.warning(self, "Error", "Please provide all required inputs")
+        # Get selected layers
+        a_layer_name = self.layer_a_combo.currentText()
+        b_layer_name = self.layer_b_combo.currentText()
+        
+        if a_layer_name == "Select Channel A layer..." or b_layer_name == "Select Channel B layer...":
+            QMessageBox.warning(self, "Error", "Please select both layers to deconvolve")
             return
 
-        a_registered = self.input_data["a_registered"]
-        b_registered = self.input_data["b_registered"]
+        if not (self.psf_a is not None and self.psf_b is not None):
+            QMessageBox.warning(self, "Error", "Please load both PSF files")
+            return
+
+        # Get data from selected layers
+        try:
+            a_layer = self.viewer.layers[a_layer_name]
+            b_layer = self.viewer.layers[b_layer_name]
+            a_registered = a_layer.data
+            b_registered = b_layer.data
+        except (KeyError, ValueError) as e:
+            QMessageBox.warning(self, "Error", f"Could not get data from selected layers: {e}")
+            return
 
         iterations = self.iterations_spin.value()
         regularization = self.regularization_spin.value()
@@ -355,23 +525,30 @@ class DeconvolutionWidget(QWidget):
         """Handle successful deconvolution."""
         deconvolved = result["deconvolved"]
 
+        # Add deconvolved data as new layer
+        source_a_name = self.layer_a_combo.currentText()
+        source_b_name = self.layer_b_combo.currentText()
+        output_name = f"{source_a_name}_{source_b_name}_deconvolved"
+        
         # Remove old layer if it exists
         try:
-            layer = self.viewer.layers["Deconvolved"]
+            layer = self.viewer.layers[output_name]
             self.viewer.layers.remove(layer)
         except (KeyError, ValueError):
             pass
 
-        # Add deconvolved data as new layer
         self.viewer.add_image(
             deconvolved,
-            name="Deconvolved",
+            name=output_name,
             metadata={
                 "iterations": result["iterations"],
                 "regularization": result["regularization"],
                 "noise_model": result["noise_model"],
                 "chunk_size": result["chunk_size"],
                 "overlap": result["overlap"],
+                "step_size": self.step_size_spin.value(),
+                "pixel_size": self.pixel_size_spin.value(),
+                "theta": self.theta_spin.value() * math.pi / 180,
             },
         )
 
@@ -396,7 +573,18 @@ class DeconvolutionWidget(QWidget):
         self.progress_bar.setVisible(False)
 
         # Emit signal with deconvolved data
-        self.deconvolved.emit(result)
+        output_data = {
+            "deconvolved": result["deconvolved"],
+            "iterations": result["iterations"],
+            "regularization": result["regularization"],
+            "noise_model": result["noise_model"],
+            "chunk_size": result["chunk_size"],
+            "overlap": result["overlap"],
+            "step_size": self.step_size_spin.value(),
+            "pixel_size": self.pixel_size_spin.value(),
+            "theta": self.theta_spin.value() * math.pi / 180,
+        }
+        self.deconvolved.emit(output_data)
 
     def on_error(self, error_msg):
         """Handle deconvolution error."""
