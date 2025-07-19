@@ -1,0 +1,86 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install UV
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: latest
+
+    - name: Install dependencies
+      run: |
+        uv sync --extra dev
+        uv pip install -e packages/pyspim
+        uv pip install -e packages/napari-pyspim
+
+    - name: Run fast tests
+      run: |
+        uv run pytest packages/*/tests/ -v -m "not slow and not gpu" --tb=short
+
+    - name: Run linting
+      run: |
+        uv run ruff check packages/
+        uv run mypy packages/
+
+    - name: Run formatting check
+      run: |
+        uv run ruff format --check packages/
+
+  test-gpu:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install UV
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: latest
+
+    - name: Install CUDA dependencies
+      run: |
+        # Install CUDA toolkit
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.0-1_all.deb
+        sudo dpkg -i cuda-keyring_1.0-1_all.deb
+        sudo apt-get update
+        sudo apt-get install -y cuda-toolkit-12-0
+
+    - name: Install dependencies
+      run: |
+        uv sync --extra dev
+        uv pip install -e packages/pyspim
+        uv pip install -e packages/napari-pyspim
+
+    - name: Run GPU tests (if available)
+      run: |
+        # Only run GPU tests if CUDA is available
+        python -c "import cupy; print('CUDA available')" && \
+        uv run pytest packages/*/tests/ -v -m "gpu" --tb=short || \
+        echo "GPU tests skipped - CUDA not available" 

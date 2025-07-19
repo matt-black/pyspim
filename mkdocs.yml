@@ -1,0 +1,201 @@
+site_name: PySPIM Documentation
+site_description: Documentation for PySPIM - Single Plane Illumination Microscopy Analysis
+site_author: PySPIM Team
+site_url: https://github.com/matt-black/pyspim
+
+# Repository
+repo_name: matt-black/pyspim
+repo_url: https://github.com/matt-black/pyspim
+edit_uri: edit/main/docs/
+
+# Copyright
+copyright: Copyright &copy; 2024 PySPIM Team
+
+# Theme
+theme:
+  name: material
+  language: en
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to system preference
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+  # Features
+  features:
+    - announce.dismiss
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate
+    - content.code.copy
+    - content.code.select
+    - content.tabs.link
+    - content.tooltips
+    - header.autohide
+    - navigation.expand
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    - navigation.instant.result
+    - navigation.instant.suggest
+    - navigation.instant.tracking
+    - navigation.instant.worker
+    - navigation.manipulation
+    - navigation.prune
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - navigation.tracking.attribution
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+
+  # Icon
+  icon:
+    repo: fontawesome/brands/github
+
+# Plugins
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            show_category_heading: true
+            show_signature_annotations: true
+            show_bases: true
+            show_submodules: true
+            heading_level: 2
+            members_order: source
+            docstring_style: google
+            preload_modules: true
+            filters: ["!^_"]
+            merge_init_into_class: true
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - section-index
+
+# Markdown extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets:
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      combine_header_slug: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Extra CSS and JS
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# Navigation
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Configuration: getting-started/configuration.md
+  - Core Package (pyspim):
+    - Overview: packages/pyspim/overview.md
+    - API Reference: packages/pyspim/api.md
+  - Napari Plugin (napari-pyspim):
+    - Overview: packages/napari-pyspim/overview.md
+    - Installation: packages/napari-pyspim/installation.md
+    - Usage: packages/napari-pyspim/usage.md
+    - API Reference: packages/napari-pyspim/api.md
+  - Examples:
+    - Basic Usage: examples/basic-usage.md
+    - Advanced Features: examples/advanced-features.md
+    - Notebooks: examples/notebooks.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Building: development/building.md
+    - Testing: development/testing.md
+  - About:
+    - Changelog: about/changelog.md
+    - License: about/license.md
+
+# Extra
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/matt-black/pyspim
+    - icon: fontawesome/brands/twitter
+      link: https://twitter.com/pyspim
+  analytics:
+    provider: google
+    property: !ENV GOOGLE_ANALYTICS_KEY
+  version:
+    provider: mike 

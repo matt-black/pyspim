@@ -1,1 +1,1 @@
-# Tests for napari-pyspim plugin 
+# Tests for napari-pyspim plugin
