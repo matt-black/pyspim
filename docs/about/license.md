@@ -49,7 +49,7 @@ When using PySPIM in your work, please cite:
 
 ```bibtex
 @software{pyspim2024,
-  title={PySPIM: Single Plane Illumination Microscopy Analysis},
+  title={PySPIM: Selective Plane Illumination Microscopy Analysis},
   author={PySPIM Team},
   year={2024},
   url={https://github.com/matt-black/pyspim},

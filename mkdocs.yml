@@ -1,5 +1,5 @@
 site_name: PySPIM Documentation
-site_description: Documentation for PySPIM - Single Plane Illumination Microscopy Analysis
+site_description: Documentation for PySPIM - Selective Plane Illumination Microscopy Analysis
 site_author: PySPIM Team
 site_url: https://github.com/matt-black/pyspim
 
@@ -9,7 +9,7 @@ repo_url: https://github.com/matt-black/pyspim
 edit_uri: edit/main/docs/
 
 # Copyright
-copyright: Copyright &copy; 2024 PySPIM Team
+copyright: Copyright &copy; 2025 PySPIM Team
 
 # Theme
 theme:
@@ -97,7 +97,7 @@ plugins:
             heading_level: 2
             members_order: source
             docstring_style: google
-            preload_modules: true
+            preload_modules: []
             filters: ["!^_"]
             merge_init_into_class: true
   - gen-files:
