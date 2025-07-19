@@ -1,89 +1,176 @@
-# pyspim
+# PySPIM
 
-Python library for analyzing SPIM microscopy data.
+A comprehensive Python library for analyzing and visualizing single plane illumination microscopy (SPIM) data, with special emphasis on dual-view SPIM (diSPIM) microscopy.
 
-This is a monorepo containing:
-- **pyspim**: Core library for SPIM data analysis
-- **napari-pyspim**: Napari plugin for diSPIM processing pipeline
+## 🚀 Features
 
-## Repository Structure
+- **Complete SPIM Pipeline**: Data loading, ROI detection, deskewing, registration, and deconvolution
+- **High Performance**: Built on Dask for scalable, parallel processing
+- **GPU Acceleration**: CUDA support with CuPy for fast computation
+- **Interactive GUI**: Full napari integration with tabbed workflow
+- **Modular Design**: Separate core library and napari plugin
+- **Modern Tooling**: UV-based dependency management and build system
+
+## 📦 Installation
+
+### Quick Install
+
+```bash
+# Install both packages
+pip install pyspim napari-pyspim
+```
+
+### Development Install
+
+```bash
+# Clone the repository
+git clone https://github.com/matt-black/pyspim.git
+cd pyspim
+
+# Install with UV (recommended)
+uv sync --extra dev
+uv pip install -e packages/pyspim
+uv pip install -e packages/napari-pyspim
+```
+
+## 🏗️ Project Structure
+
+This is a modern monorepo using UV for dependency management:
 
 ```
 pyspim/
-├── pyspim/           # Core library package
-├── napari-pyspim/    # Napari plugin package (npe2 compatible)
-├── pyproject.toml    # Root pyproject.toml for monorepo
-└── README.md         # This file
+├── packages/
+│   ├── pyspim/              # Core SPIM processing library
+│   └── napari-pyspim/       # Napari plugin for GUI
+├── docs/                    # Documentation (MkDocs + Material)
+├── examples/                # Example data and notebooks
+├── tools/                   # Development tools
+└── pyproject.toml          # UV workspace configuration
 ```
 
-## Development Environment Setup
+## 🚀 Quick Start
 
-### Prerequisites
+### Command Line Usage
 
-Dependencies:
-- `cupy`
-- `numpy`
-- `scipy`
-- `scikit-image`
-- `tqdm`
-
-Compilation of CUB kernels requires CUDA >=12.6. To ensure this works, `cupy` has to be linked to the version already installed, as is done below (*note*: done on `della@princeton`).
-
-```bash
-module load anaconda3/2024.6
-module load cudatoolkit/12.6
-conda create -p /tigress/[user name]/conda/pyspim python=3.12
-conda activate /tigress/[user name]/conda/pyspim
-CUDA_PATH=/usr/local/cuda-12.6 pip install cupy
-pip install tqdm
-```
-
-Other useful things:
-```bash
-pip install jupyterlab
-pip install ipympl
-```
-
-### Installing for Development
-
-#### Core Library
-```bash
-cd pyspim
-pip install --editable .
-```
-
-#### Napari Plugin
-```bash
-cd napari-pyspim
-pip install --editable .
-```
-
-#### Both Packages
-```bash
-# Install core library first
-cd pyspim
-pip install --editable .
-
-# Then install plugin
-cd ../napari-pyspim
-pip install --editable .
-```
-
-## Usage
-
-### Core Library
 ```python
 import pyspim
 
-# Use the core functionality
+# Load and process SPIM data
+data = pyspim.load_data("path/to/data.tif")
+processed = pyspim.process_pipeline(data)
+pyspim.save_data(processed, "output.tif")
 ```
 
-### Napari Plugin
-1. Install the plugin: `pip install napari-pyspim`
-2. Launch napari: `napari`
-3. Go to Plugins > diSPIM Processing Pipeline
-4. Use the diSPIM Pipeline widget to process your data
+### Napari Plugin Usage
 
-## License
+```python
+import napari
 
-GPL-3.0-only
+# Launch napari and load the PySPIM plugin
+viewer = napari.Viewer()
+# Go to Plugins → PySPIM → DiSPIM Pipeline
+```
+
+## 📚 Documentation
+
+- **📖 [Full Documentation](https://pyspim.readthedocs.io/)** - Comprehensive guides and API reference
+- **🚀 [Quick Start Guide](docs/getting-started/quickstart.md)** - Get up and running in minutes
+- **📦 [Installation Guide](docs/getting-started/installation.md)** - Detailed setup instructions
+- **🔧 [API Reference](docs/packages/pyspim/api.md)** - Complete function documentation
+
+### Building Documentation Locally
+
+```bash
+# Build documentation
+make docs
+
+# Serve documentation locally
+make docs-serve
+```
+
+## 🛠️ Development
+
+### Prerequisites
+
+- Python 3.8.1+
+- UV (recommended) or pip
+- CUDA-compatible GPU (optional)
+
+### Development Commands
+
+```bash
+# Install development environment
+make install-dev
+
+# Run tests
+make test
+
+# Format code
+make format
+
+# Run linting
+make lint
+
+# Build packages
+make build
+
+# Clean build artifacts
+make clean
+```
+
+### Contributing
+
+We welcome contributions! Please see our [Contributing Guide](docs/development/contributing.md) for details.
+
+## 📋 Requirements
+
+### Core Dependencies
+
+- **numpy**: Numerical computing
+- **dask**: Parallel processing
+- **scikit-image**: Image processing
+- **tifffile**: TIFF file I/O
+- **zarr**: Array storage
+- **cupy-cuda12x**: GPU acceleration (optional)
+
+### GUI Dependencies
+
+- **napari**: Scientific image viewer
+- **npe2**: Napari plugin engine
+- **qtpy**: Qt bindings
+- **PyQt5**: GUI framework
+
+## 🎯 Use Cases
+
+- **Light Sheet Microscopy**: Process SPIM/diSPIM data
+- **Multi-view Registration**: Align multiple imaging views
+- **Deconvolution**: Improve image resolution
+- **ROI Analysis**: Focus on specific regions of interest
+- **Batch Processing**: Process multiple datasets efficiently
+
+## 📄 License
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0) - see the [License](docs/about/license.md) file for details.
+
+## 🤝 Citation
+
+If you use PySPIM in your research, please cite:
+
+```bibtex
+@software{pyspim2024,
+  title={PySPIM: Single Plane Illumination Microscopy Analysis},
+  author={PySPIM Team},
+  year={2024},
+  url={https://github.com/matt-black/pyspim}
+}
+```
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/matt-black/pyspim/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/matt-black/pyspim/discussions)
+- **Documentation**: [Full Documentation](https://pyspim.readthedocs.io/)
+
+---
+
+**PySPIM** - Making SPIM data analysis accessible and efficient! 🔬✨

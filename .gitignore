@@ -186,5 +186,9 @@ cython_debug/
 # Ignore all local history of files
 .history
 .ionide
+# Large example data (exclude from git)
 examples/data/example_dispim_data/
+
+# Keep sample data for GitHub
+!examples/data/sample_data/
 tools/script/profiling/test_deskew_results/

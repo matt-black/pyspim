@@ -1,13 +1,12 @@
-"""
-"""
-import math
+""" """
+
 
 import cupy
 
 from .typing import NDArray
 
 
-def rotate_view(vol : NDArray, rot_pos : bool) -> NDArray:
+def rotate_view(vol: NDArray, rot_pos: bool) -> NDArray:
     """rotate volume by +/- 90 degrees along Y-axis
 
     :param vol: volume to rotate
@@ -20,8 +19,7 @@ def rotate_view(vol : NDArray, rot_pos : bool) -> NDArray:
     return rotate_by_kernel(vol, rot_pos)
 
 
-def rotate_by_kernel(vol : NDArray, rot_pos : bool, 
-                     block_size : int=4) -> NDArray:
+def rotate_by_kernel(vol: NDArray, rot_pos: bool, block_size: int = 4) -> NDArray:
     """rotate volume by +/- 90 degrees along Y-axis using CUDA kernel
         kernel taken from microImageLib ([1])
 
@@ -45,9 +43,9 @@ def rotate_by_kernel(vol : NDArray, rot_pos : bool,
     if input_cpu:
         vol = cupy.asarray(vol)
     if vol.dtype == cupy.float32:
-        rkern = cupy.RawKernel(__rotation_kernel_source, 'rotYkernelFloat')
+        rkern = cupy.RawKernel(__rotation_kernel_source, "rotYkernelFloat")
     else:
-        rkern = cupy.RawKernel(__rotation_kernel_source, 'rotYkernelUshort')
+        rkern = cupy.RawKernel(__rotation_kernel_source, "rotYkernelUshort")
     # preallocate output
     out = cupy.zeros((width, height, depth), dtype=vol.dtype)
     # launch kernel
@@ -55,8 +53,9 @@ def rotate_by_kernel(vol : NDArray, rot_pos : bool,
     gy = (height + block_size - 1) // block_size
     gz = (depth + block_size - 1) // block_size
     rkern(
-        (gx, gy, gz), (block_size, block_size, block_size),
-        (out, vol, width, height, depth, rot_dir)
+        (gx, gy, gz),
+        (block_size, block_size, block_size),
+        (out, vol, width, height, depth, rot_dir),
     )
     if input_cpu:
         return out.get()
@@ -64,7 +63,7 @@ def rotate_by_kernel(vol : NDArray, rot_pos : bool,
         return out
 
 
-__rotation_kernel_source=r'''
+__rotation_kernel_source = r"""
 extern "C"{
 
 __global__ void rotYkernelUshort(unsigned short *d_odata, unsigned short *d_idata,
@@ -96,4 +95,4 @@ __global__ void rotYkernelFloat(float *d_odata, float *d_idata,
 }
 
 }
-'''
+"""
