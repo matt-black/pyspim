@@ -82,10 +82,10 @@ viewer = napari.Viewer()
 
 ```bash
 # Build documentation
-make docs
+just docs
 
 # Serve documentation locally
-make docs-serve
+just docs-serve
 ```
 
 ## 🛠️ Development
@@ -100,22 +100,22 @@ make docs-serve
 
 ```bash
 # Install development environment
-make install-dev
+just install-dev
 
 # Run tests
-make test
+just test
 
 # Format code
-make format
+just format
 
 # Run linting
-make lint
+just lint
 
 # Build packages
-make build
+just build
 
 # Clean build artifacts
-make clean
+just clean
 ```
 
 ### Contributing

@@ -55,24 +55,24 @@ git checkout -b feature/your-feature-name
 
 ```bash
 # Run all tests
-make test
+just test
 
 # Run specific package tests
-make test-pyspim
-make test-plugin
+just test-pyspim
+just test-plugin
 ```
 
 ### 4. Code Quality Checks
 
 ```bash
 # Format code
-make format
+just format
 
 # Run linting
-make lint
+just lint
 
 # Run all checks
-make check
+just check
 ```
 
 ### 5. Commit Your Changes
@@ -194,10 +194,10 @@ pytest -v
 
 ```bash
 # Build documentation
-make docs
+just docs
 
 # Serve documentation locally
-make docs-serve
+just docs-serve
 ```
 
 ### Documentation Guidelines
@@ -250,9 +250,9 @@ We use semantic versioning (MAJOR.MINOR.PATCH):
 
 3. **Build and Test**
    ```bash
-   make clean
-   make build
-   make test
+   just clean
+   just build
+   just test
    ```
 
 4. **Create Release**
@@ -268,7 +268,7 @@ We use semantic versioning (MAJOR.MINOR.PATCH):
 
 ## Code of Conduct
 
-We are committed to providing a welcoming and inclusive environment. Please read our [Code of Conduct](CODE_OF_CONDUCT.md) for details.
+We are committed to providing a welcoming and inclusive environment. Please read our [Code of Conduct](https://github.com/matt-black/pyspim/blob/main/CODE_OF_CONDUCT.md) for details.
 
 ## License
 

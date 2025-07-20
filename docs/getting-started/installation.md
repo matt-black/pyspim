@@ -150,10 +150,10 @@ viewer = napari.Viewer()
 
 - Check the [GitHub issues](https://github.com/matt-black/pyspim/issues)
 - Join our [Discussions](https://github.com/matt-black/pyspim/discussions)
-- Read the [API documentation](packages/pyspim/api.md)
+- Read the [API documentation](../packages/pyspim/api.md)
 
 ## Next Steps
 
 - Read the [Quick Start Guide](quickstart.md)
 - Explore the [Examples](../user-guide/basic-usage.md)
-- Check out the [API Reference](packages/pyspim/api.md) 
+- Check out the [API Reference](../packages/pyspim/api.md) 
