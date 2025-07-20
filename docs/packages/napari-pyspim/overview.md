@@ -149,7 +149,7 @@ The plugin integrates deeply with Napari:
 ### Getting Help
 
 - Check the [API Reference](api.md) for detailed widget documentation
-- See [Examples](../user-guide/basic-usage.md) for usage patterns
+- See [Examples](../../user-guide/basic-usage.md) for usage patterns
 - Report issues on [GitHub](https://github.com/matt-black/pyspim/issues)
 
 ## Next Steps
@@ -163,8 +163,8 @@ The plugin integrates deeply with Napari:
 The images in this documentation are placeholders. To complete the documentation:
 
 1. **Take Screenshots**: Capture the actual napari plugin interface
-2. **Replace Placeholders**: Upload images to `docs/images/` directory
-3. **Follow Guidelines**: See `docs/images/README.md` for detailed instructions
+2. **Replace Placeholders**: Upload images to `docs/media/` directory
+3. **Follow Guidelines**: See `docs/media/README.md` for detailed instructions
 
 Key images needed:
 - Plugin overview and main interface

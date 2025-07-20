@@ -308,8 +308,8 @@ deconv_params = {
 
 ## Next Steps
 
-- Run the [basic usage notebook](../../../examples/nb/basic_usage.ipynb)
+- Run the [basic usage notebook](../../examples/nb/basic_usage.ipynb)
 - Try the [command-line pipeline](examples/scripts/dispim_pipeline/)
 - Use the [Snakemake workflow](snakemake-workflow.md) for automated processing
-- Check the [API reference](packages/pyspim/api.md) for detailed function documentation
+- Check the [API reference](../packages/pyspim/api.md) for detailed function documentation
 - Explore [advanced features](advanced-features.md) for complex workflows 

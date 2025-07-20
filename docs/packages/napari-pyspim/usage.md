@@ -37,14 +37,24 @@ The plugin provides a tabbed interface with 5 processing steps:
 
 Each tab contains controls specific to that processing step and automatically passes data to the next step.
 
-![Plugin Main Interface](../images/napari-plugin-main-interface.png)
 *Main plugin interface showing the tabbed workflow with all 5 processing steps*
+
+## Video Tutorial
+
+Watch this video to see the plugin in action:
+
+!!! video "Complete Workflow Demonstration"
+    <video width="100%" controls>
+      <source src="../../media/example_usage.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+
+*Complete workflow demonstration showing how to use the PySPIM napari plugin from data loading through deconvolution*
 
 ## Step 1: Data Loading
 
 ### Loading μManager Data
 
-![Data Loading Tab](../images/napari-plugin-data-loading.png)
 *Data loading tab with file browser and acquisition parameter controls*
 
 1. **Select Data Path**:
@@ -384,7 +394,6 @@ The plugin automatically manages data flow between steps:
 
 ### Result Analysis
 
-![Processing Results](../images/napari-plugin-processing-results.png)
 *Final processing results showing all layers in napari viewer*
 
 After processing, you'll have:
@@ -399,16 +408,16 @@ Compare the layers in napari to see the improvement at each step.
 ## Next Steps
 
 - Explore the [API Reference](api.md) for technical details
-- Check [Examples](../user-guide/basic-usage.md) for usage patterns
-- Review [Advanced Features](../user-guide/advanced-features.md) for complex workflows
+- Check [Examples](../../user-guide/basic-usage.md) for usage patterns
+- Review [Advanced Features](../../user-guide/advanced-features.md) for complex workflows
 
 ## Image Placeholders
 
 The images in this documentation are placeholders. To complete the documentation:
 
 1. **Take Screenshots**: Capture the actual napari plugin interface
-2. **Replace Placeholders**: Upload images to `docs/images/` directory
-3. **Follow Guidelines**: See `docs/images/README.md` for detailed instructions
+2. **Replace Placeholders**: Upload images to `docs/media/` directory
+3. **Follow Guidelines**: See `docs/media/README.md` for detailed instructions
 
 The required images include:
 - Main interface overview
