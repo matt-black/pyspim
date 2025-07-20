@@ -1,0 +1,460 @@
+/* Custom styling for PySPIM documentation */
+
+/* Full-width home page styling */
+.md-content {
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Override Material for MkDocs default layout for home page */
+.md-main {
+  max-width: none !important;
+}
+
+.md-main__inner {
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Remove the default container constraints */
+.md-grid {
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+.md-main__inner {
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Home page specific styling */
+.md-content__inner {
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Container for full-width sections */
+.mdx-container {
+  margin-top: 2rem;
+  margin-bottom: 2rem;
+  width: 100%;
+  max-width: none;
+}
+
+/* Hero section */
+.mdx-hero {
+  margin: 0;
+  padding: 4rem 2rem;
+  background: linear-gradient(135deg, #1de9b6 0%, #2196f3 50%, #8e24aa 100%);
+  color: white;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(33, 150, 243, 0.25);
+  width: 100%;
+  max-width: none;
+}
+
+.mdx-hero h1 {
+  margin: 0 0 1rem;
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
+}
+
+.mdx-hero p {
+  margin: 0 0 2rem;
+  font-size: 1.2rem;
+  opacity: 0.95;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+  color: #e0f7fa;
+}
+
+.mdx-hero .md-button {
+  margin: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mdx-hero .md-button--primary {
+  background: #fff;
+  color: #1de9b6;
+  border: 2px solid #fff;
+}
+
+.mdx-hero .md-button--primary:hover {
+  background: #1de9b6;
+  color: #fff;
+  border: 2px solid #1de9b6;
+  box-shadow: 0 4px 12px rgba(33, 150, 243, 0.15);
+}
+
+.mdx-hero .md-button--secondary {
+  background: transparent;
+  color: #fff;
+  border: 2px solid #b39ddb;
+}
+
+.mdx-hero .md-button--secondary:hover {
+  background: #b39ddb;
+  color: #fff;
+  border-color: #fff;
+}
+
+/* Video showcase section */
+.mdx-video-showcase {
+  background: linear-gradient(135deg, #e0f7fa 0%, #b39ddb 100%);
+  padding: 3rem 2rem;
+  text-align: center;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.mdx-video-container {
+  max-width: 1200px;
+  margin: 0 auto 2rem auto;
+  /* border-radius: 16px; */
+  overflow: hidden;
+  /* box-shadow: 0 12px 40px rgba(33, 150, 243, 0.15); */
+  background: #fff;
+}
+
+.mdx-video-container video {
+  width: 100%;
+  max-width: 1200px;
+  display: block;
+  margin: 0 auto;
+  border: none;
+  box-shadow: none;
+}
+
+@media (min-width: 1200px) {
+  .mdx-video-container video {
+    /* No forced height or min-height */
+  }
+}
+
+.mdx-video-container iframe {
+  width: 100%;
+  height: 450px;
+  border: none;
+  display: block;
+}
+
+.mdx-video-showcase h2 {
+  color: #2196f3;
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin: 0 0 1rem 0;
+}
+
+.mdx-video-showcase p {
+  color: #5e35b1;
+  font-size: 1.2rem;
+  margin: 0 0 2rem 0;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Feature grid */
+.mdx-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+  width: 100%;
+  max-width: none;
+  padding: 0 2rem;
+}
+
+.mdx-feature {
+  background: #f3e5f5;
+  border: 1px solid #b39ddb;
+  border-radius: 12px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.08);
+  display: flex;
+  flex-direction: column;
+}
+
+.mdx-feature:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 25px rgba(33, 150, 243, 0.15);
+  border-color: #1de9b6;
+}
+
+.mdx-feature__icon {
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+.mdx-feature__icon svg {
+  width: 3rem;
+  height: 3rem;
+  color: #1de9b6;
+}
+
+.mdx-feature__content h3 {
+  color: #2196f3;
+  margin: 0 0 1rem 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.mdx-feature__content p {
+  margin: 0;
+  color: #5e35b1;
+  line-height: 1.6;
+  flex-grow: 1;
+}
+
+/* Example section */
+.mdx-example {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  padding: 1.5rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  margin: 2rem 0;
+  width: 100%;
+  max-width: none;
+  padding: 2rem;
+}
+
+.mdx-example__content h3 {
+  color: #667eea;
+  margin: 0 0 1rem 0;
+  font-weight: 600;
+}
+
+/* Documentation grid */
+.mdx-docs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  margin: 2rem 0;
+  width: 100%;
+  max-width: none;
+  padding: 0 2rem;
+}
+
+.mdx-docs-section {
+  background: #fff;
+  border: 1px solid #b39ddb;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.08);
+}
+
+.mdx-docs-section h3 {
+  color: #2196f3;
+  margin: 0 0 1rem 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.mdx-docs-section ul {
+  margin: 0 0 1.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.mdx-docs-section li {
+  margin: 0.5rem 0;
+  line-height: 1.5;
+}
+
+.mdx-docs-section a {
+  color: #1de9b6;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+.mdx-docs-section a:hover {
+  color: #8e24aa;
+  text-decoration: underline;
+}
+
+/* Tip section */
+.mdx-tip {
+  background: linear-gradient(135deg, #b2fef7 0%, #b39ddb 100%);
+  padding: 2rem;
+  box-shadow: 0 4px 16px rgba(33, 150, 243, 0.08);
+  margin: 2rem 0;
+  width: 100%;
+  max-width: none;
+}
+
+.mdx-tip__content h3 {
+  color: #1de9b6;
+  margin: 0 0 1rem 0;
+  font-weight: 600;
+}
+
+.mdx-tip ul {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.mdx-tip li {
+  margin: 0.5rem 0;
+  line-height: 1.5;
+}
+
+.mdx-tip a {
+  color: #1de9b6;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+.mdx-tip a:hover {
+  color: #8e24aa;
+  text-decoration: underline;
+}
+
+/* Info grid */
+.mdx-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  margin: 2rem 0;
+  width: 100%;
+  max-width: none;
+  padding: 0 2rem;
+}
+
+.mdx-info-section {
+  background: #fff;
+  border: 1px solid #b39ddb;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.08);
+}
+
+.mdx-info-section h3 {
+  color: #2196f3;
+  margin: 0 0 1rem 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.mdx-info-section p {
+  margin: 0 0 1rem 0;
+  line-height: 1.6;
+}
+
+.mdx-info-section a {
+  color: #1de9b6;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+.mdx-info-section a:hover {
+  color: #8e24aa;
+  text-decoration: underline;
+}
+
+/* Section headings */
+.mdx-container h2 {
+  color: #1de9b6;
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 3rem 0 2rem 0;
+  text-align: center;
+  width: 100%;
+  max-width: none;
+  padding: 0 2rem;
+}
+
+/* Code highlighting */
+.mdx-example .highlight,
+.mdx-info-section .highlight {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.mdx-example pre,
+.mdx-info-section pre {
+  margin: 0;
+  background: transparent;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .mdx-hero h1 {
+    font-size: 2rem;
+  }
+  
+  .mdx-hero p {
+    font-size: 1rem;
+  }
+  
+  .mdx-feature-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .mdx-docs-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .mdx-info-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .mdx-hero .md-button {
+    display: block;
+    width: 100%;
+    text-align: center;
+    margin: 0.5rem 0;
+  }
+  
+  .mdx-container h2 {
+    font-size: 1.5rem;
+  }
+}
+
+/* Dark mode support */
+[data-md-color-scheme="slate"] .mdx-feature,
+[data-md-color-scheme="slate"] .mdx-docs-section,
+[data-md-color-scheme="slate"] .mdx-info-section {
+  background: #2d3748;
+  border-color: #4a5568;
+  color: #e2e8f0;
+}
+
+[data-md-color-scheme="slate"] .mdx-feature__content h3,
+[data-md-color-scheme="slate"] .mdx-docs-section h3,
+[data-md-color-scheme="slate"] .mdx-info-section h3 {
+  color: #90cdf4;
+}
+
+[data-md-color-scheme="slate"] .mdx-feature__content p,
+[data-md-color-scheme="slate"] .mdx-docs-section p,
+[data-md-color-scheme="slate"] .mdx-info-section p {
+  color: #cbd5e0;
+}
+
+[data-md-color-scheme="slate"] .mdx-example {
+  background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%);
+}
+
+[data-md-color-scheme="slate"] .mdx-tip {
+  background: linear-gradient(135deg, #22543d 0%, #276749 100%);
+}
+
+[data-md-color-scheme="slate"] .mdx-container h2 {
+  color: #e2e8f0;
+} 

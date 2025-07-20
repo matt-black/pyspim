@@ -1,128 +1,157 @@
-# Welcome to PySPIM
+# PySPIM
 
-PySPIM is a comprehensive Python library for analyzing and visualizing selective plane illumination microscopy (SPIM) data, with special emphasis on dual-view SPIM (diSPIM) microscopy.
+**Selective Plane Illumination Microscopy Analysis**
 
-## 🧭 Quick Navigation
+!!! abstract "Documentation that simply works"
 
-- **[🚀 Install Now](getting-started/installation.md)** - Get started in minutes
-- **[📖 Quick Start](getting-started/quickstart.md)** - Basic workflow tutorial
-- **[🖥️ Napari Plugin](packages/napari-pyspim/overview.md)** - Interactive GUI
-- **[📦 Core Package](packages/pyspim/overview.md)** - Library documentation
-- **[🧪 Examples](user-guide/basic-usage.md)** - Tutorials and use cases
+    Process SPIM data with GPU acceleration – powerful, interactive, and research-ready.
 
-## 🚀 Quick Installation
+    [:octicons-arrow-right-24: Get started](getting-started/installation.md){ .md-button .md-button--primary }
+    [:octicons-book-24: Learn more](user-guide/examples-overview.md){ .md-button .md-button--secondary }
 
-```bash
-# Clone and install
-git clone https://github.com/matt-black/pyspim.git
-cd pyspim
-just install-dev
-```
+<div class="mdx-video-showcase">
+  <h2>See PySPIM in Action</h2>
+  <div class="mdx-video-container">
+    <video controls preload="metadata" poster="media/example_view.png">
+      <source src="media/example_usage.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+  </div>
+  <p>PySPIM makes advanced SPIM data analysis easy and interactive. Watch this short video to see how you can go from raw data to beautiful results in just a few clicks!</p>
+</div>
 
-## 🎯 What is PySPIM?
+## Everything you would expect
 
-PySPIM provides a complete pipeline for processing SPIM microscopy data:
+<div class="grid cards" markdown>
 
-- **Data Loading**: Efficient loading of various microscopy data formats
-- **ROI Detection**: Automated region of interest detection and cropping
-- **Deskewing**: Correction of light sheet microscopy artifacts
-- **Registration**: Multi-view image registration with GPU acceleration
-- **Deconvolution**: Advanced deconvolution algorithms with PSF support
+-   :fontawesome-solid-rocket:{ .lg .middle } __It's just Python__
+    
+    Focus on your SPIM data analysis and create professional results in minutes. No need to know complex GPU programming – let PySPIM do the heavy lifting for you.
 
-## 🔧 Key Features
+-   :fontawesome-solid-desktop:{ .lg .middle } __Works on all platforms__
+    
+    Process your SPIM data with confidence – PySPIM automatically adapts to your computing environment, from laptops to HPC clusters. Desktop. Server. Cloud. All great.
 
-- 🚀 **High Performance**: GPU-accelerated processing with CuPy
-- 🔧 **Modular Design**: Separate core library and napari plugin
-- 📊 **Interactive Visualization**: Full napari integration
-- 🧪 **Research Ready**: Designed for scientific workflows with SLURM support
-- 📚 **Well Documented**: Comprehensive API documentation and examples
+-   :fontawesome-solid-cogs:{ .lg .middle } __Made to measure__
+    
+    Make it yours – customize processing parameters, visualization options, and workflow automation with a few lines of configuration. PySPIM can be easily extended and provides many options to alter behavior.
 
-## 🚀 Quick Start
+-   :fontawesome-solid-bolt:{ .lg .middle } __Fast and lightweight__
+    
+    Don't let your users wait – get incredible performance with GPU acceleration by using CuPy-powered processing, yielding optimal results and happy researchers that return.
 
-### Using the Napari Plugin
+-   :fontawesome-solid-shield:{ .lg .middle } __Maintain ownership__
+    
+    Own your data processing pipeline completely, guaranteeing both integrity and security – no need to entrust your microscopy analysis to third-party platforms. Retain full control.
 
-```python
-import napari
+-   :fontawesome-solid-heart:{ .lg .middle } __Open Source__
+    
+    You're in good company – choose a mature and actively maintained solution built with state-of-the-art Open Source technologies, trusted by research labs worldwide. Licensed under GPL-3.0.
 
-# Launch napari and load the PySPIM plugin
-viewer = napari.Viewer()
-# Go to Plugins → PySPIM → DiSPIM Pipeline
-```
+</div>
 
-### Command Line Processing
+## More than just data processing
 
-```python
-import pyspim
+<div class="grid cards" markdown>
 
-# Load and process SPIM data
-data = pyspim.load_data("path/to/data.tif")
-processed = pyspim.process_pipeline(data)
-pyspim.save_data(processed, "output.tif")
-```
+-   :fontawesome-solid-chart-line:{ .lg .middle } __Interactive visualization__
+    
+    PySPIM makes your SPIM data **instantly visualizable** with zero effort: say goodbye to complex visualization setups that can take hours to configure. Process your data with a **highly customizable** and **blazing fast** napari integration running entirely **in your browser** at no extra cost.
 
-### Automated Workflow
+-   :fontawesome-solid-robot:{ .lg .middle } __Workflow automation__
+    
+    Some datasets need more processing than others, which is why PySPIM offers a **unique and elegant** way to create **automated workflows** for **batch processing**.
 
-```bash
-# Use Snakemake for high-throughput processing
-cd examples/snakemake
-snakemake --slurm --jobs 10
-```
+-   :fontawesome-solid-server:{ .lg .middle } __HPC integration__
+    
+    **Scale your processing** and **increase throughput** when working with large datasets by leveraging the built-in SLURM integration. PySPIM makes it effortless to submit **batch jobs** to your cluster, which will drive more efficient research workflows.
 
-## 📚 Documentation
+</div>
 
-### 🚀 Getting Started
-- **[Installation Guide](getting-started/installation.md)** - Detailed setup instructions
-- **[Quick Start](getting-started/quickstart.md)** - Get up and running in minutes
+## Quick Start
 
-### 📦 Core Package
-- **[Overview](packages/pyspim/overview.md)** - Main PySPIM library documentation
-- **[API Reference](packages/pyspim/api.md)** - Complete function documentation
+!!! example "Install and run PySPIM"
 
-### 🖥️ Napari Plugin
-- **[Overview](packages/napari-pyspim/overview.md)** - Interactive GUI documentation
-- **[Installation](packages/napari-pyspim/installation.md)** - Plugin setup guide
-- **[Usage](packages/napari-pyspim/usage.md)** - Detailed usage instructions
+    ```bash
+    # Install PySPIM
+    git clone https://github.com/matt-black/pyspim.git
+    cd pyspim
+    just install-dev
 
-### 📖 User Guide
-- **[Basic Usage](user-guide/basic-usage.md)** - Tutorials and use cases
-- **[Examples Overview](user-guide/examples-overview.md)** - Available examples
-- **[Advanced Features](user-guide/advanced-features.md)** - Complex workflows
+    # Launch napari with PySPIM plugin
+    napari
+    # Navigate to: Plugins → PySPIM → DiSPIM Pipeline
+    ```
 
-## 🧪 Examples
+## Documentation
 
-- **[Basic Usage](user-guide/basic-usage.md)** - Step-by-step tutorials
-- **[Fruiting Body Workflow](user-guide/fruiting-body-workflow.md)** - Complete workflow demonstration
-- **[Snakemake Workflow](user-guide/snakemake-workflow.md)** - Automated processing pipeline
-- **[Jupyter Notebooks](user-guide/notebooks.md)** - Interactive examples
+<div class="grid" markdown>
 
-## 🛠️ Development
+<div markdown>
 
-```bash
-# Run tests
-just test
+### Getting Started
+- [Installation Guide](getting-started/installation.md) - Set up PySPIM on your system
+- [Quick Start Tutorial](getting-started/quickstart.md) - Your first PySPIM workflow
+- [Examples Overview](user-guide/examples-overview.md) - Explore available examples
 
-# Format code
-just format
+### User Guide
+- [Basic Usage](user-guide/basic-usage.md) - Step-by-step tutorial
+- [Fruiting Body Workflow](user-guide/fruiting-body-workflow.md) - Complete pipeline example
+- [Snakemake Workflow](user-guide/snakemake-workflow.md) - Automated processing
+- [Advanced Features](user-guide/advanced-features.md) - Advanced techniques
 
-# Build documentation
-just docs-serve
-```
+</div>
 
-See [Contributing Guide](development/contributing.md) for development details.
+<div markdown>
 
-## 📄 License
+### Napari Plugin
+- [Plugin Overview](packages/napari-pyspim/overview.md) - Interactive GUI features
+- [Plugin Usage](packages/napari-pyspim/usage.md) - How to use the GUI
+- [Plugin API](packages/napari-pyspim/api.md) - Technical reference
 
-This project is licensed under the GPL-3.0 License - see the [License](about/license.md) file for details.
+### Core Package
+- [Core Overview](packages/pyspim/overview.md) - Library architecture
+- [API Reference](packages/pyspim/api.md) - Complete API documentation
 
-## 🤝 Citation
+</div>
 
-If you use PySPIM in your research, please cite:
+</div>
 
-```bibtex
-@software{pyspim2024,
-  title={PySPIM: Selective Plane Illumination Microscopy Analysis},
-  author={PySPIM Team},
-  year={2024},
-  url={https://github.com/matt-black/pyspim}
-}
-``` 
+## Examples
+
+!!! tip "Ready to explore?"
+
+    - [Basic Usage](user-guide/basic-usage.md) - Step-by-step tutorial
+    - [Fruiting Body Workflow](user-guide/fruiting-body-workflow.md) - Complete pipeline
+    - [Snakemake Workflow](user-guide/snakemake-workflow.md) - Automated processing
+
+## License & Citation
+
+<div class="grid" markdown>
+
+<div markdown>
+
+!!! info "License"
+
+    PySPIM is released under the GPL-3.0 License. See [License Details](about/license.md) for more information.
+
+</div>
+
+<div markdown>
+
+!!! quote "Citation"
+
+    If you use PySPIM in your research, please cite:
+
+    ```bibtex
+    @software{pyspim2024,
+      title={PySPIM: Selective Plane Illumination Microscopy Analysis},
+      author={PySPIM Team},
+      year={2024},
+      url={https://github.com/matt-black/pyspim}
+    }
+    ```
+
+</div>
+
+</div> 
