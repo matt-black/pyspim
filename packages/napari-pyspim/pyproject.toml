@@ -50,6 +50,7 @@ testing = [
     "pytest",
     "pytest-cov",
     "pytest-qt",
+    "pytest-mock",
     "napari[testing]",
 ]
 
@@ -66,4 +67,23 @@ packages = ["src/napari_pyspim"]
 
 [tool.hatch.build.targets.wheel.include]
 "src/napari_pyspim/*.yaml" = "napari_pyspim"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=src/napari_pyspim",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gui: marks tests as requiring GUI",
+    "integration: marks tests as integration tests",
+]
 

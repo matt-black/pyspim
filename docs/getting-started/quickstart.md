@@ -127,6 +127,6 @@ The plugin will automatically use GPU acceleration when available.
 ## Next Steps
 
 - Read the [Installation Guide](installation.md) for detailed setup
-- Explore [Examples](examples/basic-usage.md) for more use cases
+- Explore [Examples](../user-guide/basic-usage.md) for more use cases
 - Check the [API Reference](packages/pyspim/api.md) for detailed documentation
 - Learn about [Configuration](configuration.md) options 

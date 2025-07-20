@@ -174,11 +174,14 @@ nav:
     - Installation: packages/napari-pyspim/installation.md
     - Usage: packages/napari-pyspim/usage.md
     - API Reference: packages/napari-pyspim/api.md
-  - Examples:
-    - Basic Usage: examples/basic-usage.md
-    - Fruiting Body Workflow: examples/fruiting-body-workflow.md
-    - Advanced Features: examples/advanced-features.md
-    - Notebooks: examples/notebooks.md
+  - User Guide:
+    - Examples Overview: user-guide/examples-overview.md
+    - Basic Usage: user-guide/basic-usage.md
+    - Fruiting Body Workflow: user-guide/fruiting-body-workflow.md
+    - Snakemake Workflow: user-guide/snakemake-workflow.md
+    - Advanced Features: user-guide/advanced-features.md
+    - Sample Data: user-guide/sample-data.md
+    - Notebooks: user-guide/notebooks.md
   - Development:
     - Contributing: development/contributing.md
     - Building: development/building.md
@@ -192,8 +195,6 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/matt-black/pyspim
-    - icon: fontawesome/brands/twitter
-      link: https://twitter.com/pyspim
   analytics:
     provider: google
     property: !ENV GOOGLE_ANALYTICS_KEY

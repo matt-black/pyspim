@@ -44,7 +44,7 @@ pyspim/
 │   └── napari-pyspim/       # Napari plugin for GUI
 ├── docs/                    # Documentation (MkDocs + Material)
 ├── examples/                # Example data and notebooks
-├── tools/                   # Development tools
+├── examples/                # Example code, data, and scripts
 └── pyproject.toml          # UV workspace configuration
 ```
 

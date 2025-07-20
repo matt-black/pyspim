@@ -19,7 +19,7 @@ We use a subset of fruiting body data (50 Z planes, 200×200 XY) extracted from 
 ### Data Structure
 
 ```
-docs/examples/data/fruiting_body_subset/
+examples/data/fruiting_body_subset/
 ├── fruiting_body_subset.ome.tif    # Dual-view SPIM data (2 channels)
 ├── PSFA_demo.npy                   # Point spread function for view A
 ├── PSFB_demo.npy                   # Point spread function for view B
@@ -166,7 +166,7 @@ The notebook includes comprehensive visualizations at each step:
 
 1. **Install PySPIM**: Follow the [installation guide](../getting-started/installation.md)
 2. **Download the data**: The subset data is included in the repository
-3. **Run the notebook**: Execute `docs/examples/fruiting_body_workflow.ipynb`
+3. **Run the notebook**: Execute `examples/fruiting_body_workflow.ipynb`
 
 ```bash
 # Navigate to the project directory
@@ -176,7 +176,7 @@ cd pyspim
 conda activate pyspim
 
 # Start Jupyter
-jupyter lab docs/examples/fruiting_body_workflow.ipynb
+jupyter lab examples/fruiting_body_workflow.ipynb
 ```
 
 ## Performance Notes

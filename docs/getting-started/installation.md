@@ -155,5 +155,5 @@ viewer = napari.Viewer()
 ## Next Steps
 
 - Read the [Quick Start Guide](quickstart.md)
-- Explore the [Examples](examples/basic-usage.md)
+- Explore the [Examples](../user-guide/basic-usage.md)
 - Check out the [API Reference](packages/pyspim/api.md) 

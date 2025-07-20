@@ -59,6 +59,27 @@ sbatch examples/data/sample_data/sh/3_transform.sh
 sbatch examples/data/sample_data/sh/4_deconvolve.sh
 ```
 
+### Automated Workflow with Snakemake
+
+For high-throughput processing, use our streamlined Snakemake workflow:
+
+```bash
+# Navigate to the workflow directory
+cd examples/snakemake
+
+# Configure your data in config.yaml
+# Run on SLURM cluster with GPU acceleration
+snakemake --slurm --jobs 10
+```
+
+The Snakemake workflow provides:
+- **Automated Pipeline**: From raw data to deconvolved results
+- **GPU Acceleration**: Automatic GPU resource requests
+- **SLURM Integration**: Seamless cluster job submission
+- **Reproducible**: Complete workflow documentation
+
+See [Snakemake Workflow](user-guide/snakemake-workflow.md) for detailed instructions.
+
 ## Installation
 
 **Note**: PySPIM is currently in development and not yet published on PyPI or conda-forge.
@@ -124,17 +145,21 @@ just check
 - **[Getting Started](getting-started/installation.md)**: Installation and basic setup
 - **[Core Package](packages/pyspim/overview.md)**: Main PySPIM library documentation
 - **[Napari Plugin](packages/napari-pyspim/overview.md)**: Interactive GUI documentation
-- **[Examples](examples/basic-usage.md)**: Tutorials and use cases
+- **[Plugin Installation](packages/napari-pyspim/installation.md)**: Installation guide
+- **[Plugin Usage](packages/napari-pyspim/usage.md)**: Detailed usage instructions
+- **[Examples Overview](user-guide/examples-overview.md)**: Overview of available examples
+- **[Basic Usage](user-guide/basic-usage.md)**: Tutorials and use cases
+- **[Snakemake Workflow](user-guide/snakemake-workflow.md)**: Automated processing pipeline
 - **[API Reference](packages/pyspim/api.md)**: Complete API documentation
 
 ## Example Data
 
 We provide sample data and scripts for testing:
 
-- **Fruiting Body Subset**: `docs/examples/data/fruiting_body_subset/` - Complete workflow demonstration
-- **Jupyter Notebook**: `docs/examples/fruiting_body_workflow.ipynb` - Step-by-step tutorial
+- **Fruiting Body Subset**: `examples/data/fruiting_body_subset/` - Complete workflow demonstration
+- **Jupyter Notebook**: `examples/fruiting_body_workflow.ipynb` - Step-by-step tutorial
 - **SLURM Scripts**: `examples/data/sample_data/sh/*.sh` - Batch processing examples
-- **Documentation**: See [examples/fruiting-body-workflow.md](examples/fruiting-body-workflow.md)
+- **Documentation**: See [Fruiting Body Workflow](user-guide/fruiting-body-workflow.md)
 
 ## Contributing
 

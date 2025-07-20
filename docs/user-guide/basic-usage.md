@@ -18,7 +18,7 @@ pyspim/
 │       │   ├── README.md          # Usage instructions
 │       │   └── sh/                # SLURM job scripts
 │       └── example_dispim_data/   # Full example datasets (excluded from git)
-├── tools/
+├── examples/
 │   └── script/
 │       └── dispim_pipeline/       # Command-line tools
 └── docs/                          # Documentation
@@ -101,7 +101,7 @@ b_dsk = dsk.deskew_stage_scan(b_raw, pixel_size, step_size_lat, -1,
 
 ## Command-Line Pipeline
 
-PySPIM provides command-line tools for batch processing in `tools/script/dispim_pipeline/`:
+PySPIM provides command-line tools for batch processing in `examples/scripts/dispim_pipeline/`:
 
 ### 1. Deskewing (CPU)
 
@@ -308,7 +308,8 @@ deconv_params = {
 
 ## Next Steps
 
-- Run the [basic usage notebook](examples/nb/basic_usage.ipynb)
-- Try the [command-line pipeline](tools/script/dispim_pipeline/)
+- Run the [basic usage notebook](../../../examples/nb/basic_usage.ipynb)
+- Try the [command-line pipeline](examples/scripts/dispim_pipeline/)
+- Use the [Snakemake workflow](snakemake-workflow.md) for automated processing
 - Check the [API reference](packages/pyspim/api.md) for detailed function documentation
 - Explore [advanced features](advanced-features.md) for complex workflows 

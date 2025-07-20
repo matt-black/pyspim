@@ -15,35 +15,35 @@ class TestCommandLineTools:
 
     def test_deskew_cpu_script_exists(self):
         """Test that deskew_cpu.py script exists and is executable."""
-        script_path = Path("tools/script/dispim_pipeline/deskew_cpu.py")
+        script_path = Path("examples/scripts/dispim_pipeline/deskew_cpu.py")
         assert script_path.exists(), f"Script not found: {script_path}"
         assert script_path.is_file(), f"Not a file: {script_path}"
 
     def test_register_script_exists(self):
         """Test that register.py script exists and is executable."""
-        script_path = Path("tools/script/dispim_pipeline/register.py")
+        script_path = Path("examples/scripts/dispim_pipeline/register.py")
         assert script_path.exists(), f"Script not found: {script_path}"
         assert script_path.is_file(), f"Not a file: {script_path}"
 
     def test_deconvolve_script_exists(self):
         """Test that deconvolve.py script exists and is executable."""
-        script_path = Path("tools/script/dispim_pipeline/deconvolve.py")
+        script_path = Path("examples/scripts/dispim_pipeline/deconvolve.py")
         assert script_path.exists(), f"Script not found: {script_path}"
         assert script_path.is_file(), f"Not a file: {script_path}"
 
     def test_transform_script_exists(self):
         """Test that transform.py script exists and is executable."""
-        script_path = Path("tools/script/dispim_pipeline/transform.py")
+        script_path = Path("examples/scripts/dispim_pipeline/transform.py")
         assert script_path.exists(), f"Script not found: {script_path}"
         assert script_path.is_file(), f"Not a file: {script_path}"
 
     def test_script_help(self):
         """Test that scripts provide help information."""
         scripts = [
-            "tools/script/dispim_pipeline/deskew_cpu.py",
-            "tools/script/dispim_pipeline/register.py",
-            "tools/script/dispim_pipeline/deconvolve.py",
-            "tools/script/dispim_pipeline/transform.py",
+            "examples/scripts/dispim_pipeline/deskew_cpu.py",
+            "examples/scripts/dispim_pipeline/register.py",
+            "examples/scripts/dispim_pipeline/deconvolve.py",
+            "examples/scripts/dispim_pipeline/transform.py",
         ]
 
         for script in scripts:
@@ -63,10 +63,10 @@ class TestCommandLineTools:
     def test_script_argument_parsing(self):
         """Test that scripts can parse basic arguments."""
         scripts = [
-            "tools/script/dispim_pipeline/deskew_cpu.py",
-            "tools/script/dispim_pipeline/register.py",
-            "tools/script/dispim_pipeline/deconvolve.py",
-            "tools/script/dispim_pipeline/transform.py",
+            "examples/scripts/dispim_pipeline/deskew_cpu.py",
+            "examples/scripts/dispim_pipeline/register.py",
+            "examples/scripts/dispim_pipeline/deconvolve.py",
+            "examples/scripts/dispim_pipeline/transform.py",
         ]
 
         for script in scripts:
@@ -164,7 +164,7 @@ class TestSLURMScripts:
             assert "deconvolve.py" in content
             assert "--psf-a" in content
             assert "--psf-b" in content
-            assert "--iterations" in content
+            assert "--num-iter" in content
 
 
 class TestDataFormats:

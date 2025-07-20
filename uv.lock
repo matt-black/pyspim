@@ -4074,8 +4074,6 @@ name = "napari-pyspim"
 version = "0.0.1"
 source = { editable = "packages/napari-pyspim" }
 dependencies = [
-    { name = "cupy-cuda12x", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "cupy-cuda12x", version = "13.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "matplotlib", version = "3.7.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "matplotlib", version = "3.9.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "matplotlib", version = "3.10.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -4089,6 +4087,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+gpu = [
+    { name = "cupy-cuda12x", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "cupy-cuda12x", version = "13.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
+]
 testing = [
     { name = "napari", version = "0.4.19.post1", source = { registry = "https://pypi.org/simple" }, extra = ["testing"], marker = "python_full_version < '3.9'" },
     { name = "napari", version = "0.5.6", source = { registry = "https://pypi.org/simple" }, extra = ["testing"], marker = "python_full_version == '3.9.*'" },
@@ -4097,6 +4099,7 @@ testing = [
     { name = "pytest", version = "8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "pytest-cov", version = "5.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest-cov", version = "6.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
+    { name = "pytest-mock" },
     { name = "pytest-qt", version = "4.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest-qt", version = "4.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "tox", version = "4.25.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
@@ -4105,7 +4108,7 @@ testing = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cupy-cuda12x" },
+    { name = "cupy-cuda12x", marker = "extra == 'gpu'" },
     { name = "matplotlib", specifier = ">=3.5.0" },
     { name = "napari", specifier = ">=0.4.0" },
     { name = "napari", extras = ["testing"], marker = "extra == 'testing'" },
@@ -4114,11 +4117,12 @@ requires-dist = [
     { name = "pyspim", editable = "packages/pyspim" },
     { name = "pytest", marker = "extra == 'testing'" },
     { name = "pytest-cov", marker = "extra == 'testing'" },
+    { name = "pytest-mock", marker = "extra == 'testing'" },
     { name = "pytest-qt", marker = "extra == 'testing'" },
     { name = "qtpy", specifier = ">=1.9.0" },
     { name = "tox", marker = "extra == 'testing'" },
 ]
-provides-extras = ["testing"]
+provides-extras = ["gpu", "testing"]
 
 [[package]]
 name = "napari-svg"
@@ -6151,8 +6155,6 @@ name = "pyspim"
 version = "0.1.0"
 source = { editable = "packages/pyspim" }
 dependencies = [
-    { name = "cupy", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "cupy", version = "13.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "dask", version = "2023.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "dask", version = "2024.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "dask", version = "2025.7.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -6200,6 +6202,10 @@ docs = [
     { name = "mkdocstrings", version = "0.26.1", source = { registry = "https://pypi.org/simple" }, extra = ["python"], marker = "python_full_version < '3.9'" },
     { name = "mkdocstrings", version = "0.29.1", source = { registry = "https://pypi.org/simple" }, extra = ["python"], marker = "python_full_version >= '3.9'" },
 ]
+gpu = [
+    { name = "cupy", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "cupy", version = "13.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
+]
 test = [
     { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest", version = "8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
@@ -6212,7 +6218,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cupy", specifier = ">=10.0.0" },
+    { name = "cupy", marker = "extra == 'gpu'", specifier = ">=10.0.0" },
     { name = "dask", specifier = ">=2021.0.0" },
     { name = "h5py", specifier = ">=3.0.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.4.0" },
@@ -6236,7 +6242,7 @@ requires-dist = [
     { name = "tifffile", specifier = ">=2021.0.0" },
     { name = "zarr", specifier = ">=2.10.0" },
 ]
-provides-extras = ["dev", "docs", "test"]
+provides-extras = ["gpu", "dev", "docs", "test"]
 
 [[package]]
 name = "pyspim-monorepo"

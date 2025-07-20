@@ -35,7 +35,8 @@ clean:
 
 # Run tests for all packages
 test:
-    uv run pytest packages/*/tests/ -v --cov=packages/pyspim/src/pyspim --cov=packages/napari-pyspim/src/napari_pyspim --cov-report=term-missing
+    uv run pytest packages/pyspim/tests/ -v --cov=packages/pyspim/src/pyspim --cov-report=term-missing
+    uv run pytest packages/napari-pyspim/tests/ -v --cov=packages/napari-pyspim/src/napari_pyspim --cov-report=term-missing
 
 # Run tests for core pyspim package
 test-pyspim:
@@ -47,15 +48,18 @@ test-plugin:
 
 # Run fast tests (exclude slow and GPU tests)
 test-fast:
-    uv run pytest packages/*/tests/ -v -m "not slow and not gpu" --tb=short
+    uv run pytest packages/pyspim/tests/ -v -m "not slow and not gpu" --tb=short
+    uv run pytest packages/napari-pyspim/tests/ -v -m "not slow and not gpu" --tb=short
 
 # Run GPU tests only
 test-gpu:
-    uv run pytest packages/*/tests/ -v -m "gpu" --tb=short
+    uv run pytest packages/pyspim/tests/ -v -m "gpu" --tb=short
+    uv run pytest packages/napari-pyspim/tests/ -v -m "gpu" --tb=short
 
 # Run integration tests only
 test-integration:
-    uv run pytest packages/*/tests/ -v -m "integration" --tb=short
+    uv run pytest packages/pyspim/tests/ -v -m "integration" --tb=short
+    uv run pytest packages/napari-pyspim/tests/ -v -m "integration" --tb=short
 
 # Run tests with detailed coverage reports
 test-coverage:
