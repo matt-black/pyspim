@@ -74,11 +74,17 @@ theme:
     - search.share
     - search.suggest
     - toc.follow
+    - navigation.tracking.attribution
 
   # Icon
   icon:
     repo: fontawesome/brands/github
     logo: material/microscope
+  
+  # Navigation
+  navigation:
+    expand: true
+    collapse: false
 
 # Plugins
 plugins:
@@ -159,13 +165,23 @@ extra_javascript:
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
+# Extra files to include
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/matt-black/pyspim
+  analytics:
+    provider: google
+    property: !ENV GOOGLE_ANALYTICS_KEY
+  version:
+    provider: mike
+
 # Navigation
 nav:
   - Home: index.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
-    - Configuration: getting-started/configuration.md
   - Core Package (pyspim):
     - Overview: packages/pyspim/overview.md
     - API Reference: packages/pyspim/api.md
@@ -184,19 +200,7 @@ nav:
     - Notebooks: user-guide/notebooks.md
   - Development:
     - Contributing: development/contributing.md
-    - Building: development/building.md
-    - Testing: development/testing.md
   - About:
-    - Changelog: about/changelog.md
     - License: about/license.md
 
-# Extra
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/matt-black/pyspim
-  analytics:
-    provider: google
-    property: !ENV GOOGLE_ANALYTICS_KEY
-  version:
-    provider: mike 
+ 

@@ -2,174 +2,119 @@
 
 PySPIM is a comprehensive Python library for analyzing and visualizing selective plane illumination microscopy (SPIM) data, with special emphasis on dual-view SPIM (diSPIM) microscopy.
 
-## What is PySPIM?
+## 🧭 Quick Navigation
 
-PySPIM provides a complete pipeline for processing SPIM microscopy data, including:
+- **[🚀 Install Now](getting-started/installation.md)** - Get started in minutes
+- **[📖 Quick Start](getting-started/quickstart.md)** - Basic workflow tutorial
+- **[🖥️ Napari Plugin](packages/napari-pyspim/overview.md)** - Interactive GUI
+- **[📦 Core Package](packages/pyspim/overview.md)** - Library documentation
+- **[🧪 Examples](user-guide/basic-usage.md)** - Tutorials and use cases
 
-- **Data Loading**: Efficient loading of various microscopy data formats (uManager, TIFF, HDF5)
+## 🚀 Quick Installation
+
+```bash
+# Clone and install
+git clone https://github.com/matt-black/pyspim.git
+cd pyspim
+just install-dev
+```
+
+## 🎯 What is PySPIM?
+
+PySPIM provides a complete pipeline for processing SPIM microscopy data:
+
+- **Data Loading**: Efficient loading of various microscopy data formats
 - **ROI Detection**: Automated region of interest detection and cropping
 - **Deskewing**: Correction of light sheet microscopy artifacts
 - **Registration**: Multi-view image registration with GPU acceleration
 - **Deconvolution**: Advanced deconvolution algorithms with PSF support
 
-## Key Features
+## 🔧 Key Features
 
 - 🚀 **High Performance**: GPU-accelerated processing with CuPy
 - 🔧 **Modular Design**: Separate core library and napari plugin
-- 📊 **Interactive Visualization**: Full napari integration with parameter passing
+- 📊 **Interactive Visualization**: Full napari integration
 - 🧪 **Research Ready**: Designed for scientific workflows with SLURM support
 - 📚 **Well Documented**: Comprehensive API documentation and examples
-- 🛠️ **Modern Development**: UV package management, ruff linting, pre-commit hooks
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Using the Napari Plugin
 
 ```python
 import napari
-from napari_pyspim import DispimPipelineWidget
 
-# Create viewer and add your data
+# Launch napari and load the PySPIM plugin
 viewer = napari.Viewer()
-viewer.add_image(your_data, metadata={
-    'step_size': 0.5,
-    'pixel_size': 0.1625,
-    'theta': 0.785,  # π/4 radians
-    'camera_offset': 100
-})
-
-# Add the PySPIM plugin
-widget = DispimPipelineWidget(viewer)
-viewer.window.add_dock_widget(widget, name="diSPIM Pipeline")
+# Go to Plugins → PySPIM → DiSPIM Pipeline
 ```
 
 ### Command Line Processing
 
-```bash
-# Install in development mode
-just install-dev
+```python
+import pyspim
 
-# Run the complete pipeline
-python examples/data/sample_data/basic_usage.ipynb
-
-# Or use SLURM batch processing
-sbatch examples/data/sample_data/sh/1_deskew.sh
-sbatch examples/data/sample_data/sh/2_register.sh
-sbatch examples/data/sample_data/sh/3_transform.sh
-sbatch examples/data/sample_data/sh/4_deconvolve.sh
+# Load and process SPIM data
+data = pyspim.load_data("path/to/data.tif")
+processed = pyspim.process_pipeline(data)
+pyspim.save_data(processed, "output.tif")
 ```
 
-### Automated Workflow with Snakemake
-
-For high-throughput processing, use our streamlined Snakemake workflow:
+### Automated Workflow
 
 ```bash
-# Navigate to the workflow directory
+# Use Snakemake for high-throughput processing
 cd examples/snakemake
-
-# Configure your data in config.yaml
-# Run on SLURM cluster with GPU acceleration
 snakemake --slurm --jobs 10
 ```
 
-The Snakemake workflow provides:
-- **Automated Pipeline**: From raw data to deconvolved results
-- **GPU Acceleration**: Automatic GPU resource requests
-- **SLURM Integration**: Seamless cluster job submission
-- **Reproducible**: Complete workflow documentation
+## 📚 Documentation
 
-See [Snakemake Workflow](user-guide/snakemake-workflow.md) for detailed instructions.
+### 🚀 Getting Started
+- **[Installation Guide](getting-started/installation.md)** - Detailed setup instructions
+- **[Quick Start](getting-started/quickstart.md)** - Get up and running in minutes
 
-## Installation
+### 📦 Core Package
+- **[Overview](packages/pyspim/overview.md)** - Main PySPIM library documentation
+- **[API Reference](packages/pyspim/api.md)** - Complete function documentation
 
-**Note**: PySPIM is currently in development and not yet published on PyPI or conda-forge.
+### 🖥️ Napari Plugin
+- **[Overview](packages/napari-pyspim/overview.md)** - Interactive GUI documentation
+- **[Installation](packages/napari-pyspim/installation.md)** - Plugin setup guide
+- **[Usage](packages/napari-pyspim/usage.md)** - Detailed usage instructions
 
-### Installation
+### 📖 User Guide
+- **[Basic Usage](user-guide/basic-usage.md)** - Tutorials and use cases
+- **[Examples Overview](user-guide/examples-overview.md)** - Available examples
+- **[Advanced Features](user-guide/advanced-features.md)** - Complex workflows
 
-```bash
-# Clone the repository
-git clone https://github.com/matt-black/pyspim.git
-cd pyspim
+## 🧪 Examples
 
-# Install with just (recommended)
-just install
+- **[Basic Usage](user-guide/basic-usage.md)** - Step-by-step tutorials
+- **[Fruiting Body Workflow](user-guide/fruiting-body-workflow.md)** - Complete workflow demonstration
+- **[Snakemake Workflow](user-guide/snakemake-workflow.md)** - Automated processing pipeline
+- **[Jupyter Notebooks](user-guide/notebooks.md)** - Interactive examples
 
-# Or manually
-uv pip install -e packages/pyspim
-uv pip install -e packages/napari-pyspim
-```
-
-### Future Production Installation
-
-Once PySPIM is published on PyPI:
+## 🛠️ Development
 
 ```bash
-# Install the core package
-pip install pyspim
-
-# Install the napari plugin
-pip install napari-pyspim
-```
-
-## Development Workflow
-
-### Using Just (Task Runner)
-
-```bash
-# List all available commands
-just --list
-
 # Run tests
-just test-fast
+just test
 
-# Format and lint code
+# Format code
 just format
-just lint
 
 # Build documentation
 just docs-serve
-
-# Run all checks
-just check
 ```
 
-### Code Quality
+See [Contributing Guide](development/contributing.md) for development details.
 
-- **Ruff**: Fast Python linter and formatter
-- **Pre-commit**: Automated code quality checks
-- **Type hints**: Full mypy support
-- **Testing**: Comprehensive test suite with GPU and integration tests
-
-## Documentation Structure
-
-- **[Getting Started](getting-started/installation.md)**: Installation and basic setup
-- **[Core Package](packages/pyspim/overview.md)**: Main PySPIM library documentation
-- **[Napari Plugin](packages/napari-pyspim/overview.md)**: Interactive GUI documentation
-- **[Plugin Installation](packages/napari-pyspim/installation.md)**: Installation guide
-- **[Plugin Usage](packages/napari-pyspim/usage.md)**: Detailed usage instructions
-- **[Examples Overview](user-guide/examples-overview.md)**: Overview of available examples
-- **[Basic Usage](user-guide/basic-usage.md)**: Tutorials and use cases
-- **[Snakemake Workflow](user-guide/snakemake-workflow.md)**: Automated processing pipeline
-- **[API Reference](packages/pyspim/api.md)**: Complete API documentation
-
-## Example Data
-
-We provide sample data and scripts for testing:
-
-- **Fruiting Body Subset**: `examples/data/fruiting_body_subset/` - Complete workflow demonstration
-- **Jupyter Notebook**: `examples/fruiting_body_workflow.ipynb` - Step-by-step tutorial
-- **SLURM Scripts**: `examples/data/sample_data/sh/*.sh` - Batch processing examples
-- **Documentation**: See [Fruiting Body Workflow](user-guide/fruiting-body-workflow.md)
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guide](development/contributing.md) for details.
-
-## License
+## 📄 License
 
 This project is licensed under the GPL-3.0 License - see the [License](about/license.md) file for details.
 
-## Citation
+## 🤝 Citation
 
 If you use PySPIM in your research, please cite:
 

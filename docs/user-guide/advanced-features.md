@@ -356,4 +356,4 @@ print(f"GPU Memory: {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
 - Explore the [API Reference](../packages/pyspim/api.md) for complete function documentation
 - Check out [basic usage examples](basic-usage.md) for fundamental workflows
 - Try the [napari plugin](../packages/napari-pyspim/overview.md) for interactive analysis
-- Review [performance benchmarks](../development/testing.md) for optimization tips 
+- Review [performance benchmarks](../development/contributing.md#testing) for optimization tips 

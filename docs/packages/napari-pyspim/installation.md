@@ -364,8 +364,8 @@ CMD ["napari"]
 After successful installation:
 
 1. **Read the [Usage Guide](usage.md)** for detailed instructions
-2. **Try the [Quick Start](../getting-started/quickstart.md)** for basic workflow
-3. **Explore [Examples](../user-guide/basic-usage.md)** for sample data processing
+2. **Try the [Quick Start](../../getting-started/quickstart.md)** for basic workflow
+3. **Explore [Examples](../../user-guide/basic-usage.md)** for sample data processing
 4. **Check [Troubleshooting](usage.md#troubleshooting)** if you encounter issues
 
 ## Support
@@ -379,8 +379,8 @@ After successful installation:
 The images in this documentation are placeholders. To complete the documentation:
 
 1. **Take Screenshots**: Capture the actual installation and setup process
-2. **Replace Placeholders**: Upload images to `docs/images/` directory
-3. **Follow Guidelines**: See `docs/images/README.md` for detailed instructions
+2. **Replace Placeholders**: Upload images to `docs/media/` directory
+3. **Follow Guidelines**: See `docs/media/README.md` for detailed instructions
 
 Key images needed:
 - Plugin menu in napari
