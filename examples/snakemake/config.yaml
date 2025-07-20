@@ -1,0 +1,23 @@
+# Configuration file for pyspim Snakemake workflow
+# Uses the fruiting body subset example data
+
+# Data directories (relative to project root)
+data_dir: "../../data/fruiting_body_subset"
+psf_dir: "../../data/fruiting_body_subset"
+
+# List of acquisitions to process
+acquisitions:
+  - "fruiting_body_subset"
+
+# Acquisition parameters
+step_size: 0.5      # microns, distance between image planes
+pixel_size: 0.1625  # microns, pixel size
+theta: 45           # degrees, angle between objective and coverslip
+
+# Processing parameters
+roi_method: "otsu"      # ROI detection method: "otsu" or "triangle"
+decon_iterations: 10    # Number of deconvolution iterations
+
+# PSF files
+psf_a: "PSFA_demo.npy"
+psf_b: "PSFB_demo.npy" 

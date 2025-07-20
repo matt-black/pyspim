@@ -111,5 +111,5 @@ config = pyspim.Config(
 ## Next Steps
 
 - Read the [API Reference](api.md) for detailed function documentation
-- Check out [Examples](examples/basic-usage.md) for usage patterns
+- Check out [Examples](../user-guide/basic-usage.md) for usage patterns
 - Learn about [Configuration](getting-started/configuration.md) options 

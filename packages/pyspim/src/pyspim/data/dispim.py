@@ -379,5 +379,8 @@ def subtract_constant_uint16arr(arr: NDArray, const: int) -> NDArray:
     Returns:
         NDArray
     """
-    xp = cupy.get_array_module(arr)
+    try:
+        xp = cupy.get_array_module(arr)
+    except (NameError, ImportError):
+        xp = numpy
     return (arr.astype(xp.int32) - const).clip(0, 2**16).astype(xp.uint16)

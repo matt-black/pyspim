@@ -143,7 +143,7 @@ pyspim/
 │       └── pyproject.toml
 ├── docs/                    # Documentation
 ├── examples/                # Example data and notebooks
-├── tools/                   # Development tools
+├── examples/                # Example code, data, and scripts
 └── pyproject.toml          # Workspace configuration
 ```
 

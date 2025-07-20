@@ -1,0 +1,7 @@
+# SLURM configuration for pyspim workflow
+# Resource requirements are specified at the rule level in Snakefile
+
+# Default SLURM settings
+default-resources:
+  - runtime=60
+  - mem_mb=8000 
