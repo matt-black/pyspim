@@ -6,6 +6,9 @@ The Napari PySPIM plugin provides an interactive graphical user interface for pr
 
 The plugin integrates seamlessly with Napari, providing a tabbed interface for all SPIM processing steps. It leverages the core PySPIM package for processing while offering an intuitive GUI for parameter adjustment and result visualization.
 
+
+*Overview of the PySPIM napari plugin showing the complete workflow interface*
+
 ## Features
 
 ### Interactive Processing Pipeline
@@ -15,6 +18,9 @@ The plugin integrates seamlessly with Napari, providing a tabbed interface for a
 - **Progress Tracking**: Real-time progress bars and status updates
 
 ### Processing Steps
+
+
+*The 5 processing steps in the PySPIM workflow*
 
 1. **Data Loading**
    - Load various file formats (TIFF, HDF5, Zarr)
@@ -54,6 +60,9 @@ pip install -e packages/napari-pyspim
 ## Usage
 
 ### Basic Workflow
+
+
+*Basic workflow showing the step-by-step process*
 
 1. **Launch Napari**
    ```python
@@ -140,11 +149,24 @@ The plugin integrates deeply with Napari:
 ### Getting Help
 
 - Check the [API Reference](api.md) for detailed widget documentation
-- See [Examples](examples/basic-usage.md) for usage patterns
+- See [Examples](../user-guide/basic-usage.md) for usage patterns
 - Report issues on [GitHub](https://github.com/matt-black/pyspim/issues)
 
 ## Next Steps
 
 - Read the [Installation Guide](installation.md) for setup instructions
 - Check the [Usage Guide](usage.md) for detailed workflow examples
-- Explore the [API Reference](api.md) for widget documentation 
+- Explore the [API Reference](api.md) for widget documentation
+
+## Image Placeholders
+
+The images in this documentation are placeholders. To complete the documentation:
+
+1. **Take Screenshots**: Capture the actual napari plugin interface
+2. **Replace Placeholders**: Upload images to `docs/images/` directory
+3. **Follow Guidelines**: See `docs/images/README.md` for detailed instructions
+
+Key images needed:
+- Plugin overview and main interface
+- Processing steps diagram
+- Basic workflow progression 

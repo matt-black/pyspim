@@ -180,7 +180,7 @@ import numpy
 
 ## Next Steps
 
-- Run the [basic usage notebook](examples/nb/basic_usage.ipynb)
-- Try the [command-line pipeline](tools/script/dispim_pipeline/)
+- Run the [basic usage notebook](../../../examples/nb/basic_usage.ipynb)
+- Try the [command-line pipeline](examples/scripts/dispim_pipeline/)
 - Check the [API reference](packages/pyspim/api.md)
 - Explore [advanced features](advanced-features.md) 

@@ -33,3 +33,4 @@ members = [
 
 [tool.uv.sources]
 pyspim = { workspace = true }
+napari-pyspim = { workspace = true }

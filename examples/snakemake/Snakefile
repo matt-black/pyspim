@@ -1,0 +1,113 @@
+# Snakemake workflow for pyspim processing
+# Compatible with Snakemake 7+
+
+import os
+import math
+from pathlib import Path
+
+# Configuration
+configfile: "config.yaml"
+
+# Define wildcards for different acquisitions
+wildcard_constraints:
+    acquisition = r"[a-zA-Z0-9_-]+"
+
+# Input data paths
+DATA_DIR = config["data_dir"]
+PSF_DIR = config["psf_dir"]
+
+# Acquisition parameters
+STEP_SIZE = config["step_size"]  # microns
+PIXEL_SIZE = config["pixel_size"]  # microns
+THETA = config["theta"] * math.pi / 180  # radians
+
+# Calculate derived parameters
+STEP_SIZE_LAT = STEP_SIZE / math.cos(THETA)
+
+# Rule to get list of acquisitions
+rule all:
+    input:
+        expand("results/{acquisition}/deconvolved/deconvolved.tif", 
+               acquisition=config["acquisitions"])
+
+# Rule to load and preprocess raw data
+rule load_data:
+    output:
+        a_raw = "results/{acquisition}/raw/a_raw.tif",
+        b_raw = "results/{acquisition}/raw/b_raw.tif"
+    params:
+        data_path = DATA_DIR
+    resources:
+        runtime = 30,
+        mem_mb = 4000
+    script:
+        "scripts/load_data.py"
+
+# Rule to detect ROI and crop data
+rule detect_roi:
+    input:
+        a_raw = "results/{acquisition}/raw/a_raw.tif",
+        b_raw = "results/{acquisition}/raw/b_raw.tif"
+    output:
+        a_cropped = "results/{acquisition}/cropped/a_cropped.tif",
+        b_cropped = "results/{acquisition}/cropped/b_cropped.tif",
+        roi_coords = "results/{acquisition}/cropped/roi_coords.json"
+    params:
+        method = config["roi_method"]
+    resources:
+        runtime = 60,
+        mem_mb = 8000
+    script:
+        "scripts/detect_roi.py"
+
+# Rule to deskew channel A
+rule deskew_a:
+    input:
+        cropped = "results/{acquisition}/cropped/a_cropped.tif"
+    output:
+        deskewed = "results/{acquisition}/deskewed/a_deskewed.tif"
+    params:
+        pixel_size = PIXEL_SIZE,
+        step_size_lat = STEP_SIZE_LAT,
+        direction = 1
+    resources:
+        runtime = 120,
+        mem_mb = 16000,
+        slurm_extra = "--gres=gpu:1"
+    script:
+        "scripts/deskew.py"
+
+# Rule to deskew channel B
+rule deskew_b:
+    input:
+        cropped = "results/{acquisition}/cropped/b_cropped.tif"
+    output:
+        deskewed = "results/{acquisition}/deskewed/b_deskewed.tif"
+    params:
+        pixel_size = PIXEL_SIZE,
+        step_size_lat = STEP_SIZE_LAT,
+        direction = -1
+    resources:
+        runtime = 120,
+        mem_mb = 16000,
+        slurm_extra = "--gres=gpu:1"
+    script:
+        "scripts/deskew.py"
+
+# Rule to deconvolve both channels together
+rule deconvolve:
+    input:
+        a_deskewed = "results/{acquisition}/deskewed/a_deskewed.tif",
+        b_deskewed = "results/{acquisition}/deskewed/b_deskewed.tif",
+        psf_a = os.path.join(PSF_DIR, config["psf_a"]),
+        psf_b = os.path.join(PSF_DIR, config["psf_b"])
+    output:
+        deconvolved = "results/{acquisition}/deconvolved/deconvolved.tif"
+    params:
+        iterations = config["decon_iterations"]
+    resources:
+        runtime = 240,
+        mem_mb = 32000,
+        slurm_extra = "--gres=gpu:1"
+    script:
+        "scripts/deconvolve.py" 
