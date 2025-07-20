@@ -189,6 +189,8 @@ extra:
 
 # Navigation
 nav:
+  - 📚 Home:
+    - Overview: index.md
   - 🚀 Quick Start:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
