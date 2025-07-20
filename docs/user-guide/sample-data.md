@@ -158,7 +158,7 @@ Adjust SLURM parameters in the shell scripts:
 
 ### Getting Help
 
-- Check the [main documentation](../)
+- Check the [main documentation](../index.md)
 - Review the [API reference](../packages/pyspim/api.md)
 - Open an issue on GitHub
 

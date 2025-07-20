@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-This guide will get you up and running with PySPIM in minutes.
+Get up and running with PySPIM in minutes.
 
 ## Prerequisites
 
@@ -11,38 +11,23 @@ This guide will get you up and running with PySPIM in minutes.
 ## Installation
 
 ```bash
-# Install both packages
-pip install pyspim napari-pyspim
+# Clone and install
+git clone https://github.com/matt-black/pyspim.git
+cd pyspim
+just install
 ```
 
 ## Basic Usage
 
-### Command Line Interface
-
-```python
-import pyspim
-
-# Load your SPIM data
-data = pyspim.load_data("path/to/your/data.tif")
-
-# Process the data
-processed = pyspim.process_pipeline(data)
-
-# Save results
-pyspim.save_data(processed, "processed_data.tif")
-```
-
 ### Napari Plugin Interface
 
 1. **Launch Napari**
-   ```python
-   import napari
-   viewer = napari.Viewer()
+   ```bash
+   napari
    ```
 
 2. **Load the PySPIM Plugin**
    - Go to `Plugins` → `PySPIM` → `DiSPIM Pipeline`
-   - This opens the main processing widget
 
 3. **Follow the Workflow**
    - **Tab 1**: Load your data file
@@ -51,71 +36,30 @@ pyspim.save_data(processed, "processed_data.tif")
    - **Tab 4**: Configure registration settings
    - **Tab 5**: Set deconvolution parameters
 
-## Example Workflow
-
-### 1. Load Data
+### Command Line Interface
 
 ```python
 import pyspim
-import napari
+from pyspim.data import dispim as data
+from pyspim import roi, deskew as dsk
 
 # Load data
-data = pyspim.load_data("example_data.tif")
+with data.uManagerAcquisition(data_path, False, numpy) as acq:
+    a_raw = acq.get('a', 0, 0)
+    b_raw = acq.get('b', 0, 0)
 
-# View in napari
-viewer = napari.Viewer()
-viewer.add_image(data)
-```
+# ROI detection
+roia = roi.detect_roi_3d(a_raw, 'otsu')
+roib = roi.detect_roi_3d(b_raw, 'otsu')
 
-### 2. Process with Plugin
-
-1. Open the PySPIM plugin from the plugins menu
-2. In the "Data Loading" tab, select your data file
-3. Switch to "ROI Detection" and adjust detection parameters
-4. Move to "Deskewing" and set the deskew angle
-5. Configure registration in the "Registration" tab
-6. Set deconvolution parameters in the final tab
-7. Click "Process" to run the complete pipeline
-
-### 3. View Results
-
-The processed results will appear as new layers in the Napari viewer, allowing you to compare original and processed data.
-
-## Configuration
-
-Create a configuration file for consistent processing:
-
-```yaml
-# config.yaml
-deskew:
-  angle: 31.5
-  method: "gpu"
-
-registration:
-  method: "phase_correlation"
-  max_shift: 50
-
-deconvolution:
-  method: "richardson_lucy"
-  iterations: 10
-  psf_type: "gaussian"
-```
-
-Load the configuration:
-
-```python
-import pyspim
-
-# Load configuration
-config = pyspim.load_config("config.yaml")
-
-# Process with configuration
-processed = pyspim.process_pipeline(data, config=config)
+# Deskewing
+a_dsk = dsk.deskew_stage_scan(a_raw, pixel_size, step_size, 1)
+b_dsk = dsk.deskew_stage_scan(b_raw, pixel_size, step_size, -1)
 ```
 
 ## GPU Acceleration
 
-For GPU acceleration, ensure you have CUDA installed:
+For GPU acceleration:
 
 ```bash
 # Install CuPy with CUDA support
@@ -126,7 +70,6 @@ The plugin will automatically use GPU acceleration when available.
 
 ## Next Steps
 
-- Read the [Installation Guide](installation.md) for detailed setup
-- Explore [Examples](../user-guide/basic-usage.md) for more use cases
-- Check the [API Reference](../packages/pyspim/api.md) for detailed documentation
-- Learn about [Advanced Features](../user-guide/advanced-features.md) options 
+- [Installation Guide](installation.md) - Detailed setup
+- [Basic Usage](../user-guide/basic-usage.md) - More examples
+- [API Reference](../packages/pyspim/api.md) - Detailed documentation 
