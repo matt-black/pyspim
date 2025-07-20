@@ -15,33 +15,6 @@ copyright: Copyright &copy; 2025 PySPIM Team
 theme:
   name: material
   language: en
-  palette:
-    # Palette toggle for automatic mode
-    - media: "(prefers-color-scheme)"
-      scheme: default
-      primary: deep purple
-      accent: deep purple
-      toggle:
-        icon: material/brightness-auto
-        name: Switch to light mode
-    # Palette toggle for light mode
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: deep purple
-      accent: deep purple
-      toggle:
-        icon: material/brightness-7
-        name: Switch to system preference
-    # Palette toggle for dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: deep purple
-      accent: deep purple
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
-
-  # Features
   features:
     - announce.dismiss
     - content.action.edit
@@ -75,6 +48,40 @@ theme:
     - search.suggest
     - toc.follow
     - navigation.tracking.attribution
+    - navigation.instant.loading
+    - navigation.instant.back
+    - navigation.instant.forward
+    - navigation.instant.previous
+    - navigation.instant.next
+    - mdx.hero
+    - mdx.feature
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to system preference
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+
 
   # Icon
   icon:
@@ -88,7 +95,9 @@ theme:
 
 # Plugins
 plugins:
-  - search
+  - search:
+      lang: en
+      separator: '[\s\-,:!=\[\]()"/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
   - mkdocstrings:
       default_handler: python
       handlers:
@@ -109,8 +118,6 @@ plugins:
   - gen-files:
       scripts:
         - docs/gen_ref_pages.py
-  - literate-nav:
-      nav_file: SUMMARY.md
   - section-index
 
 # Markdown extensions
@@ -123,6 +130,7 @@ markdown_extensions:
   - md_in_html
   - toc:
       permalink: true
+      title: On this page
   - pymdownx.arithmatex:
       generic: true
   - pymdownx.betterem:
@@ -159,7 +167,8 @@ markdown_extensions:
   - pymdownx.tilde
 
 # Extra CSS and JS
-extra_css: []
+extra_css:
+  - stylesheets/extra.css
 
 extra_javascript:
   - https://polyfill.io/v3/polyfill.min.js?features=es6
@@ -176,31 +185,35 @@ extra:
   version:
     provider: mike
 
+
+
 # Navigation
 nav:
-  - Home: index.md
-  - Getting Started:
+  - 🚀 Quick Start:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
-  - Core Package (pyspim):
-    - Overview: packages/pyspim/overview.md
-    - API Reference: packages/pyspim/api.md
-  - Napari Plugin (napari-pyspim):
+  - 📖 User Guide:
+    - Getting Started:
+      - Examples Overview: user-guide/examples-overview.md
+      - Basic Usage: user-guide/basic-usage.md
+    - Workflows:
+      - Fruiting Body Workflow: user-guide/fruiting-body-workflow.md
+      - Snakemake Workflow: user-guide/snakemake-workflow.md
+    - Advanced Topics:
+      - Advanced Features: user-guide/advanced-features.md
+      - Sample Data: user-guide/sample-data.md
+      - Notebooks: user-guide/notebooks.md
+  - 🖥️ Napari Plugin:
     - Overview: packages/napari-pyspim/overview.md
     - Installation: packages/napari-pyspim/installation.md
     - Usage: packages/napari-pyspim/usage.md
     - API Reference: packages/napari-pyspim/api.md
-  - User Guide:
-    - Examples Overview: user-guide/examples-overview.md
-    - Basic Usage: user-guide/basic-usage.md
-    - Fruiting Body Workflow: user-guide/fruiting-body-workflow.md
-    - Snakemake Workflow: user-guide/snakemake-workflow.md
-    - Advanced Features: user-guide/advanced-features.md
-    - Sample Data: user-guide/sample-data.md
-    - Notebooks: user-guide/notebooks.md
-  - Development:
+  - 📦 Core Package:
+    - Overview: packages/pyspim/overview.md
+    - API Reference: packages/pyspim/api.md
+  - 🛠️ Development:
     - Contributing: development/contributing.md
-  - About:
+  - ℹ️ About:
     - License: about/license.md
 
  

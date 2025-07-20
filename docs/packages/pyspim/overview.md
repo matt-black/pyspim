@@ -1,115 +1,53 @@
 # PySPIM Core Package
 
-The PySPIM core package provides the fundamental functionality for processing selective plane illumination microscopy (SPIM) data.
+Core library for processing dual-view SPIM (diSPIM) microscopy data.
 
 ## Overview
 
-PySPIM is designed to handle the complete pipeline for SPIM data analysis, from raw data loading to final processed results. The package is built with performance and scalability in mind, using Dask for parallel processing and supporting both CPU and GPU acceleration.
+PySPIM provides the fundamental functionality for SPIM data analysis with GPU acceleration support.
 
 ## Key Components
 
-### Data Loading
-- Support for multiple file formats (TIFF, HDF5, Zarr)
-- Efficient memory management with Dask arrays
-- Metadata extraction and validation
+- **Data Loading** - μManager acquisitions, TIFF, HDF5, Zarr
+- **ROI Detection** - Automated and manual region detection
+- **Deskewing** - Light sheet artifact correction
+- **Registration** - Multi-view alignment with GPU acceleration
+- **Deconvolution** - Richardson-Lucy with PSF support
 
-### ROI Detection
-- Automated region of interest detection
-- Manual ROI selection tools
-- ROI validation and refinement
+## Basic Usage
 
-### Deskewing
-- Light sheet microscopy artifact correction
-- GPU-accelerated processing with CuPy
-- Configurable deskewing parameters
+```python
+import pyspim
+from pyspim.data import dispim as data
+from pyspim import roi, deskew as dsk
 
-### Registration
-- Multi-view image registration
-- Rigid and non-rigid transformations
-- Registration quality assessment
+# Load data
+with data.uManagerAcquisition(data_path, False, numpy) as acq:
+    a_raw = acq.get('a', 0, 0)
+    b_raw = acq.get('b', 0, 0)
 
-### Deconvolution
-- Advanced deconvolution algorithms
-- GPU acceleration support
-- Configurable PSF models
+# ROI detection
+roia = roi.detect_roi_3d(a_raw, 'otsu')
+roib = roi.detect_roi_3d(b_raw, 'otsu')
 
-## Architecture
-
-The package is organized into modular components:
-
-```
-pyspim/
-├── core/           # Core functionality
-├── data/           # Data loading and I/O
-├── processing/     # Processing algorithms
-├── utils/          # Utility functions
-└── config/         # Configuration management
+# Deskewing
+a_dsk = dsk.deskew_stage_scan(a_raw, pixel_size, step_size, 1)
+b_dsk = dsk.deskew_stage_scan(b_raw, pixel_size, step_size, -1)
 ```
 
 ## Performance Features
 
-- **Parallel Processing**: Built on Dask for scalable computation
-- **GPU Acceleration**: CuPy integration for CUDA-accelerated operations
-- **Memory Efficiency**: Lazy evaluation and chunked processing
-- **Caching**: Intelligent caching of intermediate results
-
-## Usage Example
-
-```python
-import pyspim
-import dask.array as da
-
-# Load data
-data = pyspim.load_data("path/to/data.tif")
-
-# Detect ROIs
-rois = pyspim.detect_rois(data)
-
-# Process each ROI
-for roi in rois:
-    # Deskew
-    deskewed = pyspim.deskew(roi)
-    
-    # Register (if multi-view)
-    if roi.is_multiview:
-        registered = pyspim.register(deskewed)
-    else:
-        registered = deskewed
-    
-    # Deconvolve
-    deconvolved = pyspim.deconvolve(registered)
-    
-    # Save results
-    pyspim.save_data(deconvolved, f"processed_{roi.id}.tif")
-```
-
-## Configuration
-
-PySPIM uses a flexible configuration system:
-
-```python
-import pyspim
-
-# Load configuration
-config = pyspim.load_config("config.yaml")
-
-# Or set parameters programmatically
-config = pyspim.Config(
-    deskew_angle=31.5,
-    registration_method="phase_correlation",
-    deconvolution_iterations=10
-)
-```
+- **GPU Acceleration** - CuPy integration for CUDA operations
+- **Memory Efficient** - Chunked processing for large datasets
+- **Modular Design** - Separate components for each processing step
 
 ## Dependencies
 
-- **Core**: numpy, dask, scikit-image
-- **I/O**: tifffile, h5py, zarr
-- **GPU**: cupy-cuda12x (optional)
-- **Visualization**: matplotlib
+- **Core**: numpy, scikit-image
+- **GPU**: cupy (optional)
+- **I/O**: tifffile, h5py
 
 ## Next Steps
 
-- Read the [API Reference](api.md) for detailed function documentation
-- Check out [Examples](../../user-guide/basic-usage.md) for usage patterns
-- Learn about [Advanced Features](../../user-guide/advanced-features.md) options 
+- [API Reference](api.md) - Detailed function documentation
+- [Basic Usage](../../user-guide/basic-usage.md) - Usage examples 
