@@ -14,18 +14,8 @@ module load cudatoolkit/12.6
 module load anaconda3/2024.6
 conda activate /scratch/gpfs/mb46/conda/spim
 
-ncu --set full --clock-control none \
-    -k regex:correlationRatio \
-    -c 10 \
-    -f -o ncu_output \
-    --launch-skip-before-match 20 \
-    python register.py \
-        --view-a=/projects/SHAEVITZ/mb46/fb_dispim/13hr/2025-06-06/fruiting_body001/proc_ortho/a.zarr \
-        --view-b=/projects/SHAEVITZ/mb46/fb_dispim/13hr/2025-06-06/fruiting_body001/proc_ortho/b.zarr \
-        --metric="cr" --interp-method="cubspl" \
-        --num-repeat=100 --output-type="double"
-
-# nsys profile \
-#     --force-overwrite=true \
-#     --trace=cuda,nvtx,osrt \
-#     --stats=true \
+python register.py \
+    --view-a=/projects/SHAEVITZ/mb46/fb_dispim/13hr/2025-06-06/fruiting_body001/proc_ortho/a.zarr \
+    --view-b=/projects/SHAEVITZ/mb46/fb_dispim/13hr/2025-06-06/fruiting_body001/proc_ortho/b.zarr \
+    --metric="cr" --interp-method="cubspl" \
+    --output-type="float"

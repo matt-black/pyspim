@@ -132,7 +132,7 @@ __global__ void normInnerProduct(U* prods, float* M_aff,
     const size_t y_stride = blockDim.y * gridDim.y;
     const size_t x0 = blockDim.z * blockIdx.z + threadIdx.z;
     const size_t x_stride = blockDim.z * gridDim.z;
-    
+
     U vals[3] = {};
     for (int z = z0; z < sz_m; z += z_stride) {
         for (int y = y0; y < sy_m; y += y_stride) {
@@ -205,36 +205,18 @@ __global__ void correlationRatio(U* prods, float* M_aff,
                                  T* reference, T* moving,
                                  U mu_ref,
                                  size_t sz_r, size_t sy_r, size_t sx_r,
-                                 size_t sz_m, size_t sy_m, size_t sx_m, 
-                                 int gpu_id, int gpu_num)
+                                 size_t sz_m, size_t sy_m, size_t sx_m,
+                                 int z_start)
 {
-    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 &&
-            threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
-        printf("mu_ref on device %d out of %d = %f\n", gpu_id, gpu_num, (float)mu_ref);
-    
-    }
-    // NOTE: input data should be in ZRC format, but CUDA grids are XYZ
 
-    const size_t z0 = blockDim.z * blockIdx.z + threadIdx.z;
-    const size_t z_stride = blockDim.z * gridDim.z;
+    // NOTE: input data should be in ZRC format, but CUDA grids are XYZ
+    const size_t z0 = blockDim.x * blockIdx.x + threadIdx.x;
+    const size_t z_stride = blockDim.x * gridDim.x;
     const size_t y0 = blockDim.y * blockIdx.y + threadIdx.y;
     const size_t y_stride = blockDim.y * gridDim.y;
-    const size_t x0 = blockDim.x * blockIdx.x + threadIdx.x;
-    const size_t x_stride = blockDim.x * gridDim.x;
-
-//    const size_t z0 = blockDim.x * blockIdx.x + threadIdx.x;
-//    const size_t z_stride = blockDim.x * gridDim.x;
-//    const size_t y0 = blockDim.y * blockIdx.y + threadIdx.y;
-//    const size_t y_stride = blockDim.y * gridDim.y;
-//    const size_t x0 = blockDim.z * blockIdx.z + threadIdx.z;
-//    const size_t x_stride = blockDim.z * gridDim.z;
-
+    const size_t x0 = blockDim.z * blockIdx.z + threadIdx.z;
+    const size_t x_stride = blockDim.z * gridDim.z;
     const int3 vol_dim = make_int3(sx_r-1, sy_r-1, sz_r-1);
-
-    // Chunk for this GPU.
-    int z_per_gpu = (sz_m + gpu_num - 1) / gpu_num;
-    int z_start = gpu_id * z_per_gpu;
-    int z_end = min((gpu_id + 1) * z_per_gpu, (int)sz_m);
 
     __shared__ U vals[1024][3];
 
@@ -243,67 +225,66 @@ __global__ void correlationRatio(U* prods, float* M_aff,
     vals[tid][1] = 0;
     vals[tid][2] = 0;
 
-    for (int z = z0; z < z_end; z += z_stride) {
-        if (z >= z_start) {
-            for (int y = y0; y < sy_m; y += y_stride) {
-                for (int x = x0; x < sx_m; x += x_stride) {
-                    float4 voxel = make_float4(x, y, z, 1.0f);
-                    const float3 coord = make_float3(
-                        dot(voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3])),
-                        dot(voxel, make_float4(M_aff[4],  M_aff[5],  M_aff[6],  M_aff[7])),
-                        dot(voxel, make_float4(M_aff[8],  M_aff[9],  M_aff[10], M_aff[11]))
-                    );
-                    const float3 index = floor(coord);
-                    const float3 fract = coord - index;
-                    //calculate bspline weights and points
-                    float3 w0, w1, w2, w3;
-                    bspline_weights(fract, w0, w1, w2, w3);
-                    const float3 g0 = w0 + w1;
-                    const float3 g1 = w2 + w3;
-                    const float3 h0 = (w1 / g0) - 1.0f + index;
-                    const int3 h0i  = float3_rd(h0);
-                    const float3 h0f = h0 - h0i;
-                    const float3 h1 = (w3 / g1) + 1.0f + index;
-                    const int3 h1i  = float3_rd(h1);
-                    const float3 h1f = h1 - h1i;
-    
-                    if (geq0(h0i) && geq0(h1i) && h0i < vol_dim && h1i < vol_dim) {
-                        // do bicubic spline interpolation on reference
-                        U data000 = lerp3(reference, h0i.x, h0i.y, h0i.z, 
-                                          h0f.x, h0f.y, h0f.z, sx_r, sy_r);
-                        U data100 = lerp3(reference, h1i.x, h0i.y, h0i.z, 
-                                          h1f.x, h0f.y, h0f.z, sx_r, sy_r);
-                        data000 = g0.x * data000 + g1.x * data100;
-                        U data010 = lerp3(reference, h0i.x, h1i.y, h0i.z, 
-                                          h0f.x, h1f.y, h0f.z, sx_r, sy_r);
-                        U data110 = lerp3(reference, h1i.x, h1i.y, h0i.z, 
-                                          h1f.x, h1f.y, h0f.z, sx_r, sy_r);
-                        data010 = g0.x * data010 + g1.x * data110;
-                        data000 = g0.y * data000 + g1.y * data010;
-                        U data001 = lerp3(reference, h0i.x, h0i.y, h1i.z, 
-                                          h0f.x, h0f.y, h1f.z, sx_r, sy_r);
-                        U data101 = lerp3(reference, h1i.x, h0i.y, h1i.z, 
-                                          h1f.x, h0f.y, h1f.z, sx_r, sy_r);
-                        data001 = g0.x * data001 + g1.x * data101;
-                        U data011 = lerp3(reference, h0i.x, h1i.y, h1i.z, 
-                                          h0f.x, h1f.y, h1f.z, sx_r, sy_r);
-                        U data111 = lerp3(reference, h1i.x, h1i.y, h1i.z, 
-                                          h1f.x, h1f.y, h1f.z, sx_r, sy_r);
-                        data011 = g0.x * data011 + g1.x * data111;
-                        data001 = g0.y * data001 + g1.y * data011;
-                        U rval = g0.z * data000 + g1.z * data001;
-                        // grab equivalent value from moving
-                        U mval = (U)moving[xyz2idx(x, y, z, sx_m, sy_m)];
-                        if (!isfinite(rval)) printf("NaN/Inf at %d %d %d\n", x, y, z);
+    for (int z = z0 + z_start; z < sz_m; z += z_stride) {
+        for (int y = y0; y < sy_m; y += y_stride) {
+            for (int x = x0; x < sx_m; x += x_stride) {
+                float4 voxel = make_float4(x, y, z, 1.0f);
+                const float3 coord = make_float3(
+                    dot(voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3])),
+                    dot(voxel, make_float4(M_aff[4],  M_aff[5],  M_aff[6],  M_aff[7])),
+                    dot(voxel, make_float4(M_aff[8],  M_aff[9],  M_aff[10], M_aff[11]))
+                );
+                const float3 index = floor(coord);
+                const float3 fract = coord - index;
+                //calculate bspline weights and points
+                float3 w0, w1, w2, w3;
+                bspline_weights(fract, w0, w1, w2, w3);
+                const float3 g0 = w0 + w1;
+                const float3 g1 = w2 + w3;
+                const float3 h0 = (w1 / g0) - 1.0f + index;
+                const int3 h0i  = float3_rd(h0);
+                const float3 h0f = h0 - h0i;
+                const float3 h1 = (w3 / g1) + 1.0f + index;
+                const int3 h1i  = float3_rd(h1);
+                const float3 h1f = h1 - h1i;
 
+                if (geq0(h0i) && geq0(h1i) && h0i < vol_dim && h1i < vol_dim) {
+                    // do bicubic spline interpolation on reference
+                    U data000 = lerp3(reference, h0i.x, h0i.y, h0i.z, 
+                                      h0f.x, h0f.y, h0f.z, sx_r, sy_r);
+                    U data100 = lerp3(reference, h1i.x, h0i.y, h0i.z, 
+                                      h1f.x, h0f.y, h0f.z, sx_r, sy_r);
+                    data000 = g0.x * data000 + g1.x * data100;
+                    U data010 = lerp3(reference, h0i.x, h1i.y, h0i.z, 
+                                      h0f.x, h1f.y, h0f.z, sx_r, sy_r);
+                    U data110 = lerp3(reference, h1i.x, h1i.y, h0i.z, 
+                                      h1f.x, h1f.y, h0f.z, sx_r, sy_r);
+                    data010 = g0.x * data010 + g1.x * data110;
+                    data000 = g0.y * data000 + g1.y * data010;
+                    U data001 = lerp3(reference, h0i.x, h0i.y, h1i.z, 
+                                      h0f.x, h0f.y, h1f.z, sx_r, sy_r);
+                    U data101 = lerp3(reference, h1i.x, h0i.y, h1i.z, 
+                                      h1f.x, h0f.y, h1f.z, sx_r, sy_r);
+                    data001 = g0.x * data001 + g1.x * data101;
+                    U data011 = lerp3(reference, h0i.x, h1i.y, h1i.z, 
+                                      h0f.x, h1f.y, h1f.z, sx_r, sy_r);
+                    U data111 = lerp3(reference, h1i.x, h1i.y, h1i.z, 
+                                      h1f.x, h1f.y, h1f.z, sx_r, sy_r);
+                    data011 = g0.x * data011 + g1.x * data111;
+                    data001 = g0.y * data001 + g1.y * data011;
+                    U rval = g0.z * data000 + g1.z * data001;
+                    // grab equivalent value from moving
+                    int local_z = z - z_start;
+                    if (local_z >= 0 && local_z < sz_m && x < sx_m && y < sy_m) {
+                        U mval = (U)moving[xyz2idx(x, y, z - z_start, sx_m, sy_m)];
+    
                         if (abs(mval) > 0.00001) {
                             vals[tid][0] += rval * mval;
                             vals[tid][1] += (rval - mu_ref) * (rval - mu_ref);
                             vals[tid][2] += mval * mval;
                         }
-                        
-                    } // else { do nothing; out of range }
-                }
+                    }
+                } // else { do nothing; out of range }
             }
         }
     }
@@ -314,7 +295,6 @@ __global__ void correlationRatio(U* prods, float* M_aff,
             vals[0][1] += vals[i][1];
             vals[0][2] += vals[i][2];
         }
-
         atomicAdd(&prods[0], vals[0][0]);
         atomicAdd(&prods[1], vals[0][1]);
         atomicAdd(&prods[2], vals[0][2]);
