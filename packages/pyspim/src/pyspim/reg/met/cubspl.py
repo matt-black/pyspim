@@ -55,6 +55,18 @@ def normalized_inner_product(
     prods += cupy.finfo(cupy.float64).eps
     return float(prods[0] / (cupy.sqrt(prods[1]) * cupy.sqrt(prods[2])))
 
+<<<<<<< HEAD
+=======
+called = False
+num_gpus = cupy.cuda.runtime.getDeviceCount()
+nones = [ None for _ in range(num_gpus) ]
+kernels = nones[:]
+streams = nones[:]
+ref_dev = nones[:]
+mov_dev = nones[:]
+mu_ref_dev = nones[:]
+prods_dev = nones[:]
+>>>>>>> kcophenhagen-register-multigpu
 
 def correlation_ratio(
     T: NDArray,
@@ -85,6 +97,49 @@ def correlation_ratio(
     prods += cupy.finfo(cupy.float64).eps
     return float(prods[0] / (cupy.sqrt(prods[1]) * cupy.sqrt(prods[2])))
 
+    T = cupy.asarray(T).astype(cupy.float32)
+    dtype = reference.dtype
+
+    if dtype == cupy.uint16:
+        kname = f'correlationRatio<unsigned short,{output_type}>'
+    else:
+        kname = f'correlationRatio<float,{output_type}>'
+
+    arrays = []
+    for i, gpu_id in enumerate(gpu_indices):
+        with cupy.cuda.Device(gpu_id):
+            T_dev = cupy.copy(T)
+            if not called:
+                kernels[i] = __cuda_module.get_function(kname)
+                streams[i] = cupy.cuda.Stream()
+    
+                ref_dev[i] = cupy.asarray(reference)
+                mov_dev[i] = cupy.asarray(moving)
+                mu_ref_dev[i] = dtype_map[output_type](mu_reference)
+                prods_dev[i] = cupy.zeros((3,), dtype=dtype_map[output_type])
+    
+            arrays.append((prods_dev[i], T_dev, ref_dev[i], mov_dev[i], mu_ref_dev[i], 
+                       sz_r, sy_r, sx_r, sz_m, sy_m, sx_m, i, num_gpus))
+
+    called = True
+
+    for i, gpu_id in enumerate(gpu_indices):
+        with cupy.cuda.Device(gpu_id), streams[i]:
+            kernels[i](launch_params[0], launch_params[1], arrays[i], stream=streams[i])
+
+    for stream in streams:
+        stream.synchronize()
+    
+    prods = cupy.zeros((3,), dtype=dtype_map[output_type])
+
+    for i, gpu_id in enumerate(gpu_indices):
+        with cupy.cuda.Device(gpu_id):
+            result = arrays[i][0]
+            prods+=result
+            print(result[0] / (cupy.sqrt(result[1]) * cupy.sqrt(result[2])))
+
+    print(f'prods0 = {prods[0]} prods1 = {prods[1]} prods2 = {prods[2]}')
+    return (prods[0] / (cupy.sqrt(prods[1]) * cupy.sqrt(prods[2])))
 
 def normalized_cross_correlation(
     T: NDArray,

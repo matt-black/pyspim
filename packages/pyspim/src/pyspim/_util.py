@@ -530,11 +530,12 @@ def launch_params_for_volume(
     Returns:
         CuLaunchParameters
     """
-    gz = _cuda_gridsize_for_blocksize(shp[0], block_size_z)
-    gr = _cuda_gridsize_for_blocksize(shp[1], block_size_r)
-    gc = _cuda_gridsize_for_blocksize(shp[2], block_size_c)
-    return (gz, gr, gc), (block_size_z, block_size_r, block_size_c)
-
+    #gz = _cuda_gridsize_for_blocksize(shp[0], block_size_z)
+    #gr = _cuda_gridsize_for_blocksize(shp[1], block_size_r)
+    #gc = _cuda_gridsize_for_blocksize(shp[2], block_size_c)
+     
+    #return (gz, gr, gc), (block_size_z, block_size_r, block_size_c)
+    return (8, 8, 8), (block_size_z, block_size_r, block_size_c)
 
 class NumpyArrayEncoder(json.JSONEncoder):
     def default(self, obj):

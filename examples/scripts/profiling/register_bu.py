@@ -24,7 +24,6 @@ def main(
 ) -> int:
     # read in the volumes
     a = zarr.open_array(view_a)[0]
-<<<<<<< HEAD
     b = zarr.open_array(view_b)[0]
     num_gpus = cupy.cuda.runtime.getDeviceCount()
     print(f"n_GPUs: {num_gpus:d}")
@@ -104,22 +103,6 @@ def main(
     met = float(prods[0] / (cupy.sqrt(prods[1]) * cupy.sqrt(prods[2])))
     print(f"met = {met}")
     
-=======
-    b = zarr.open_array(view_a)[0]
-    
-    T = cupy.concatenate([cupy.eye(3), cupy.zeros((3,1))], axis=1).astype(cupy.float32)
-    # launch_pars = launch_params_for_volume(a.shape, 8, 8, 8)
-    launch_pars = launch_params_for_volume(a.shape, 32, 4, 4)
-    ref = cupy.asarray(a, dtype=cupy.uint16)
-    mov = cupy.asarray(b, dtype=cupy.uint16)
-    mu_ref = cupy.mean(ref).astype(cupy.float32).item()
-    for i in range(8):
-        met = cubspl.correlation_ratio(
-                T, ref, mov, mu_ref,
-                *ref.shape, *mov.shape, launch_pars, output_type
-            )
-        print(f"met = {met}")
->>>>>>> kcophenhagen-register-multigpu
     return 0
 
 
