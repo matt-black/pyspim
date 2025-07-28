@@ -9,8 +9,8 @@ from .._util import get_fft_module, pad_to_same_size
 from ..typing import NDArray
 
 
-def translation(ref: NDArray, mov: NDArray, upsample_factor: float = 1) -> NDArray:
-    """determine translation between `ref` and `mov`
+def translation(ref: NDArray, mov: NDArray, upsample_factor: int = 1) -> NDArray:
+    """Determine translation between `ref` and `mov`.
 
     :param ref: reference image
     :type ref: NDArray
@@ -30,7 +30,7 @@ def translation(ref: NDArray, mov: NDArray, upsample_factor: float = 1) -> NDArr
     # compute fft's and then do phase cross-correlation
     ref_fft = fft.fft2(ref)
     mov_fft = fft.fft2(mov)
-    if xp == cupy:
+    if xp == cupy: # type: ignore
         ref_fft, mov_fft = ref_fft.get(), mov_fft.get()
     trans, _, _ = skimage.registration.phase_cross_correlation(
         ref_fft,
@@ -42,7 +42,7 @@ def translation(ref: NDArray, mov: NDArray, upsample_factor: float = 1) -> NDArr
 
 
 def scale_rotation(
-    ref: NDArray, mov: NDArray, upsample_factor: float = 1
+    ref: NDArray, mov: NDArray, upsample_factor: int = 1
 ) -> Tuple[float, float]:
     """determine scaling & rotation between `ref` & `mov` using phase cross
         correlation of the log-polar transformed inputs
@@ -58,8 +58,8 @@ def scale_rotation(
     :rtype: Tuple[float,float]
     """
     xp = cupy.get_array_module(ref)
-    if xp == cupy:
-        ref, mov = ref.get(), mov.get()
+    if xp == cupy: # type: ignore
+        ref, mov = ref.get(), mov.get() # type: ignore (we know there are cupy)
     if any([rd != md for rd, md in zip(ref.shape, mov.shape)]):
         ref, mov = pad_to_same_size(ref, mov, style="right")
     radius = min([min(ref.shape), min(mov.shape)])
@@ -74,7 +74,7 @@ def scale_rotation(
 
 
 def rotation_scale_for_volumes(
-    ref: NDArray, mov: NDArray, upsample_factor: float = 1.0
+    ref: NDArray, mov: NDArray, upsample_factor: int = 1.0
 ):
     """calculate rotation, and scaling between input volumes by
         phase cross correlation of the maximum projections in each axis
@@ -105,7 +105,7 @@ def rotation_scale_for_volumes(
     return [float(r) for r in rot[::-1]], [float(s) for s in scale[::-1]]
 
 
-def translation_for_volumes(ref: NDArray, mov: NDArray, upsample_factor: float = 1.0):
+def translation_for_volumes(ref: NDArray, mov: NDArray, upsample_factor: int = 1):
     """calculate relative translation, rotation, and scaling between input
         volumes by phase cross correlation of the maximum projections
         in each axis
@@ -152,7 +152,7 @@ def translation_for_volumes(ref: NDArray, mov: NDArray, upsample_factor: float =
 
 
 def translation_rotation_scale_for_volumes(
-    ref: NDArray, mov: NDArray, upsample_factor: float = 1.0
+    ref: NDArray, mov: NDArray, upsample_factor: int = 1
 ):
     """calculate relative translation, rotation, and scaling between input
         volumes by phase cross correlation of the maximum projections

@@ -78,7 +78,7 @@ def __min_fun_spherical(ref, x, y, z, pars) -> float:
     err = numpy.sqrt(
         numpy.sum(
             numpy.square(
-                spherical_gaussian_3d_fit(pars, x, y, z).flatten() - ref.flatten()
+                spherical_gaussian_3d_fit(pars, x, y, z).flatten() - ref.flatten() # type: ignore (ufunc generates array)
             )
         )
     )
@@ -90,7 +90,7 @@ def __min_fun_elliptical(ref, x, y, z, pars) -> float:
     err = numpy.sqrt(
         numpy.sum(
             numpy.square(
-                elliptical_gaussian_3d_fit(pars, x, y, z).flatten() - ref.flatten()
+                elliptical_gaussian_3d_fit(pars, x, y, z).flatten() - ref.flatten() # type: ignore (ufunc generates array)
             )
         )
     )
@@ -135,9 +135,9 @@ def generate_psf_im(pars, im_shape: Iterable[int], gtype: str) -> numpy.ndarray:
     )
     z, y, x = numpy.meshgrid(*[numpy.arange(s) for s in im_shape], indexing="ij")
     if gtype == "spherical":
-        return spherical_gaussian_3d_fit(pars, x, y, z)
+        return spherical_gaussian_3d_fit(pars, x, y, z) # type: ignore (ufunc generates array)
     else:
-        return elliptical_gaussian_3d_fit(pars, x, y, z)
+        return elliptical_gaussian_3d_fit(pars, x, y, z) # type: ignore (ufunc generates array)
 
 
 def normalize_psf_im(psf_img: NDArray) -> NDArray:

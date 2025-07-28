@@ -1,14 +1,14 @@
 import os
+import time
 from argparse import ArgumentParser
 
 import cupy
 import zarr
+import numpy
 from cupyx.profiler import benchmark
 
-from pyspim.reg.met import cub
-from pyspim.reg.met import nearest
-from pyspim.reg.met import cubspl
-from pyspim.reg.met import linear
+from pyspim.reg import kernels as K 
+from pyspim.typing import NDArray
 from pyspim.util import launch_params_for_volume
 
 
@@ -20,77 +20,68 @@ def main(
     num_repeat: int,
     output_type: str,
     use_cupyx_benchmark: bool,
-    use_cub: bool
 ) -> int:
     # read in the volumes
     a = zarr.open_array(view_a)[0]
     b = zarr.open_array(view_b)[0]
-    # grab the kernel we want to test
-    if use_cub:
-        kernel = cub.make_kernel(metric, interp_method, 8, 8, 8)
-    else:
-        if interp_method == "cubspl":
-            m : cupy.RawModule = cubspl.__cuda_module
-        elif interp_method == "linear":
-            m : cupy.RawModule = linear.__cuda_module
-        else:
-            m : cupy.RawModule = nearest.__cuda_module
-        if metric == "ncc":
-            kname = "normalizedCrossCorrelation"
-        elif metric == "cr":
-            kname = "correlationRatio"
-        else:
-            kname = "normInnerProduct"
-        kernel_name = kname + f"<unsigned short,{output_type}>"
-        kernel = m.get_function(kernel_name)
-    
+    num_gpus = cupy.cuda.runtime.getDeviceCount()
+    print(f"n_GPUs: {num_gpus:d}")
     # make launch parameters
-    launch_pars = launch_params_for_volume(a.shape, 8, 8, 8)
-    # allocate output array
-    prods = cupy.zeros(
-        (3,), dtype=(cupy.float64 if output_type == "double" else cupy.float32)
-    )
-    sz_r, sy_r, sx_r = a.shape
-    sz_m, sy_m, sx_m = b.shape
-    # move moving/ref images to GPU
-    ref = cupy.asarray(a, dtype=cupy.uint16)
-    mu_ref = cupy.mean(ref).astype(cupy.float32)
-    mov = cupy.asarray(b, dtype=cupy.uint16)
-    if use_cub:
+    launch_pars = launch_params_for_volume(a.shape, 8, 8, 8) # type: ignore
+
+    sz_r, sy_r, sx_r = a.shape # type: ignore
+    sz_m, sy_m, sx_m = b.shape # type: ignore
+    # move moving/ref images to GPU (default to 0 device)
+    with cupy.cuda.Device(0):
+        ref = cupy.asarray(a, dtype=cupy.uint16)
+        mu_ref = cupy.mean(ref).astype(cupy.float32)
+        mov = cupy.asarray(b, dtype=cupy.uint16)
         mu_mov = cupy.mean(mov).astype(cupy.float32)
-    T = cupy.concatenate(
-        [cupy.eye(3), cupy.zeros((3,1))], axis=1
-    ).astype(cupy.float32)
+    # initialize the computation by generating kernels, streams, args
+    comp_start = time.perf_counter()
+    kernels, streams, kernel_args = K.initialize_computation(
+        metric, interp_method, ref, mov, mu_ref, mu_mov,
+        sz_r, sy_r, sx_r, sz_m, sy_m, sx_m
+    )
+    T_init = kernel_args[0][1].get()
+
+    def compute(T: NDArray) -> float:
+        return K.compute(T, kernels, streams, kernel_args, launch_pars)
+    
+    comp_end = time.perf_counter()
+    comp_time = (comp_end - comp_start) * 1000.0
+    print(f"Took {comp_time:.2f} ms to initialize kernels, arrays, etc.",
+          flush=True)
+    # do a single computation, just to test
+    comp_start = time.perf_counter()
+    met = compute(T_init)
+    comp_end = time.perf_counter()
+    comp_time = (comp_end - comp_start) * 1000.0
+    print(f"Took {comp_time:.2f} ms to do first computation", flush=True)
     if use_cupyx_benchmark:
-        if use_cub:
-            perf_case = benchmark(
-                kernel,
-                (launch_pars[0], launch_pars[1],
-                (prods, T, ref, mov, mu_ref, mu_mov,
-                 sz_r, sy_r, sx_r, sz_m, sy_m, sx_m)),
-                n_repeat=num_repeat
-            )
-        else:
-            perf_case = benchmark(kernel, 
-                (launch_pars[0], launch_pars[1], 
-                (prods, T, ref, mov, mu_ref,
-                sz_r, sy_r, sx_r, sz_m, sy_m, sx_m)),
-                n_repeat=num_repeat
-            )
+        perf_case = benchmark(
+            compute,
+            (T_init,),
+            n_repeat=num_repeat
+        )
         print(perf_case, flush=True)
-    for _ in range(num_repeat):
-        if use_cub:
-            kernel(
-                launch_pars[0], launch_pars[1],
-                (prods, T, ref, mov, mu_ref, mu_mov,
-                 sz_r, sy_r, sx_r, sz_m, sy_m, sx_m)
-            )
-        else:
-            kernel(
-                launch_pars[0], launch_pars[1],
-                (prods, T, ref, mov, mu_ref,
-                sz_r, sy_r, sx_r, sz_m, sy_m, sx_m)
-            )
+    else:
+        met = numpy.nan
+        comp_times = numpy.empty((num_repeat,))
+        for r in range(num_repeat):
+            comp_start = time.perf_counter()
+            met = compute(T_init)
+            comp_end = time.perf_counter()
+            comp_times[r] = comp_end - comp_start
+        avg_time = numpy.mean(comp_times) * 1000.
+        std_time = numpy.std(comp_times) * 1000.
+        ste_time = std_time / numpy.sqrt(num_repeat)
+        print(f"Computed value: {met:.2f}", flush=True)
+        print(
+            f"{num_repeat:d} iters, avg: {avg_time:.2f} +/- {ste_time:.2f} ms",
+            flush=True
+        )
+    
     return 0
 
 
@@ -109,14 +100,12 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--output-type", type=str,
                         choices=["float","double"], default="double",
                         help="floating point datatype output by kernel")
-    parser.add_argument("-c", "--cub", action="store_true",
-                        help="use CUB-based reduction kernel")
     parser.add_argument("-cb", "--cupyx-benchmark", action="store_true",
                         help="use cupyx benchmarking instead of python loop")
     args = parser.parse_args()
     ec = main(
         args.view_a, args.view_b, 
         args.metric, args.interp_method, args.num_repeat, args.output_type,
-        args.cupyx_benchmark, args.cub
+        args.cupyx_benchmark
     )
     exit(ec)

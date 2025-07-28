@@ -29,8 +29,11 @@ def enumerate(
     landscape_out_path: os.PathLike | None = None,
     verbose: bool = False,
 ):
-    assert cupy.get_array_module(ref) == cupy, "reference image must be on the GPU"
-    assert cupy.get_array_module(mov) == cupy, "moving image must be on the GPU"
+    if cupy.get_array_module(ref) != cupy: # type: ignore
+        raise ValueError("reference image must be on the GPU")
+    if cupy.get_array_module(mov) != cupy: # type: ignore
+        raise ValueError("moving image must be on the GPU")
+        
     # figure out coords of centroid of image
     msze_z, msze_y, msze_x = mov.shape
     cx, cy, cz = msze_x / 2.0, msze_y / 2.0, msze_z / 2.0
@@ -47,6 +50,7 @@ def enumerate(
         kernel_launch_params = launch_params_for_volume(
             [sz_mov, sy_mov, sx_mov], block_size, block_size, block_size
         )
+    
     # formulate optimization function
     # NOTE: optimization is done for minimization, so during optimization
     # we flip this by subtracting 1 (all fns used are bounded [0,1])
@@ -187,8 +191,11 @@ def optimize(
     verbose: bool = False,
 ):
     # make sure both input images are already on the GPU
-    assert cupy.get_array_module(ref) == cupy, "reference image must be on the GPU"
-    assert cupy.get_array_module(mov) == cupy, "moving image must be on the GPU"
+    if cupy.get_array_module(ref) != cupy: # type: ignore
+        raise ValueError("reference image must be on the GPU")
+    if cupy.get_array_module(mov) != cupy: # type: ignore
+        raise ValueError("moving image must be on the GPU")
+        
     # figure out coords of centroid of image
     msze_z, msze_y, msze_x = mov.shape
     cx, cy, cz = msze_x / 2.0, msze_y / 2.0, msze_z / 2.0
