@@ -537,6 +537,7 @@ def launch_params_for_volume(
     #return (gz, gr, gc), (block_size_z, block_size_r, block_size_c)
     return (8, 8, 8), (block_size_z, block_size_r, block_size_c)
 
+
 class NumpyArrayEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, numpy.ndarray):

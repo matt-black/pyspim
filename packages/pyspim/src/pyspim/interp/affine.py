@@ -110,9 +110,9 @@ def decompose_transform(A: NDArray) -> Tuple[NDArray, NDArray, NDArray, NDArray]
 
 
 def output_shape_for_transform(
-    T: NDArray, input_shape: Iterable
+    T: NDArray, input_shape: tuple[int,int,int],
 ) -> Tuple[int, int, int]:
-    """output_shape_for_transform Calculate output shape of transformed volume.
+    """Calculate output shape of transformed volume.
 
     Args:
         T (NDArray): affine transform matrix
@@ -121,7 +121,7 @@ def output_shape_for_transform(
     Returns:
         Tuple[int,int,int]: output shape (ZRC)
     """
-    t = T.get() if cupy.get_array_module(T) == cupy else T
+    t = T.get() if cupy.get_array_module(T) == cupy else T # type: ignore
     coord = list(product(*[(0, s) for s in input_shape[::-1]]))
     coord = numpy.asarray(coord).T
     coord = numpy.vstack([coord, numpy.zeros_like(coord[0, :])])
@@ -133,7 +133,7 @@ def output_shape_for_transform(
 def output_shape_for_inv_transform(
     T: NDArray, input_shape: Iterable
 ) -> Tuple[int, int, int]:
-    """output_shape_for_inv_transform Calculate output shape of (inverse)-transformed volume.
+    """Calculate output shape of (inverse)-transformed volume.
 
     Args:
         T (NDArray): affine transform matrix (to be inverted)
@@ -143,7 +143,7 @@ def output_shape_for_inv_transform(
         Tuple[int,int,int]: shape of output volume (ZRC)
     """
     xp = cupy.get_array_module(T)
-    fwd = xp.linalg.inv(T).get() if xp == cupy else xp.linalg.inv(T)
+    fwd = xp.linalg.inv(T).get() if xp == cupy else xp.linalg.inv(T) # type: ignore
     return output_shape_for_transform(fwd, input_shape)
 
 

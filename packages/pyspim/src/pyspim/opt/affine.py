@@ -2,16 +2,13 @@ import itertools
 import os
 import tempfile
 from functools import partial
-from typing import List
+from typing import List, Optional
 
 import cupy
 import numpy
 from tqdm.auto import tqdm
 
-from ..reg.met import _cub as met_cub
-from ..reg.met import cubspl as met_cubspl
-from ..reg.met import linear as met_linear
-from ..reg.met import nearest as met_nearest
+from ..reg import kernels as kern
 from ..reg.powell import parse_transform_string
 from ..typing import CuLaunchParameters
 from ..util import launch_params_for_volume
@@ -25,8 +22,8 @@ def enumerate(
     transform: str,
     interp_method: str,
     par_ranges: List[List[float]],
-    kernel_launch_params: CuLaunchParameters | None = None,
-    landscape_out_path: os.PathLike | None = None,
+    kernel_launch_params: Optional[CuLaunchParameters] = None,
+    landscape_out_path: Optional[os.PathLike] = None,
     verbose: bool = False,
 ):
     if cupy.get_array_module(ref) != cupy: # type: ignore
@@ -51,123 +48,34 @@ def enumerate(
             [sz_mov, sy_mov, sx_mov], block_size, block_size, block_size
         )
     
-    # formulate optimization function
-    # NOTE: optimization is done for minimization, so during optimization
-    # we flip this by subtracting 1 (all fns used are bounded [0,1])
-    if metric[-1] == "*":  # flag for CUB-reduction kernels
-        _kern = met_cub.make_kernel(
-            metric[:-1], interp_method, *kernel_launch_params[1]
+    kernels, streams, args = kern.initialize_computation(
+        metric, interp_method, ref, mov, 
+        cupy.mean(ref).astype(cupy.float32), cupy.mean(mov).astype(cupy.float32),
+        sz_ref, sy_ref, sx_ref, sz_mov, sy_mov, sx_mov
+    )
+    def opt_fun(pars: tuple[float,...]) -> float:
+        T = par_fun(pars)
+        return 1.0 - kern.compute(
+            T, kernels, streams, args, kernel_launch_params
         )
-        if metric[:-1] == "nip":
-            mu_ref, mu_mov = 0.0, 0.0
-        elif metric[:-1] == "cr":
-            mu_ref, mu_mov = cupy.mean(ref), 0.0
-        elif metric[:-1] == "ncc":
-            mu_ref, mu_mov = cupy.mean(ref), cupy.mean(mov)
-        else:
-            raise ValueError("invalid metric")
-        met_fun = partial(
-            met_cub.compute_kernel,
-            _kern,
-            reference=ref,
-            moving=mov,
-            mu_reference=mu_ref,
-            mu_moving=mu_mov,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: met_fun(par_fun(p))
-    elif metric == "nip":
-        if interp_method == "linear":
-            _nip_fun = met_linear.normalized_inner_product
-        elif interp_method == "cubspl":
-            _nip_fun = met_cubspl.normalized_inner_product
-        elif interp_method == "nearest":
-            _nip_fun = met_nearest.normalized_inner_product
-        else:
-            raise ValueError("invalid interpolation method")
-        met_fun = partial(
-            _nip_fun,
-            reference=ref,
-            moving=mov,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: met_fun(par_fun(p))
-    elif metric == "cr":
-        mu_ref = cupy.mean(ref)
-        if interp_method == "linear":
-            _cr_fun = met_linear.correlation_ratio
-        elif interp_method == "cubspl":
-            _cr_fun = met_cubspl.correlation_ratio
-        elif interp_method == "nearest":
-            _cr_fun = met_nearest.correlation_ratio
-        else:
-            raise ValueError("invalid interpolation method")
-        met_fun = partial(
-            _cr_fun,
-            reference=ref,
-            moving=mov,
-            mu_reference=mu_ref,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: met_fun(par_fun(p))
-    elif metric == "ncc":
-        mu_ref, mu_mov = cupy.mean(ref), cupy.mean(mov)
-        mu_ref = cupy.mean(ref)
-        if interp_method == "linear":
-            _ncc_fun = met_linear.normalized_cross_correlation
-        elif interp_method == "cubspl":
-            _ncc_fun = met_cubspl.normalized_cross_correlation
-        elif interp_method == "nearest":
-            _ncc_fun = met_nearest.normalized_cross_correlation
-        else:
-            raise ValueError("invalid interpolation method")
-        met_fun = partial(
-            _ncc_fun,
-            reference=ref,
-            moving=mov,
-            mu_reference=mu_ref,
-            mu_moving=mu_mov,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: met_fun(par_fun(p))
-    n_cond = numpy.prod([len(x) for x in par_ranges])
+
+    n_cond = int(numpy.prod([len(x) for x in par_ranges]))
     if verbose:
-        iterator = tqdm(itertools.product(*par_ranges), total=n_cond)
+        iterator = tqdm(
+            itertools.product(*par_ranges), 
+            total=n_cond
+        )
     else:
         iterator = itertools.product(*par_ranges)
     opt_val, opt_par = 0, []
     with (
         open(landscape_out_path, "w")
-        if landscape_out_path is None
+        if landscape_out_path is not None
         else tempfile.TemporaryFile(mode="w")
     ) as f_out:
         for state in iterator:
             val = opt_fun(state)
-            line = ",".join([f"{val:.4}" for val in state + [val]]) + "\n"
+            line = ",".join([f"{val:.4}" for val in list(state) + [val]]) + "\n"
             f_out.write(line)
             if val > opt_val:
                 opt_val = val
@@ -186,8 +94,8 @@ def optimize(
     max_iter: int,
     search_incr: float,
     tolerance: float,
-    kernel_launch_params: CuLaunchParameters | None = None,
-    landscape_out_path: os.PathLike | None = None,
+    kernel_launch_params: Optional[CuLaunchParameters] = None,
+    landscape_out_path: Optional[os.PathLike] = None,
     verbose: bool = False,
 ):
     # make sure both input images are already on the GPU
@@ -216,111 +124,18 @@ def optimize(
         kernel_launch_params = launch_params_for_volume(
             [sz_mov, sy_mov, sx_mov], block_size, block_size, block_size
         )
-    # formulate optimization function
-    # NOTE: optimization is done for minimization, so during optimization
-    # we flip this by subtracting 1 (all fns used are bounded [0,1])
-    if metric[-1] == "*":  # flag for CUB-reduction kernels
-        _kern = met_cub.make_kernel(
-            metric[:-1], interp_method, *kernel_launch_params[1]
+    
+    kernels, streams, args = kern.initialize_computation(
+        metric, interp_method, ref, mov, 
+        cupy.mean(ref).astype(cupy.float32), cupy.mean(mov).astype(cupy.float32),
+        sz_ref, sy_ref, sx_ref, sz_mov, sy_mov, sx_mov
+    )    
+    def opt_fun(pars: numpy.ndarray) -> float:
+        T = par_fun(pars)
+        return 1.0 - kern.compute(
+            T, kernels, streams, args, kernel_launch_params
         )
-        if metric[:-1] == "nip":
-            mu_ref, mu_mov = 0.0, 0.0
-        elif metric[:-1] == "cr":
-            mu_ref, mu_mov = cupy.mean(ref), 0.0
-        elif metric[:-1] == "ncc":
-            mu_ref, mu_mov = cupy.mean(ref), cupy.mean(mov)
-        else:
-            raise ValueError("invalid metric")
-        met_fun = partial(
-            met_cub.compute_kernel,
-            _kern,
-            reference=ref,
-            moving=mov,
-            mu_reference=mu_ref,
-            mu_moving=mu_mov,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
-    elif metric == "nip":
-        if interp_method == "linear":
-            _nip_fun = met_linear.normalized_inner_product
-        elif interp_method == "cubspl":
-            _nip_fun = met_cubspl.normalized_inner_product
-        elif interp_method == "nearest":
-            _nip_fun = met_nearest.normalized_inner_product
-        else:
-            raise ValueError("invalid interpolation method")
-        met_fun = partial(
-            _nip_fun,
-            reference=ref,
-            moving=mov,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
-    elif metric == "cr":
-        mu_ref = cupy.mean(ref)
-        if interp_method == "linear":
-            _cr_fun = met_linear.correlation_ratio
-        elif interp_method == "cubspl":
-            _cr_fun = met_cubspl.correlation_ratio
-        elif interp_method == "nearest":
-            _cr_fun = met_nearest.correlation_ratio
-        else:
-            raise ValueError("invalid interpolation method")
-        met_fun = partial(
-            _cr_fun,
-            reference=ref,
-            moving=mov,
-            mu_reference=mu_ref,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
-    elif metric == "ncc":
-        mu_ref, mu_mov = cupy.mean(ref), cupy.mean(mov)
-        mu_ref = cupy.mean(ref)
-        if interp_method == "linear":
-            _ncc_fun = met_linear.normalized_cross_correlation
-        elif interp_method == "cubspl":
-            _ncc_fun = met_cubspl.normalized_cross_correlation
-        elif interp_method == "nearest":
-            _ncc_fun = met_nearest.normalized_cross_correlation
-        else:
-            raise ValueError("invalid interpolation method")
-        met_fun = partial(
-            _ncc_fun,
-            reference=ref,
-            moving=mov,
-            mu_reference=mu_ref,
-            mu_moving=mu_mov,
-            sz_r=sz_ref,
-            sy_r=sy_ref,
-            sx_r=sx_ref,
-            sz_m=sz_mov,
-            sy_m=sy_mov,
-            sx_m=sx_mov,
-            launch_params=kernel_launch_params,
-        )
-        opt_fun = lambda p: 1.0 - met_fun(par_fun(p))
-    else:
-        raise ValueError("invalid metric")
+
     if landscape_out_path is None:
         opt_par, _ = powell(
             opt_fun, par0, max_iter, search_incr, tolerance, None, verbose

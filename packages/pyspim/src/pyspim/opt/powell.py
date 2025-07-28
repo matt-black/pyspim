@@ -126,13 +126,14 @@ def powell(
     n_par = len(x)
     dec_f = numpy.zeros(n_par)
     u = numpy.eye(n_par)
-    with tqdm(total=100) if verbose else nullcontext as pbar:
+    with tqdm(total=100) if verbose else nullcontext() as pbar:
         for i in trange(max_iter, desc="cycle", leave=False):
             x_prev = x.copy()
             f_prev = F(x_prev)
             if verbose:
-                pbar.n = int(math.floor((1 - f_prev) * 100))
-                pbar.refresh()
+                # can ignore typing errors b/c we know we have a tqdm here
+                pbar.n = int(math.floor((1 - f_prev) * 100)) # type: ignore
+                pbar.refresh() # type: ignore
             # for each parameter, define search direction and look
             # for decreases in F along that direction
             for j in trange(n_par, leave=False, desc="parloop"):
@@ -143,9 +144,10 @@ def powell(
                 dec_f[j] = f_prev - f_min
                 f_prev = f_min
                 if verbose:
-                    pbar.set_postfix({"par_idx": j})
-                    pbar.n = int(math.floor((1 - f_prev) * 100))
-                    pbar.refresh()
+                    # can ignore typing errors b/c we know we have a tqdm here
+                    pbar.set_postfix({"par_idx": j}) # type: ignore
+                    pbar.n = int(math.floor((1 - f_prev) * 100)) # type: ignore
+                    pbar.refresh() # type: ignore
                 x = x + s * v
             # last line search in this cycle
             v = x - x_prev  # v_{n+1} = x_0 - x_prev
@@ -153,9 +155,10 @@ def powell(
             a, b = goldsect_bracket(f, 0.0, search_incr)
             s, f_last = goldsect_search(f, a, b)
             if verbose:
-                pbar.set_postfix_str("last")
-                pbar.n = int(math.floor((1 - f_last) * 100))
-                pbar.refresh()
+                # can ignore typing errors b/c we know we have a tqdm here
+                pbar.set_postfix_str("last") # type: ignore
+                pbar.n = int(math.floor((1 - f_last) * 100)) # type: ignore
+                pbar.refresh() # type: ignore
             x = x + s * v
             # check for convergence, if converged, return
             if math.sqrt(numpy.dot(x - x_prev, x - x_prev) / max_iter) < tol:

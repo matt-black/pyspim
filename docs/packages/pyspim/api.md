@@ -345,21 +345,6 @@
       filters: ['!^_']
       merge_init_into_class: true
 
-::: pyspim.reg.parpow
-    options:
-      show_root_heading: true
-      show_source: true
-      show_category_heading: true
-      show_signature_annotations: true
-      show_bases: true
-      show_submodules: true
-      heading_level: 3
-      members_order: source
-      docstring_style: google
-      preload_modules: []
-      filters: ['!^_']
-      merge_init_into_class: true
-
 ::: pyspim.reg.powell
     options:
       show_root_heading: true
@@ -390,37 +375,7 @@
       filters: ['!^_']
       merge_init_into_class: true
 
-::: pyspim.reg.met.cubspl
-    options:
-      show_root_heading: true
-      show_source: true
-      show_category_heading: true
-      show_signature_annotations: true
-      show_bases: true
-      show_submodules: true
-      heading_level: 3
-      members_order: source
-      docstring_style: google
-      preload_modules: []
-      filters: ['!^_']
-      merge_init_into_class: true
-
-::: pyspim.reg.met.linear
-    options:
-      show_root_heading: true
-      show_source: true
-      show_category_heading: true
-      show_signature_annotations: true
-      show_bases: true
-      show_submodules: true
-      heading_level: 3
-      members_order: source
-      docstring_style: google
-      preload_modules: []
-      filters: ['!^_']
-      merge_init_into_class: true
-
-::: pyspim.reg.met.nearest
+::: pyspim.reg.kernels
     options:
       show_root_heading: true
       show_source: true
