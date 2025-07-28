@@ -1,6 +1,5 @@
 import os
 from typing import List, Protocol, Tuple
-from collections.abc import Callable
 
 import cupy
 
@@ -10,7 +9,7 @@ from ..typing import CuLaunchParameters, NDArray
 KernelArgs = Tuple[cupy.ndarray, cupy.ndarray, cupy.ndarray,
                    cupy.ndarray, cupy.ndarray,
                    cupy.ndarray, cupy.ndarray,
-                   int, int, int, int, int, int]
+                   int, int, int, int, int, int, int, int]
 
 class CallableKernel(Protocol):
 
