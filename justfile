@@ -16,6 +16,12 @@ install-dev:
     uv pip install -e packages/pyspim
     uv pip install -e packages/napari-pyspim
 
+# Install development dependencies & packages with GPU support
+install-dev-gpu:
+    uv sync --extra dev
+    uv pip install -e packages/pyspim[gpu]
+    uv pip install -e packages/napari-pyspim
+
 # Install only the napari plugin
 install-plugin:
     uv pip install -e packages/napari-pyspim
