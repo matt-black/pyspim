@@ -265,6 +265,7 @@ def optimize_affine(
             pass  # already correctly formatted
         else:
             raise ValueError("invalid bound formatting")
+    # par_fun takes in the parameter vector and generates the matrix that then gets passed to the kernel
     par_fun = lambda p: mat_fun(p, cx, cy, cz).astype(float).flatten()[:12]
     # get shape of reference and moving images
     sz_ref, sy_ref, sx_ref = ref.shape
@@ -275,14 +276,17 @@ def optimize_affine(
         kernel_launch_params = launch_params_for_volume(
             [sz_mov, sy_mov, sx_mov], block_size, block_size, block_size
         )
-    # formulate optimization function
-    # NOTE: scipy only has a `minimize` function and these metrics should be maximized. They are all confined to [0,1] so to minimize, do 1.0 - kernel_value.
+    # initialize the computation
+    # this makes all the kernels, CUDA streams, and per-device arguments that will get used per-device.
     kernels, streams, kernel_args = kern.initialize_computation(
         metric, interp_method, ref, mov, cupy.mean(ref), cupy.mean(mov),
         sz_ref, sy_ref, sx_ref, sz_mov, sy_mov, sx_mov
     )
+    # formulate optimization function
+    # NOTE: scipy only has a `minimize` function and these metrics should be maximized. 
+    # They are all confined to [0,1] so to minimize, do 1.0 - kernel_value.
     def opt_fun(pars: numpy.ndarray) -> float:
-        T = par_fun(pars)
+        T = par_fun(pars) # generate transform matrix
         return 1.0 - \
             kern.compute(T, kernels, streams, kernel_args, kernel_launch_params)
     # do powell's registration

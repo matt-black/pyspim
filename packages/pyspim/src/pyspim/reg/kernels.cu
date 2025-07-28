@@ -27,6 +27,8 @@
     ```
 
     This text can then be compiled using cupy.RawModule
+
+    NOTE: The kernel takes in pointers to mu_ref and mu_mov because the average values for the reference and moving are pre-computed using either numpy or cupy and passed in as length-1 arrays.
 */
 #define {interp_type:s}  // one of CUBSPL, LINEAR, NEAREST
 
