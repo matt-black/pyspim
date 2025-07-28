@@ -55,8 +55,6 @@ def normalized_inner_product(
     prods += cupy.finfo(cupy.float64).eps
     return float(prods[0] / (cupy.sqrt(prods[1]) * cupy.sqrt(prods[2])))
 
-<<<<<<< HEAD
-=======
 called = False
 num_gpus = cupy.cuda.runtime.getDeviceCount()
 nones = [ None for _ in range(num_gpus) ]
@@ -66,7 +64,6 @@ ref_dev = nones[:]
 mov_dev = nones[:]
 mu_ref_dev = nones[:]
 prods_dev = nones[:]
->>>>>>> kcophenhagen-register-multigpu
 
 def correlation_ratio(
     T: NDArray,
