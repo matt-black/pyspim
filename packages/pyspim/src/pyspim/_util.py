@@ -3,7 +3,7 @@
 import json
 import types
 import typing
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from functools import partial
 
 import cupy
@@ -36,7 +36,7 @@ def get_fft_module(arr_or_xp) -> types.ModuleType:
         xp = cupy.get_array_module(arr_or_xp)
     else:
         xp = arr_or_xp
-    if xp == numpy:
+    if xp == numpy: # type: ignore
         return fftcpu
     else:
         return fftgpu
@@ -55,7 +55,7 @@ def get_scipy_module(arr_or_xp) -> types.ModuleType:
         xp = cupy.get_array_module(arr_or_xp)
     else:
         xp = arr_or_xp
-    if xp == numpy:
+    if xp == numpy: # type: ignore
         return scipy
     else:
         return cupyx.scipy
@@ -74,7 +74,7 @@ def get_ndimage_module(arr_or_xp) -> types.ModuleType:
         xp = cupy.get_array_module(arr_or_xp)
     else:
         xp = arr_or_xp
-    if xp == numpy:
+    if xp == numpy: # type: ignore
         return ndi_cpu
     else:
         return ndi_gpu
@@ -138,7 +138,7 @@ def is_floating_point(x: NDArray) -> bool:
 
 
 ## padding/shape utilities
-def shape_for_divisible(shp: Iterable[int], *div) -> typing.List[int]:
+def shape_for_divisible(shp: Sequence[int], *div) -> typing.List[int]:
     """shape_for_divisible Compute the shape >= input that is divisible in each dimension.
 
     Args:
@@ -312,10 +312,12 @@ def center_crop(vol: NDArray, *args) -> NDArray:
         assert len(args) == n_dim, "must specify either 1 or `n_dim` crop inputs"
         if n_dim == 2:
             crop_r, crop_c = args[0], args[1]
+            crop_z = 0 # not needed, but suppresses typing error
         else:  # n_dim == 3
             crop_z, crop_r, crop_c = args[0], args[1], args[2]
     if n_dim == 2:
         size_r, size_c = vol.shape
+        sz = 0 # not needed, but suppresses typing error
     else:
         size_z, size_r, size_c = vol.shape
         crop_z = crop_z if crop_z < size_z else size_z
@@ -345,12 +347,12 @@ def bbox_for_mask(m: NDArray) -> typing.Union[BBox2D, BBox3D]:
         lz, uz = xp.amin(z), xp.amax(z)
         ly, uy = xp.amin(y), xp.amax(y)
         lx, ux = xp.amin(x), xp.amax(x)
-        return (lz, uz), (ly, uy), (lx, ux)
+        return (lz, uz), (ly, uy), (lx, ux) # type: ignore
     else:
         y, x = xp.where(m)
         ly, uy = xp.amin(y), xp.amax(y)
         lx, ux = xp.amin(x), xp.amax(x)
-        return (ly, uy), (lx, ux)
+        return (ly, uy), (lx, ux) # type: ignore
 
 
 def shared_bbox_from_proj_threshold(
@@ -380,7 +382,7 @@ def shared_bbox_from_proj_threshold(
     elif proj_fun == "mean":
         fun = xp.mean
     else:
-        fun = "median"
+        fun = xp.median
     bb_yx = bbox_for_mask(
         xp.logical_and(fun(v1, 0) > thresh_val, fun(v2, 0) > thresh_val)
     )
@@ -397,7 +399,7 @@ def shared_bbox_from_proj_threshold(
     starts = xp.amax(bb, 0)[::2].astype(int)
     ends = xp.amin(bb, 0)[1::2].astype(int)
     bb = [(int(starts[i]), int(ends[i])) for i in range(3)]
-    return tuple(bb)
+    return tuple(bb) # type: ignore
 
 
 ## texture utilities
@@ -416,46 +418,50 @@ def create_texture_object(
         (cupy.cuda.texture.TextureObject, cupy.cuda.texture.CUDAarray): tuple of the texture object and CUDAarray
     """
     if cupy.issubdtype(data.dtype, cupy.unsignedinteger):
-        fmt_kind = runtime.cudaChannelFormatKindUnsigned
+        fmt_kind = runtime.cudaChannelFormatKindUnsigned # type: ignore
     elif cupy.issubdtype(data.dtype, cupy.integer):
-        fmt_kind = runtime.cudaChannelFormatKindSigned
+        fmt_kind = runtime.cudaChannelFormatKindSigned # type: ignore
     elif cupy.issubdtype(data.dtype, cupy.floating):
-        fmt_kind = runtime.cudaChannelFormatKindFloat
+        fmt_kind = runtime.cudaChannelFormatKindFloat # type: ignore
     else:
         raise ValueError("Unsupported data type")
     if address_mode == "wrap":
-        address_mode = runtime.cudaAddressModeWrap
+        address_mode = runtime.cudaAddressModeWrap # type: ignore
     elif address_mode == "clamp":
-        address_mode = runtime.cudaAddressModeClamp
+        address_mode = runtime.cudaAddressModeClamp # type: ignore
     elif address_mode == "mirror":
-        address_mode = runtime.cudaAddressModeMirror
+        address_mode = runtime.cudaAddressModeMirror # type: ignore
     elif address_mode == "border":
-        address_mode = runtime.cudaAddressModeBorder
+        address_mode = runtime.cudaAddressModeBorder # type: ignore
     else:
         raise ValueError(
             "Unsupported address mode (supported: wrap, clamp, mirror, border)"
         )
     if filter_mode == "nearest":
-        filter_mode = runtime.cudaFilterModePoint
+        filter_mode = runtime.cudaFilterModePoint # type: ignore
     elif filter_mode == "linear":
-        filter_mode = runtime.cudaFilterModeLinear
+        filter_mode = runtime.cudaFilterModeLinear # type: ignore
     else:
         raise ValueError("Unsupported filter mode (supported: nearest, linear)")
     if read_mode == "element_type":
-        read_mode = runtime.cudaReadModeElementType
+        read_mode = runtime.cudaReadModeElementType # type: ignore
     elif read_mode == "normalized_float":
-        read_mode = runtime.cudaReadModeNormalizedFloat
+        read_mode = runtime.cudaReadModeNormalizedFloat # type: ignore
     else:
         raise ValueError(
             "Unsupported read mode (supported: element_type, normalized_float)"
         )
-    texture_fmt = texture.ChannelFormatDescriptor(data.itemsize * 8, 0, 0, 0, fmt_kind)
-    array = texture.CUDAarray(texture_fmt, *data.shape[::-1])
-    res_desc = texture.ResourceDescriptor(runtime.cudaResourceTypeArray, cuArr=array)
-    tex_desc = texture.TextureDescriptor(
+    texture_fmt = texture.ChannelFormatDescriptor( # type: ignore
+        data.itemsize * 8, 0, 0, 0, fmt_kind
+    )
+    array = texture.CUDAarray(texture_fmt, *data.shape[::-1]) # type: ignore
+    res_desc = texture.ResourceDescriptor( # type: ignore
+        runtime.cudaResourceTypeArray, cuArr=array # type: ignore
+    )
+    tex_desc = texture.TextureDescriptor( # type: ignore
         (address_mode,) * data.ndim, filter_mode, read_mode
     )
-    tex_obj = texture.TextureObject(res_desc, tex_desc)
+    tex_obj = texture.TextureObject(res_desc, tex_desc) # type: ignore
     array.copy_from(data)
     return tex_obj, array
 
@@ -509,7 +515,7 @@ def threshold_triangle(im: NDArray, nbins: int = 256) -> float:
 
     if flip:
         arg_level = nbins - arg_level - 1
-    return bin_centers[arg_level]
+    return float(bin_centers[arg_level])
 
 
 def _cuda_gridsize_for_blocksize(dim: int, block_size: int) -> int:
@@ -519,7 +525,7 @@ def _cuda_gridsize_for_blocksize(dim: int, block_size: int) -> int:
 def launch_params_for_volume(
     shp: Iterable[int], block_size_z: int, block_size_r: int, block_size_c: int
 ) -> CuLaunchParameters:
-    """launch_params_for_volume Automatically calculate good launch parameters for CUDA kernel that will be run on a volume of specified `shape`.
+    """Automatically calculate good launch parameters for CUDA kernel that will be run on a volume of specified `shape`.
 
     Args:
         shp (Iterable[int]): shape of input volume kernel will be run over (ZRC).
@@ -539,14 +545,14 @@ def launch_params_for_volume(
 
 
 class NumpyArrayEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, numpy.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, numpy.floating):
-            return float(obj)
-        elif isinstance(obj, numpy.integer):
-            return int(obj)
-        return super().default(obj)
+    def default(self, o):
+        if isinstance(o, numpy.ndarray):
+            return o.tolist()
+        elif isinstance(o, numpy.floating):
+            return float(o)
+        elif isinstance(o, numpy.integer):
+            return int(o)
+        return super().default(o)
 
 
 def uint16_to_uint8(a: NDArray, max_val: float = 65535) -> NDArray:

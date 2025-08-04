@@ -32,12 +32,12 @@ def main(
     T = numpy.load(reg_transform_path)
     T = cupy.asarray(T).astype(cupy.float32)
     # open input zarr array
-    a_input = zarr.open(os.path.join(input_folder, "a.zarr"))
-    b_input = zarr.open(os.path.join(input_folder, "b.zarr"))
+    a_input = zarr.open_array(os.path.join(input_folder, "a.zarr"))
+    b_input = zarr.open_array(os.path.join(input_folder, "b.zarr"))
     n_chan = b_input.shape[0]
     # grab some constants
     if interp_method is None:
-        interp_method = reg_params["interp_method"]
+        interp_method : str = reg_params["interp_method"]
     vol_shape = reg_params["image_shape"]
     out_shape = [n_chan] + vol_shape
     # figure out if we have to crop a
@@ -50,7 +50,7 @@ def main(
     if crop_a:
         if verbose:
             print("Cropping View A...", flush=True)
-        a_trans = zarr.creation.open_array(
+        a_trans = zarr.open_array(
             os.path.join(output_folder, "a.zarr"),
             mode="w",
             shape=out_shape,
@@ -85,7 +85,7 @@ def main(
         )
     roi_b = [slice(*t) for t in reg_params["roi_b"]]
     # open up input/output zarr arrays
-    b_trans = zarr.creation.open_array(
+    b_trans = zarr.open_array(
         os.path.join(output_folder, "b.zarr"),
         mode="w",
         shape=out_shape,
@@ -152,10 +152,13 @@ def transform_and_save(
         window = tuple([channel] + roi)
         x = cupy.asarray(arr_in.oindex[window])
         trans = affine.transform(
-            x, T, interp_method, True, out_shape, *block_size
-        ).get()
-        print([numpy.amax(x), numpy.amax(trans)], flush=True)
+            x, T, interp_method, True, out_shape, *block_size, device_id, 1
+        )
+        new_max = cupy.amax(trans).get().item()
+        prev_max = cupy.amax(x).get().item()
+        print(f"{prev_max} -> {new_max}", flush=True)
         del x
+        trans = trans.get()
         cupy.get_default_memory_pool().free_all_blocks()
     gpu_queue.put(device_id)
     arr_out.set_orthogonal_selection(

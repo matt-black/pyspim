@@ -8,6 +8,7 @@ from typing import Tuple
 import cupy
 import numpy
 
+from ..typing import NDArray
 from .._matrix import rotation_about_point_matrix, translation_matrix
 from ..interp.affine import output_shape_for_transform, transform
 
@@ -59,12 +60,12 @@ def output_shape(
         Tuple[int,int,int]
     """
     full_shp = output_shape_for_transform(
-        inv_deskew_matrix(pixel_size, step_size, direction), [z, r, c]
+        inv_deskew_matrix(pixel_size, step_size, direction), (z, r, c)
     )
     if auto_crop:
-        return tuple([full_shp[0], full_shp[1], full_shp[0]])
+        return (full_shp[0], full_shp[1], full_shp[0])
     else:
-        return tuple(full_shp)
+        return full_shp
 
 
 def deskewing_transform(
@@ -75,8 +76,8 @@ def deskewing_transform(
     step_size: float,
     direction: int,
     auto_crop: bool,
-    rotation_thetas: Tuple[int, int, int] | None,
-):
+    rotation_thetas: Tuple[float, float, float] | None,
+) -> Tuple[NDArray, Tuple[int,int,int]]:
     """deskewing_transform Compute the deskewing transform for the input volume.
 
     Args:
@@ -93,7 +94,7 @@ def deskewing_transform(
         numpy.ndarray, List[int]: deskewing transform & the output shape
     """
     D = inv_deskew_matrix(pixel_size, step_size, direction)
-    full_shp = output_shape_for_transform(D, [z, r, c])
+    full_shp = output_shape_for_transform(D, (z, r, c))
     if direction < 0:
         t = translation_matrix(full_shp[0], 0, 0)
         D = D @ t
@@ -101,7 +102,7 @@ def deskewing_transform(
         # rotating B into view of A implies that some of the B view
         # this will take care of automatically cropping the outputs
         # to this overlap region (helps save memory)
-        out_shp = [full_shp[0], full_shp[1], full_shp[0]]
+        out_shp = (full_shp[0], full_shp[1], full_shp[0])
         t = translation_matrix(-(full_shp[2] - full_shp[0]) / 2, 0, 0)
         D = D @ t
     else:
@@ -121,7 +122,7 @@ def deskew_stage_scan(
     pixel_size: float,
     step_size: float,
     direction: int,
-    rotation_thetas: Tuple[int, int, int] | None,
+    rotation_thetas: Tuple[float, float, float] | None,
     interp_method: str,
     auto_crop: bool,
     preserve_dtype: bool,
@@ -134,7 +135,7 @@ def deskew_stage_scan(
         pixel_size (float): pixel size, in real units
         step_size (float): step size, in real units
         direction (int): scan direction (+/- 1)
-        rotation_thetas (Tuple[int,int,int] | None): rotation angles for each axis. If ``None``, no rotation is done.
+        rotation_thetas (Tuple[float,float,float] | None): rotation angles for each axis. If ``None``, no rotation is done.
         interp_method (str): interpolation method to use
         auto_crop (bool): auto-crop output volumes to account for rotation of view B
         preserve_dtype (bool): make output volume have same datatype as input volume (probably uint16).

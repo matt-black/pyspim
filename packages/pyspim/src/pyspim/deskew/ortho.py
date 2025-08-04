@@ -16,6 +16,7 @@ import numpy
 from numba import njit, prange
 
 from ..typing import NDArray
+from ._ortho_gpu import _deskew_gpu, _zero_triangle_gpu
 
 
 def deskew_stage_scan(
@@ -25,6 +26,7 @@ def deskew_stage_scan(
     direction: int,
     theta: float = math.pi / 4,
     preserve_dtype: bool = False,
+    stream: cupy.cuda.Stream | None = None,
 ) -> NDArray:
     """Deskew stage scan data into xyz coordinate system.
 
@@ -47,9 +49,9 @@ def deskew_stage_scan(
         )
         #dsk = _zero_triangle_cpu(dsk, direction) # FIXME: why is this here, not necessary?
     else:
-        dsk = _deskew_orthogonal_gpu(
-            im, pixel_size, step_size, direction, theta, preserve_dtype
-        )
+        dsk = _deskew_gpu(im, pixel_size, step_size, direction, theta, 
+                          preserve_dtype, stream)
+        dsk = _zero_triangle_gpu(dsk, direction)
     return dsk
 
 
@@ -166,80 +168,3 @@ def output_shape(
     return (n_z, n_y, n_x) # type: ignore
 
 
-def _deskew_orthogonal_gpu(
-    im: cupy.ndarray,
-    pixel_size: float,
-    step_size: float,
-    direction: int,
-    theta: float = numpy.pi / 4,
-    preserve_dtype: bool = False,
-):
-    direction = cupy.sign(direction)
-    # convert step to pixel units
-    step_size_lat = step_size / math.cos(theta)
-    step_pix = step_size_lat / pixel_size
-    # precompute useful trig quantities
-    sin_theta = numpy.float64(numpy.sin(theta))
-    cos_theta = numpy.float64(numpy.cos(theta))
-    tan_theta = numpy.float64(numpy.tan(theta))
-    tan_otheta = numpy.float64(numpy.tan(numpy.pi / 2 - theta))
-    cos_otheta = numpy.float64(numpy.cos(numpy.pi / 2 - theta))
-    # determine output shape & preallocate
-    n_planes, n_y, h = im.shape  # unpack shape
-    n_x = numpy.int64(numpy.ceil(n_planes * step_pix + h * cos_theta))
-    n_y = numpy.int64(n_y)
-    n_z = numpy.int64(numpy.ceil(h * sin_theta))
-    dsk = cupy.zeros(
-        (n_z, n_y, n_x), dtype=(im.dtype if preserve_dtype else cupy.float32)
-    )
-    for z in range(0, n_z):
-        for x in range(0, n_x):
-            # compute where we are in "raw" coordinates (x'=xpr, z'=zpr)
-            if direction > 0:
-                xpr = z / sin_theta
-                zpr = (x - z / tan_theta) / step_pix
-            else:  # direction < 0
-                # NOTE: reverse direction heavily exploits reverse indexing
-                # into arrays in Python, so many of these will be negative
-                xpr = z / sin_theta - h
-                zpr = (x + z / tan_theta - h * cos_theta) / step_pix
-            # get plane in raw data before z'
-            zpb = numpy.int64(numpy.floor(zpr))
-            if numpy.abs(zpb + 1) < n_planes:
-                # beta_p = distance to raw plane in z' axis
-                beta_p = step_pix * (zpr - zpb)
-                # find x' in before & after planes
-                xib = xpr + direction * beta_p * tan_otheta
-                xibp = numpy.int64(numpy.floor(xib))
-                if numpy.abs(xibp + 1) < h:
-                    dxib = xib - xibp
-                    xia = xpr - direction * (step_pix - beta_p) * tan_otheta
-                    xiap = numpy.int64(numpy.floor(xia))
-                    if numpy.abs(xiap + 1) < h:
-                        dxia = xia - xiap
-                        # calculate distances along the x-axis from point
-                        # (x',z') to before/after planes in raw data
-                        l_b = beta_p / cos_otheta
-                        l_a = (step_pix - beta_p) / cos_otheta
-                        val = l_b * (
-                            dxia * im[zpb + 1, :, xiap + 1]
-                            + (1 - dxia) * im[zpb + 1, :, xiap]
-                        ) + l_a * (
-                            dxib * im[zpb, :, xibp + 1] + (1 - dxib) * im[zpb, :, xibp]
-                        )
-                        if preserve_dtype:
-                            dsk[z, :, x] = cupy.clip(
-                                numpy.round(val / step_pix), 0, 2**16 - 1
-                            ).astype(im.dtype)
-                        else:
-                            dsk[z, :, x] = val / step_pix
-    # zero out triangle in left-hand side of image where data was
-    # (falsely) interpolated due to wrapping
-    if direction < 0:
-        dsk = cupy.flipud(dsk)
-    for z in range(n_z):
-        for x in range(n_x):
-            if x <= z:
-                dsk[z, :, x] = 0
-    dsk = cupy.flipud(dsk)
-    return dsk[..., ::direction]
