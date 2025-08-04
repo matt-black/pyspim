@@ -59,7 +59,6 @@ def make_kernel(
         expr3=expr3
     )
     kernel_name = function_name+f"<{input_type},{output_type}>"
-    print(kernel_name, flush=True)
     module = cupy.RawModule(
         code=module_txt, 
         name_expressions=(kernel_name,)

@@ -6,8 +6,8 @@
             This controls the #ifdef/#endif statement inside the kernel that determines how the interpolation is done. 
         2. function_name (str): the name to be given to the kernel function
             (should be one of normInnerProduct, correlationRatio, normCrossCorrelation)
-        3. expr1 (str): how values from the moving and reference are combined
-        4. expr2 (str): how values from the reference are squared
+        3. expr1 (str): how values from the moving and in are combined
+        4. expr2 (str): how values from the in are squared
         5. expr3 (str): how values from the moving are squared
 
     The output metric will be computed like (expr1) / (expr2 * expr3).
@@ -28,9 +28,10 @@
 
     This text can then be compiled using cupy.RawModule
 
-    NOTE: The kernel takes in pointers to mu_ref and mu_mov because the average values for the reference and moving are pre-computed using either numpy or cupy and passed in as length-1 arrays.
+    NOTE: The kernel takes in pointers to mu_ref and mu_mov because the average values for the in and moving are pre-computed using either numpy or cupy and passed in as length-1 arrays.
 */
 #define {interp_type:s}  // one of CUBSPL, LINEAR, NEAREST
+#define {output_type:s} // one of UINT16, FLOAT32
 
 
 inline __host__ __device__ float dot(float4 a, float4 b)
@@ -165,13 +166,12 @@ inline __host__ __device__ int3 float3_rd(float3 a)
                      __float2int_rd(a.z));
 }}
 
+
 template<typename T, typename U>
-__global__ void {function_name:s}(
-    U* prods, float* M_aff,
-    T* reference, T* moving,
-    float* mu_ref, float* mu_mov,
-    size_t sz_r, size_t sy_r, size_t sx_r,
-    size_t sz_m, size_t sy_m, size_t sx_m,
+__global__ void affineTransform(
+    T* out, U* in, float* M_aff,
+    size_t sz_o, size_t sy_o, size_t sx_o,
+    size_t sz_i, size_t sy_i, size_t sx_i,
     int gpu_id, int num_gpu
 )
 {{
@@ -182,26 +182,21 @@ __global__ void {function_name:s}(
     const size_t x0 = blockDim.x * blockIdx.x + threadIdx.x;
     const size_t x_stride = blockDim.x * gridDim.x;
 
-    const int3 vol_dim = make_int3(sx_r-1, sy_r-1, sz_r-1);
+    const int3 vol_dim = make_int3(sx_i-1, sy_i-1, sz_i-1);
     // determine chunk for this gpu
-    int z_per_gpu = (sz_m + num_gpu - 1) / num_gpu;
+    int z_per_gpu = (sz_i + num_gpu - 1) / num_gpu;
     int z_start = gpu_id * z_per_gpu;
-    int z_end = min((gpu_id + 1) * z_per_gpu, int(sz_m));
-
-    __shared__ U vals[1024][3];
+    int z_end = min((gpu_id + 1) * z_per_gpu, int(sz_i));
     // determine which thread we're in, initialize values to 0
     int thread_id = xyz2idx(threadIdx.x, threadIdx.y, threadIdx.z,
                             blockDim.x, blockDim.y);
-    vals[thread_id][0] = 0;
-    vals[thread_id][1] = 0;
-    vals[thread_id][2] = 0;
-
     for (int z = z0; z < z_end; z += z_stride) {{
         if (z >= z_start) {{
-            for (int y = y0; y < sy_m; y += y_stride) {{
-                for (int x = x0; x < sx_m; x += x_stride) {{
+            for (int y = y0; y < sy_i; y += y_stride) {{
+                for (int x = x0; x < sx_i; x += x_stride) {{
                     // get current voxel and coordinate in transformed coordinate system
                     float4 voxel = make_float4(x, y, z, 1.0f);
+                    int oidx = xyz2idx(x, y, z, sx_o, sy_o);
                     #ifdef CUBSPL
                         const float3 coord = make_float3(
                             dot(voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3])),
@@ -224,38 +219,42 @@ __global__ void {function_name:s}(
                         const float3 h1f = h1 - h1i;
 
                         if (geq0(h0i) && geq0(h1i) && h0i < vol_dim && h1i < vol_dim) {{
-                            // do bicubic spline interpolation on reference
-                            U data000 = lerp3(reference, h0i.x, h0i.y, h0i.z, 
-                                          h0f.x, h0f.y, h0f.z, sx_r, sy_r);
-                            U data100 = lerp3(reference, h1i.x, h0i.y, h0i.z, 
-                                            h1f.x, h0f.y, h0f.z, sx_r, sy_r);
+                            // do bicubic spline interpolation on input
+                            float data000 = lerp3(in, h0i.x, h0i.y, h0i.z, 
+                                              h0f.x, h0f.y, h0f.z, sx_i, sy_i);
+                            float data100 = lerp3(in, h1i.x, h0i.y, h0i.z, 
+                                              h1f.x, h0f.y, h0f.z, sx_i, sy_i);
                             data000 = g0.x * data000 + g1.x * data100;
-                            U data010 = lerp3(reference, h0i.x, h1i.y, h0i.z, 
-                                            h0f.x, h1f.y, h0f.z, sx_r, sy_r);
-                            U data110 = lerp3(reference, h1i.x, h1i.y, h0i.z, 
-                                            h1f.x, h1f.y, h0f.z, sx_r, sy_r);
+                            float data010 = lerp3(in, h0i.x, h1i.y, h0i.z, 
+                                              h0f.x, h1f.y, h0f.z, sx_i, sy_i);
+                            float data110 = lerp3(in, h1i.x, h1i.y, h0i.z, 
+                                              h1f.x, h1f.y, h0f.z, sx_i, sy_i);
                             data010 = g0.x * data010 + g1.x * data110;
                             data000 = g0.y * data000 + g1.y * data010;
-                            U data001 = lerp3(reference, h0i.x, h0i.y, h1i.z, 
-                                            h0f.x, h0f.y, h1f.z, sx_r, sy_r);
-                            U data101 = lerp3(reference, h1i.x, h0i.y, h1i.z, 
-                                            h1f.x, h0f.y, h1f.z, sx_r, sy_r);
+                            float data001 = lerp3(in, h0i.x, h0i.y, h1i.z, 
+                                              h0f.x, h0f.y, h1f.z, sx_i, sy_i);
+                            float data101 = lerp3(in, h1i.x, h0i.y, h1i.z, 
+                                              h1f.x, h0f.y, h1f.z, sx_i, sy_i);
                             data001 = g0.x * data001 + g1.x * data101;
-                            U data011 = lerp3(reference, h0i.x, h1i.y, h1i.z, 
-                                            h0f.x, h1f.y, h1f.z, sx_r, sy_r);
-                            U data111 = lerp3(reference, h1i.x, h1i.y, h1i.z, 
-                                            h1f.x, h1f.y, h1f.z, sx_r, sy_r);
+                            float data011 = lerp3(in, h0i.x, h1i.y, h1i.z, 
+                                              h0f.x, h1f.y, h1f.z, sx_i, sy_i);
+                            float data111 = lerp3(in, h1i.x, h1i.y, h1i.z, 
+                                              h1f.x, h1f.y, h1f.z, sx_i, sy_i);
                             data011 = g0.x * data011 + g1.x * data111;
                             data001 = g0.y * data001 + g1.y * data011;
-                            U rval = g0.z * data000 + g1.z * data001;
-                            // grab equivalent value from moving
-                            U mval = (U)moving[xyz2idx(x, y, z, sx_m, sy_m)];
-
-                            if (abs(mval) > 0.00001) {{
-                                vals[thread_id][0] += {expr1:s}; // rval * mval;
-                                vals[thread_id][1] += {expr2:s}; //(rval - mu_ref) * (rval - mu_ref);
-                                vals[thread_id][2] += {expr3:s}; // mval * mval;
-                            }}
+                            float val = g0.z * data000 + g1.z * data001;
+                            #ifdef FLOAT32
+                                out[oidx] = val;
+                            #endif
+                            #ifdef UINT16
+                                int vali = __float2int_rd(val);
+                                if (vali < 0) {{
+                                    vali = 0;
+                                }} else if (vali > 65535) {{
+                                    vali = 65535;
+                                }}
+                                out[oidx] = (T)vali;
+                            #endif
                         }}
                     #endif
                     #ifdef LINEAR
@@ -275,20 +274,24 @@ __global__ void {function_name:s}(
                         int z_rd = __float2int_rd(z_r);
                         float dz = z_r - (float)z_rd;
                         //range-check that transformed coordinate is valid
-                        if (x_rd >= 0 && x_rd < sx_r-1 &&
-                            y_rd >= 0 && y_rd < sy_r-1 &&
-                            z_rd >= 0 && z_rd < sz_r-1) {{
-                            U rval = lerp3(
-                                reference, x_rd, y_rd, z_rd, dx, dy, dz, sx_r, sy_r
+                        if (x_rd >= 0 && x_rd < sx_o-1 &&
+                            y_rd >= 0 && y_rd < sy_o-1 &&
+                            z_rd >= 0 && z_rd < sz_o-1) {{
+                            float val = lerp3(
+                                in, x_rd, y_rd, z_rd, dx, dy, dz, sx_i, sy_i
                             );
-                            // fetch value for moving image at this index
-                            int idx = xyz2idx(x, y, z, sx_m, sy_m);
-                            U mval = (U)moving[idx];
-                            if (abs(mval) > 0.00001) {{
-                                vals[thread_id][0] += {expr1:s};
-                                vals[thread_id][1] += {expr2:s};
-                                vals[thread_id][2] += {expr3:s};
-                            }}
+                            #ifdef FLOAT32
+                                out[oidx] = (T)val;
+                            #endif
+                            #ifdef UINT16
+                                int vali = __float2int_rd(val);
+                                if (vali < 0) {{
+                                    vali = 0;
+                                }} else if (vali > 65535) {{
+                                    vali = 65535;
+                                }}
+                                out[oidx] = (T)vali;
+                            #endif
                         }}
                     #endif
                     #ifdef NEAREST
@@ -304,32 +307,26 @@ __global__ void {function_name:s}(
                         int x_i = nearestNeighbor(x_t);
                         int y_i = nearestNeighbor(y_t);
                         int z_i = nearestNeighbor(z_t);
-                        if (x_i >= 0 && x_i < sx_r && y_i >= 0 && y_i < sy_r &&
-                            z_i >= 0 && z_i < sz_r) {{
-                            U rval = (U)reference[xyz2idx(x_i, y_i, z_i, sx_r, sy_r)];
-                            U mval = (U)moving[xyz2idx(x, y, z, sx_m, sy_m)];
-                            vals[thread_id][0] += {expr1:s}; //rval * mval;
-                            vals[thread_id][1] += {expr2:s}; //rval * rval;
-                            vals[thread_id][2] += {expr3:s}; //mval * mval;
+                        if (x_i >= 0 && x_i < sx_i && 
+                            y_i >= 0 && y_i < sy_i &&
+                            z_i >= 0 && z_i < sz_i) {{
+                            float val = (float)in[xyz2idx(x_i, y_i, z_i, sx_i, sy_i)];
+                            #ifdef FLOAT32
+                                out[oidx] = (T)val;
+                            #endif
+                            #ifdef UINT16
+                                int vali = __float2int_rd(val);
+                                if (vali < 0) {{
+                                    vali = 0;
+                                }} else if (vali > 65535) {{
+                                    vali = 65535;
+                                }}
+                                out[oidx] = (T)vali;
+                            #endif
                         }}
                     #endif
                 }}
             }}
         }}
-    }}
-
-    __syncthreads();
-
-    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {{
-        //reduce all thre threads in the block to a single value, stored in the
-        // 0 index of vals.
-        for (int i = 1; i < blockDim.x * blockDim.y * blockDim.z; i++) {{
-            vals[0][0] += vals[i][0];
-            vals[0][1] += vals[i][1];
-            vals[0][2] += vals[i][2];
-        }}
-        atomicAdd(&prods[0], vals[0][0]);
-        atomicAdd(&prods[1], vals[0][1]);
-        atomicAdd(&prods[2], vals[0][2]);
     }}
 }}

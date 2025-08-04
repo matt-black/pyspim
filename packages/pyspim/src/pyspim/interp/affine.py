@@ -12,84 +12,41 @@ from .._util import launch_params_for_volume
 from ..typing import CuLaunchParameters, NDArray
 
 ## CUDA kernel setup and module compilation
-# setup raw modules
-with open(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "nearest.cu")
-) as f:
-    __nearest_module_txt = f.read()
-
-__nearest_ker_names = (
-    "affineTransformNearest<unsigned short>",
-    "affineTransformNearest<float>",
-)
-__cuda_module_nearest = cupy.RawModule(
-    code=__nearest_module_txt, name_expressions=__nearest_ker_names
-)
-__cuda_module_nearest.compile()
-
 
 with open(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "linear.cu")
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels.cu")
 ) as f:
-    __linear_module_txt = f.read()
-__linear_ker_names = (
-    "affineTransformLerp<unsigned short>",
-    "affineTransformLerp<float>",
-    "affineTransformLerpUShort",
-    "affineTransformMaxBlend",
-    "affineTransformMeanBlend",
-)
-__cuda_module_linear = cupy.RawModule(
-    code=__linear_module_txt, name_expressions=__linear_ker_names
-)
-__cuda_module_linear.compile()
-
-with open(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "cubspl.cu")
-) as f:
-    __cubspl_module_txt = f.read()
-__cubspl_ker_names = (
-    "affineTransformCubSpl<unsigned short>",
-    "affineTransformCubSpl<float>",
-    "affineTransformCubSplUShort",
-    "affineTransformMaxBlend",
-    "affineTransformMeanBlend",
-)
-__cuda_module_cubspl = cupy.RawModule(
-    code=__cubspl_module_txt, name_expressions=__cubspl_ker_names
-)
-__cuda_module_cubspl.compile()
+    __kernel_module_txt = f.read()
 
 
-def _get_kernel(dtype, method: str = "linear", preserve_dtype: bool = False):
-    if method == "linear":
-        if dtype == cupy.uint16:
-            if preserve_dtype:
-                return __cuda_module_linear.get_function(__linear_ker_names[2])
-            else:
-                return __cuda_module_linear.get_function(__linear_ker_names[0])
-        elif dtype == cupy.float32:
-            return __cuda_module_linear.get_function(__linear_ker_names[1])
-        else:
-            raise ValueError("invalid datatype")
-    elif method == "cubspl":
-        if dtype == cupy.uint16:
-            if preserve_dtype:
-                return __cuda_module_cubspl.get_function(__cubspl_ker_names[2])
-            else:
-                return __cuda_module_cubspl.get_function(__cubspl_ker_names[0])
-        elif dtype == cupy.float32:
-            return __cuda_module_cubspl.get_function(__cubspl_ker_names[1])
-        else:
-            raise ValueError("invalid datatype")
-    elif method == "nearest":
-        if dtype == cupy.uint16 or preserve_dtype:
-            return __cuda_module_nearest.get_function(__nearest_ker_names[0])
-        elif dtype == cupy.float32:
-            return __cuda_module_nearest.get_function(__nearest_ker_names[1])
+def _get_kernel(
+    dtype, method: str = "linear", preserve_dtype: bool = False,
+) -> cupy.RawKernel:
+    interp_type = method.upper()
+    if dtype == cupy.uint16:
+        template_U = "unsigned short"
+    elif dtype == cupy.float32:
+        template_U = "float"
     else:
-        raise ValueError("invalid interpolation method")
-
+        raise ValueError("invalid input datatype {}".format(dtype))
+    if preserve_dtype == True and dtype == cupy.uint16:
+        output_type = "UINT16"
+        template_T = "unsigned short"
+    else:
+        output_type = "FLOAT32"
+        template_T = "float"
+    kernel_name = f"affineTransform<{template_T},{template_U}>"
+    module_txt = __kernel_module_txt.format(
+        interp_type=interp_type,
+        output_type=output_type,
+    )
+    module = cupy.RawModule(
+        code=module_txt,
+        name_expressions=(kernel_name,),
+    )
+    module.compile()
+    return module.get_function(kernel_name)
+        
 
 ## decompositions of affine transformation matrices
 def decompose_transform(A: NDArray) -> Tuple[NDArray, NDArray, NDArray, NDArray]:
@@ -131,7 +88,7 @@ def output_shape_for_transform(
 
 
 def output_shape_for_inv_transform(
-    T: NDArray, input_shape: Iterable
+    T: NDArray, input_shape: tuple[int,int,int]
 ) -> Tuple[int, int, int]:
     """Calculate output shape of (inverse)-transformed volume.
 
@@ -156,8 +113,10 @@ def transform(
     block_size_z: int,
     block_size_y: int,
     block_size_x: int,
+    gpu_id: int = 0,
+    n_gpu: int = 1,
 ) -> cupy.ndarray:
-    """transform Apply affine transform to input volume.
+    """Apply affine transform to input volume.
 
     Args:
         A (NDArray): input volume (ZRC)
@@ -175,7 +134,7 @@ def transform(
     Returns:
         cupy.ndarray: transformed volume
     """
-    if cupy.get_array_module(A) == cupy:
+    if cupy.get_array_module(A) == cupy: # type: ignore
         kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
         if out_shp is None:
             out_shp = output_shape_for_transform(T, A.shape)
@@ -186,57 +145,13 @@ def transform(
         # preallocate output and call kernel
         out_dtype = A.dtype if preserve_dtype else cupy.float32
         out = cupy.zeros(out_shp, dtype=out_dtype)
-        kernel(launch_params[0], launch_params[1], (out, A, T, *out_shp, *A.shape))
+        kernel(
+            launch_params[0], launch_params[1], 
+            (out, A, T, *out_shp, *A.shape, gpu_id, n_gpu)
+        )
         return out
     else:
         raise ValueError("only works on cupy arrays")
-        # if interp_method == 'linear':
-        #    return linear_interp(A, T)
-        # elif interp_method == 'cubspl':
-        #    return cubspl_interp(A, T)
-        # else:
-        #    raise ValueError('invalid interpolation method')
-
-
-def _transform_distributed(
-    A: zarr.Array,
-    out_path: str,
-    T: NDArray,
-    interp_method: str,
-    preserve_dtype: bool,
-    out_shp: Tuple[int, int, int] | None,
-    chunk_size: Tuple[int, int, int],
-    block_size: Tuple[int, int, int],
-):
-    if cupy.get_array_module(A) == cupy:
-        kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
-        T = cupy.asarray(T).astype(cupy.float32)
-        if out_shp is None:
-            out_shp = output_shape_for_transform(T, A.shape)
-        out_dtype = A.dtype if preserve_dtype else numpy.float32
-        out = zarr.creation.open_array(
-            out_path, mode="w", shape=out_shp, dtype=out_dtype, fill_value=0
-        )
-        chunks = _calculate_array_chunks(*out_shp, chunk_size)
-        n_gpu = cupy.cuda.runtime.getDeviceCount()
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=n_gpu, mp_context=multiprocessing.get_context("spawn")
-        ) as executor, multiprocessing.Manager() as manager:
-            gpu_queue = manager.Queue()
-            for gpu_id in range(n_gpu):
-                gpu_queue.put(gpu_id)
-
-
-def _transform_chunk(
-    A: zarr.Array,
-    out: zarr.Array,
-    T: cupy.ndarray,
-    interp_method: str,
-    preserve_dtype: bool,
-    block_size: Tuple[int, int, int],
-    chunk: Tuple[slice, slice, slice],
-):
-    raise NotImplementedError()
 
 
 def _pad_amount(dim: int, chunk_dim: int) -> int:
@@ -274,141 +189,3 @@ def _calculate_array_chunks(
         chunk_window = [slice(l, r) for l, r in idxs]
         chunk_windows.append(chunk_window)
     return chunk_windows
-
-
-def maxblend_into_existing(
-    E: cupy.ndarray,
-    N: cupy.ndarray,
-    T: NDArray,
-    interp_method: str,
-    launch_params: CuLaunchParameters,
-):
-    if interp_method == "linear":
-        kernel = __cuda_module_linear.get_function("affineTransformMaxBlend")
-    else:
-        kernel = __cuda_module_cubspl.get_function("affineTransformMaxBlend")
-    kernel(launch_params[0], launch_params[1], (E, N, T, *E.shape, *N.shape))
-
-
-def meanblend_into_existing(
-    S: cupy.ndarray,
-    C: cupy.ndarray,
-    N: cupy.ndarray,
-    T: NDArray,
-    interp_method: str,
-    launch_params: CuLaunchParameters,
-):
-    if interp_method == "linear":
-        kernel = __cuda_module_linear.get_function("affineTransformMeanBlend")
-    elif interp_method == "cubspl":
-        kernel = __cuda_module_cubspl.get_function("affineTransformMeanBlend")
-    else:
-        raise ValueError("invalid interpolation method")
-    kernel(launch_params[0], launch_params[1], (S, C, N, T, *S.shape, *N.shape))
-
-
-## NUMBA-optimized interpolation functions for CPU
-"""
-@njit
-def __lerp(v0, v1, t):
-    return (1-t)*v0 + t*v1
-
-@njit
-def __lerp3(A : numpy.ndarray, 
-            x : int, y : int, z : int,
-            dx : float, dy : float, dz : float):
-    return __lerp(__lerp(__lerp(A[z,  y,  x], A[z,  y,  x+1], dx),
-                         __lerp(A[z,  y+1,x], A[z,  y+1,x+1], dx), dy),
-                  __lerp(__lerp(A[z+1,y,  x], A[z+1,y,  x+1], dx),
-                         __lerp(A[z+1,y+1,x], A[z+1,y+1,x+1], dx), dy),
-                  dz)
-
-
-@njit(parallel=True)
-def linear_interp(A : numpy.ndarray, T : numpy.ndarray) -> numpy.ndarray:
-    sz_i, sy_i, sx_i = A.shape
-    sz_o, sy_o, sx_o = output_shape_for_transform(T, [sz_i, sy_i, sx_i])
-    out_size_vec = numpy.array([sz_o, sy_o, sx_o])
-    out = numpy.zeros((sz_o, sy_o, sx_o), dtype=A.dtype)
-    for z in prange(0, sz_o):
-        for y in prange(0, sy_o):
-            for x in prange(0, sx_o):
-                v = numpy.asarray([x,y,z])[:,numpy.newaxis]
-                v_t = T[:-1,:] @ v
-                v_td = numpy.floor(v_t).astype(int)
-                dv = v_t - v_td
-                if numpy.all(v_td>=0) and numpy.all(v_td < out_size_vec):
-                    out[z,y,x] = __lerp3(A, v_td[0], v_td[1], v_td[2],
-                                         dv[0], dv[1], dv[2])
-    return out
-
-
-@njit
-def bspline_weights(fraction : float) -> \
-    Tuple[numpy.ndarray,numpy.ndarray,numpy.ndarray,numpy.ndarray]:
-    one_frac = 1.0 - fraction
-    squared = numpy.square(fraction)
-    one_sqd = numpy.square(one_frac)
-    w0 = 1.0/6.0 * one_sqd * one_frac
-    w1 = 2.0/3.0 - 0.5 * squared * (2.0 - fraction)
-    w2 = 2.0/3.0 - 0.5 * one_sqd * (2.0 - one_frac)
-    w3 = 1.0/6.0 * squared * fraction
-    return w0, w1, w2, w3
-
-
-@njit(parallel=True)
-def cubspl_interp(A : numpy.ndarray, T : numpy.ndarray) -> numpy.ndarray:
-    sz_i, sy_i, sx_i = A.shape
-    sz_o, sy_o, sx_o = output_shape_for_transform(T, [sz_i, sy_i, sx_i])
-    osv = numpy.array([sz_o, sy_o, sx_o])
-    out = numpy.zeros((sz_o, sy_o, sx_o), dtype=A.dtype)
-    for z in prange(0, sz_o):
-        for y in prange(0, sy_o):
-            for x in prange(0, sx_o):
-                v = numpy.asarray([x,y,z])[:,numpy.newaxis]
-                v_t = T[:-1,:] @ v
-                v_td = numpy.floor(v_t).astype(int)
-                fraction = v_t - v_td
-                w0, w1, w2, w3 = bspline_weights(fraction)
-                g0, g1 = w0 + w1, w2 + w3
-                h0 = w1 / g0 - 1 + v_td
-                h0i = numpy.floor(h0).astype(int)
-                h0f = h0 - h0i
-                h1 = w3 / g1 + 1 + v_td
-                h1i = numpy.floor(h1)
-                h1f = h1 - h1i
-                if (numpy.all(h0i > 0) and numpy.all(h1i > 0) and
-                    numpy.all(h0i < osv) and numpy.all(h1i < osv)):
-                    data000 = __lerp3(
-                        A, h0i[0], h0i[1], h0i[2], h0f[0], h0f[1], h0f[2]
-                    )
-                    data100 = __lerp3(
-                        A, h1i[0], h0i[1], h0i[2], h1f[0], h0f[1], h0f[2]
-                    )
-                    data000 = g0[0] * data000 + g1[0] * data100
-                    data010 = __lerp3(
-                        A, h0i[0], h1i[1], h0i[2], h0f[0], h1f[1], h0f[2]
-                    )
-                    data110 = __lerp3(
-                        A, h1i[0], h1i[1], h0i[2], h1f[0], h1f[1], h0f[2]
-                    )
-                    data010 = g0[0] * data010 + g1[0] * data110
-                    data000 = g0[1] * data000 + g1[1] * data010
-                    data001 = __lerp3(
-                        A, h0i[0], h0i[1], h1i[2], h0f[0], h0f[1], h1f[2]
-                    )
-                    data101 = __lerp3(
-                        A, h1i[0], h0i[1], h1i[2], h1f[0], h0f[1], h1f[2]
-                    )
-                    data001 = g0[0] * data001 + g1[0] * data101
-                    data011 = __lerp3(
-                        A, h0i[0], h1i[1], h1i[2], h0f[0], h1f[1], h1f[2]
-                    )
-                    data111 = __lerp3(
-                        A, h1i[0], h1i[1], h1i[2], h1f[0], h1f[1], h1f[2]
-                    )
-                    data011 = g0[0] * data011 + g1[0] * data111
-                    data001 = g0[1] * data001 + g1[1] * data011
-                    out[z,y,x] = g0[2] * data000 + g1[2] * data001
-    return out
-"""

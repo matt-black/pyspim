@@ -287,8 +287,11 @@ def optimize_affine(
     # They are all confined to [0,1] so to minimize, do 1.0 - kernel_value.
     def opt_fun(pars: numpy.ndarray) -> float:
         T = par_fun(pars) # generate transform matrix
-        return 1.0 - \
-            kern.compute(T, kernels, streams, kernel_args, kernel_launch_params)
+        val = kern.compute(
+            T, kernels, streams, kernel_args, kernel_launch_params
+        )
+        return 1.0 - val.get()
+
     # do powell's registration
     opt_call = partial(
         minimize, opt_fun, x0=par0, bounds=bounds, method="powell", options=opt_kwargs
@@ -310,7 +313,8 @@ def optimize_affine(
 
 
 def _split_substrings(transform_str: str):
-    return list(accumulate(transform_str))[::2]
+    indivs = transform_str.split('+')
+    return ['+'.join(indivs[:i+1]) for i in range(len(indivs))]
 
 
 def optimize_affine_piecewise(
