@@ -16,7 +16,7 @@ from ..interp.affine import output_shape_for_transform, transform
 def inv_deskew_matrix(
     pixel_size: float, step_size: float, direction: int
 ) -> numpy.ndarray:
-    """inv_deskew_matrix Inverse deskewing matrix
+    """Inverse deskewing matrix
 
     Args:
         pixel_size (float): size of pixels, in real space
@@ -78,7 +78,7 @@ def deskewing_transform(
     auto_crop: bool,
     rotation_thetas: Tuple[float, float, float] | None,
 ) -> Tuple[NDArray, Tuple[int,int,int]]:
-    """deskewing_transform Compute the deskewing transform for the input volume.
+    """Compute the deskewing transform for the input volume.
 
     Args:
         z (int): size of input volume, z-direction (pixels)
@@ -128,7 +128,7 @@ def deskew_stage_scan(
     preserve_dtype: bool,
     block_size: Tuple[int, int, int],
 ) -> cupy.ndarray:
-    """deskew_stage_scan Deskew the input volume using the shear-warp algorithm.
+    """Deskew the input volume using the shear-warp algorithm.
 
     Args:
         im (cupy.ndarray): input volume to be deskewed.

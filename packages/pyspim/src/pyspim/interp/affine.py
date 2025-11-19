@@ -84,7 +84,8 @@ def output_shape_for_transform(
     coord = numpy.vstack([coord, numpy.zeros_like(coord[0, :])])
     coordT = (t @ coord)[:-1, :]
     ptp = numpy.ceil(numpy.ptp(coordT, axis=1))
-    return tuple([int(v) for v in ptp[::-1]])
+    z, y, x = int(ptp[0]), int(ptp[1]), int(ptp[2])
+    return z, y, x
 
 
 def output_shape_for_inv_transform(
@@ -167,12 +168,7 @@ def _calculate_array_chunks(
 ):
     shape = tuple([z, r, c])
     if isinstance(chunk_shape, int):
-        chunk_shape = tuple(
-            [
-                chunk_shape,
-            ]
-            * 3
-        )
+        chunk_shape = (chunk_shape, chunk_shape, chunk_shape)
     pad_size = [_pad_amount(s, cs) for s, cs in zip(shape, chunk_shape)]
     padded_shape = [s + p for s, p in zip(shape, pad_size)]
     n_chunk = [s // c for s, c in zip(padded_shape, chunk_shape)]
