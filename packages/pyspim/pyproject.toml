@@ -7,7 +7,6 @@ name = "pyspim"
 version = "0.1.0"
 description = "Python library for SPIM (Selective Plane Illumination Microscopy) data processing"
 readme = "README.md"
-requires-python = ">=3.8.1"
 license = {text = "GPL-3.0"}
 authors = [
     {name = "PySPIM Contributors", email = "pyspim@example.com"}
@@ -27,6 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "cupy-cuda12x>=10.0.0",
     "numpy>=1.20.0",
     "scipy>=1.7.0",
     "scikit-image>=0.18.0",
@@ -35,12 +35,10 @@ dependencies = [
     "zarr>=2.10.0",
     "dask>=2021.0.0",
     "numba>=0.58.1",
+    "nvmath-python[cu12-distributed]>=0.9.0",
 ]
 
 [project.optional-dependencies]
-gpu = [
-    "cupy>=10.0.0",
-]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

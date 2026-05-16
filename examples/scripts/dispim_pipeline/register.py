@@ -80,10 +80,10 @@ def main(
             (crop_box_a[0], crop_box_a[1]),
             (crop_box_a[2], crop_box_a[3]),
             (crop_box_a[4], crop_box_a[5]),
-        ]
+        ] # pyright: ignore[reportAssignmentType]
     else:
-        crop_box_a = [(0, a_zarr.shape[i]) for i in range(1, 4)]
-        a_dsk = a_zarr.oindex[
+        crop_box_a = [(0, a_zarr.shape[i]) for i in range(1, 4)] # pyright: ignore[reportAssignmentType]
+        a_dsk: NDArray = a_zarr.oindex[
             reg_channel, slice(None), slice(None), slice(None)
         ]
     if crop_box_b is not None:
@@ -97,10 +97,10 @@ def main(
             (crop_box_b[0], crop_box_b[1]),
             (crop_box_b[2], crop_box_b[3]),
             (crop_box_b[4], crop_box_b[5]),
-        ]
+        ] # pyright: ignore[reportAssignmentType]
     else:
-        crop_box_b = [(0, b_zarr.shape[i]) for i in range(1, 4)]
-        b_dsk = b_zarr.oindex[
+        crop_box_b = [(0, b_zarr.shape[i]) for i in range(1, 4)] # pyright: ignore[reportAssignmentType]
+        b_dsk: NDArray = b_zarr.oindex[
             reg_channel, slice(None), slice(None), slice(None)
         ]
     if verbose:
@@ -235,6 +235,7 @@ def main(
         kernel_launch_params=klp,
         verbose=verbose,
     )
+    
     # save registration results
     image_shape = [int(s) for s in a_dsk.shape]
     with open(os.path.join(output_folder, "reg_params.json"), "w") as fh:

@@ -1,21 +1,25 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem-per-cpu=100G
-#SBATCH --time=0:15:00
+#SBATCH --cpus-per-task=3
+#SBATCH --mem-per-cpu=50G
+#SBATCH --time=0:30:00
+#SBATCH --gres=gpu:1
+#SBATCH --constraint=gpu80
 #SBATCH --job-name=deskew
 #SBATCH --output=job-deskew-%j.out
 
 module purge
-module load cudatoolkit/12.6
-module load anaconda3/2024.6
-conda activate /scratch/gpfs/kc32/conda/pyspim
+#module load cudatoolkit/12.6
 
-ACQ_PATH="/scratch/gpfs/kc32/ExampleDispimData/example_dispim_data/fruiting_body001"
-METHOD="ortho"
+cd /home/mb46/dev/pyspim
+source .venv/bin/activate
+cd /home/mb46/dev/pyspim/examples/scripts/dispim_pipeline
 
-python deskew_cpu.py \
+ACQ_PATH="/scratch/gpfs/SHAEVITZ/mb46/fb_dispim/static/live/2day/LS_only/2023-10-20/48hr_live/acq001"
+METHOD="shear"
+
+python deskew_gpu.py \
     --input-folder=$ACQ_PATH \
     --data-type="umasi" \
     --output-folder=$ACQ_PATH/proc_$METHOD --force \

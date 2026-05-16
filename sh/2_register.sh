@@ -10,28 +10,24 @@
 #SBATCH --output=job-dvreg-%j.out
 
 module purge
-module load cudatoolkit/12.6
-module load nsight-systems/2025.3.1
+#module load cudatoolkit/12.6
 module load anaconda3/2024.6
-conda activate /scratch/gpfs/kc32/conda/pyspim
 
-INP_FLDR="/projects/SHAEVITZ/mb46/fb_dispim/13hr/2025-06-06/fruiting_body004/proc_ortho"
+cd /home/mb46/dev/pyspim
+source .venv/bin/activate
+cd /home/mb46/dev/pyspim/examples/scripts/dispim_pipeline
 
-ncu --set full --clock-control none \
-    -k regex:correlationRatio \
-    -c 10 \
-    -f -o ncu_output \
-    --launch-skip-before-match 20 \
-	python register.py \
-    		--input-folder=$INP_FLDR \
-    		--output-folder=$INP_FLDR/reg_trs0 \
-    		--crop-box-a="115,275,167,437,500,850" \
-		--crop-box-b="115,275,167,437,500,850" \
-    		--channel=0 \
-    		--metric='cr' \
-    		--transform='t+r+s' \
-    		--bounds='20,20,20,5,5,5,0.05,0.05,0.05' \
-    		--interp-method='cubspl' \
-    		--verbose
+INP_FLDR="/scratch/gpfs/SHAEVITZ/mb46/fb_dispim/static/live/2day/LS_only/2023-10-20/48hr_live/acq001/proc_shear"
 
-#
+python register.py \
+	--input-folder=$INP_FLDR \
+	--output-folder=$INP_FLDR/reg_trs0 \
+	--crop-box-a="260,900,185,2025,500,1500" \
+	--crop-box-b="260,900,185,2025,500,1500" \
+    --channel=0 \
+    --metric='cr' \
+    --transform='t+r+s' \
+    --bounds='10,10,10,5,5,5,0.05,0.05,0.05' \
+    --interp-method='cubspl' \
+	--downscale \
+    --verbose --debug

@@ -212,17 +212,14 @@ def main(
         raise ValueError("dispim not implemented")
     out_shp_a = list([int(a) for a in out_shp_a])
     out_shp_b = list([int(b) for b in out_shp_b])
-    a = zarr.open_array(
+    a = zarr.create_array(
         os.path.join(output_folder, "a.zarr"),
-        mode="w",
         shape=[num_chan] + out_shp_a,
         dtype=numpy.uint16,
         fill_value=0,
     )
-
-    b = zarr.open_array(
+    b = zarr.create_array(
         os.path.join(output_folder, "b.zarr"),
-        mode="w",
         shape=[num_chan] + out_shp_b,
         dtype=numpy.uint16,
         fill_value=0,

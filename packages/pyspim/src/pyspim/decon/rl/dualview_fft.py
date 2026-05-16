@@ -178,7 +178,7 @@ def deconvolve(
     boundary_sigma_b: float,
     verbose: bool,
 ) -> NDArray:
-    """deconvolve Joint deconvolution of 2 views into a single one.
+    """Joint deconvolution of 2 views into a single one.
 
     Args:
         view_a (NDArray): array from 1st view
