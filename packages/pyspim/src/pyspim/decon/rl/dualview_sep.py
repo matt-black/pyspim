@@ -47,7 +47,7 @@ def _deconvolve_single_channel(
     num_iter: int,
     epsilon: float,
     boundary_correction: bool,
-    zero_padding: Optional[PadType],
+    zero_padding: PadType,
     boundary_sigma_a: float,
     boundary_sigma_b: float,
     verbose: bool,
@@ -148,7 +148,7 @@ def _deconvolve_multichannel(
     num_iter: int,
     epsilon: float,
     boundary_correction: bool,
-    zero_padding: Optional[PadType],
+    zero_padding: PadType,
     boundary_sigma_a: float,
     boundary_sigma_b: float,
     verbose: bool,
@@ -236,7 +236,7 @@ def deconvolve(
     num_iter: int,
     epsilon: float,
     boundary_correction: bool,
-    zero_padding: Optional[PadType],
+    zero_padding: PadType,
     boundary_sigma_a: float,
     boundary_sigma_b: float,
     verbose: bool,
@@ -328,7 +328,7 @@ def additive_joint_rl(
     num_iter: int,
     epsilon: float,
     boundary_correction: bool,
-    zero_padding: Optional[PadType],
+    zero_padding: PadType,
     boundary_sigma_a: float,
     boundary_sigma_b: float,
     conv_module: Optional[cupy.RawModule],
@@ -449,7 +449,7 @@ def _additive_joint_rl_boundcorr(
     bp_bz: cupy.ndarray,
     bp_by: cupy.ndarray,
     bp_bx: cupy.ndarray,
-    num_iter: iter,
+    num_iter: int,
     epsilon: float,
     zero_padding: PadType,
     boundary_sigma_a: float,
@@ -556,7 +556,6 @@ def _additive_joint_rl_boundcorr_chunk(
     conv_module: Optional[cupy.RawModule],
     launch_pars: Optional[CuLaunchParameters],
 ) -> numpy.ndarray:
-    raise NotImplementedError("TOFIX: only returns zeros")
     # compile the convolution module
     if conv_module is None:
         conv_module = make_conv_module(len(psf_az) // 2)
@@ -567,13 +566,13 @@ def _additive_joint_rl_boundcorr_chunk(
     view_a = cupy.asarray(view_a, dtype=cupy.float32, order="F")
     view_b = cupy.asarray(view_b, dtype=cupy.float32, order="F")
     psf_az = cupy.asarray(psf_az, dtype=cupy.float32)
-    psf_ay = cupy.asarray(psf_bz, dtype=cupy.float32)
+    psf_ay = cupy.asarray(psf_ay, dtype=cupy.float32)
     psf_ax = cupy.asarray(psf_ax, dtype=cupy.float32)
     psf_bz = cupy.asarray(psf_bz, dtype=cupy.float32)
     psf_by = cupy.asarray(psf_by, dtype=cupy.float32)
     psf_bx = cupy.asarray(psf_bx, dtype=cupy.float32)
     bp_az = cupy.asarray(bp_az, dtype=cupy.float32)
-    bp_ay = cupy.asarray(bp_bz, dtype=cupy.float32)
+    bp_ay = cupy.asarray(bp_ay, dtype=cupy.float32)
     bp_ax = cupy.asarray(bp_ax, dtype=cupy.float32)
     bp_bz = cupy.asarray(bp_bz, dtype=cupy.float32)
     bp_by = cupy.asarray(bp_by, dtype=cupy.float32)
@@ -581,6 +580,7 @@ def _additive_joint_rl_boundcorr_chunk(
     # initialize estimate, if not already done
     if est_i is None:
         est_i = initialize_estimate(view_a, view_b, order="F")
+    # compute masks for where the relevant data is
     # compute masks for where the relevant data is
     mask_a = cupy.zeros_like(view_a)
     mask_a[out_window] = 1
@@ -593,7 +593,7 @@ def _additive_joint_rl_boundcorr_chunk(
     wind_b = cupy.where(alpha_b > boundary_sigma_b, 1 / alpha_b, 0)
     del mask_b
     # compute flux constant, initial \alpha
-    c = cupy.sum(est_i[out_window])
+    c = cupy.sum(est_i)
     alpha = alpha_a + alpha_b
     del alpha_a, alpha_b
     for _ in range(num_iter):
@@ -605,7 +605,7 @@ def _additive_joint_rl_boundcorr_chunk(
                     conv(div_stable(view_a, con, epsilon), bp_az, bp_ay, bp_ax),
                 )
             else:
-                con = conv(est_i, psf_bz, bp_by, psf_bx)
+                con = conv(est_i, psf_bz, psf_by, psf_bx)
                 est_i = cupy.multiply(
                     cupy.multiply(wind_b, est_i),
                     conv(div_stable(view_b, con, epsilon), bp_bz, bp_by, bp_bx),
@@ -634,14 +634,14 @@ def joint_rl_dispim(
     num_iter: int,
     epsilon: float,
     boundary_correction: bool,
-    zero_padding: Optional[PadType],
+    zero_padding: PadType,
     boundary_sigma_a: float,
     boundary_sigma_b: float,
     conv_module: Optional[cupy.RawModule],
     launch_pars: Optional[CuLaunchParameters],
     verbose: bool,
 ) -> cupy.ndarray:
-    """joint_rl_dispim Joint deconvolution specifically for diSPIM volumes.
+    """Joint deconvolution specifically for diSPIM volumes.
 
     Args:
         view_a (cupy.ndarray): input volume for view A
@@ -746,7 +746,7 @@ def _joint_rl_dispim_corr(
     bp_bz: cupy.ndarray,
     bp_by: cupy.ndarray,
     bp_bx: cupy.ndarray,
-    num_iter: iter,
+    num_iter: int,
     epsilon: float,
     zero_padding: PadType,
     boundary_sigma_a: float,
@@ -837,12 +837,12 @@ def deconvolve_chunkwise(
     num_iter: int,
     epsilon: float,
     boundary_correction: bool,
-    zero_padding: Optional[PadType],
+    zero_padding: PadType,
     boundary_sigma_a: float,
     boundary_sigma_b: float,
     verbose: bool,
 ):
-    """deconvolve_chunkwise Joint deconvolution of the input views A & B, done chunk-by-chunk.
+    """Joint deconvolution of the input views A & B, done chunk-by-chunk.
 
     Args:
         view_a (zarr.Array): zarr array for view A data
@@ -944,7 +944,7 @@ def _decon_chunk(
     num_iter: int,
     epsilon: float,
     boundary_correction: bool,
-    zero_padding: Optional[PadType],
+    zero_padding: PadType,
     boundary_sigma_a: float,
     boundary_sigma_b: float,
     # iterate over these
