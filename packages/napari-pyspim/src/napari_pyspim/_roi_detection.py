@@ -251,7 +251,6 @@ class RoiDetectionWidget(QWidget):
 
     def on_projections_loaded(self, result):
         """Handle successful projection loading - schedule on main thread."""
-        print(f"[ROI_DEBUG] on_projections_loaded called with result keys: {result.keys()}")
         QTimer.singleShot(0, lambda: self._on_projections_loaded_main(result))
 
     def _on_projections_loaded_main(self, result):
@@ -268,10 +267,6 @@ class RoiDetectionWidget(QWidget):
             yx_proj_a_t = yx_proj_a.T  # shape: (X, Y)
             yx_proj_b_t = yx_proj_b.T  # shape: (X, Y)
 
-            print(f"[ROI_DEBUG] YX A original: {yx_proj_a.shape}, transposed: {yx_proj_a_t.shape}")
-            print(f"[ROI_DEBUG] YX B original: {yx_proj_b.shape}, transposed: {yx_proj_b_t.shape}")
-            print(f"[ROI_DEBUG] ZY A: {zy_proj_a.shape}")
-            print(f"[ROI_DEBUG] ZY B: {zy_proj_b.shape}")
 
             # Determine shapes from View A (assumed same size as View B)
             X, Y = yx_proj_a_t.shape
@@ -318,7 +313,7 @@ class RoiDetectionWidget(QWidget):
 
             # Add shared Shapes layers with full-coverage rectangles
             # YX projection (transposed): shape (X, Y), coords are (row=X, col=Y)
-            yx_rect = [[(0, 0), (0, Y - 1), (X - 1, Y - 1), (X - 1, 0)]]
+            yx_rect = [[(0, 0), (0, Y-1), (X-1, Y-1), (X-1, 0)]]
             self.shapes_yx_layer = self.viewer.add_shapes(
                 yx_rect,
                 shape_type="rectangle",
@@ -328,6 +323,7 @@ class RoiDetectionWidget(QWidget):
                 edge_width=2,
                 translate=self.projection_yx_a_layer.translate,
             )
+            self.shapes_yx_layer.editable = True
 
             # ZY projection: shape (Z, Y), coords are (row=Z, col=Y)
             zy_rect = [[(0, 0), (0, Y_zy - 1), (Z - 1, Y_zy - 1), (Z - 1, 0)]]
@@ -340,6 +336,7 @@ class RoiDetectionWidget(QWidget):
                 edge_width=2,
                 translate=self.projection_zy_a_layer.translate,
             )
+            self.shapes_zy_layer.editable = True
 
             # Connect shapes data change events for Y-axis sync
             self.shapes_yx_layer.events.data.connect(self.on_yx_shapes_changed)
@@ -349,16 +346,30 @@ class RoiDetectionWidget(QWidget):
             self.load_button.setEnabled(True)
             self.save_button.setEnabled(True)
             self.progress_bar.setVisible(False)
-            self.status_label.setText(
-                f"Projections loaded! Volume A: {volume_shape_a}, Volume B: {volume_shape_b}"
-            )
-            print("[ROI_DEBUG] Layers added successfully, buttons enabled")
+            self.status_label.setText("Projections loaded!")
 
         except Exception as e:
-            print(f"[ROI_DEBUG] Error in _on_projections_loaded_main: {e}")
             import traceback
             traceback.print_exc()
             self.on_error(str(e))
+
+    def _commit_shape_edits(self, layer):
+        """Force a shapes layer to commit any pending interactive edits.
+
+        When shapes are edited interactively in transform/direct mode,
+        napari keeps the edits in an internal transform buffer until the
+        mode switches away from editing. Calling this method forces the
+        layer to finalize pending edits by temporarily switching to
+        pan_zoom mode and back, which triggers the data event and commits
+        the changes to layer.data.
+        """
+        if layer.mode in ('transform', 'direct'):
+            # Store the current mode to restore it after
+            previous_mode = layer.mode
+            # Switch to pan_zoom to finalize pending edits
+            layer.mode = 'pan_zoom'
+            # Switch back to the previous mode
+            layer.mode = previous_mode
 
     def on_yx_shapes_changed(self):
         """Handle changes to YX shapes layer - sync Y bounds to ZY layer.
@@ -384,10 +395,13 @@ class RoiDetectionWidget(QWidget):
 
             # Update ZY shapes with new Y bounds (column coordinates in ZY view)
             zy_corners = list(self.shapes_zy_layer.data[0])
+            zy_y_min = min(c[1] for c in zy_corners)
+            zy_y_max = max(c[1] for c in zy_corners)
+
             new_zy_corners = []
             for corner in zy_corners:
                 z, y = corner
-                if y == min(c[1] for c in zy_corners):
+                if y == zy_y_min:
                     new_y = y_min
                 else:
                     new_y = y_max
@@ -422,10 +436,13 @@ class RoiDetectionWidget(QWidget):
 
             # Update YX shapes with new Y bounds (column coordinates in transposed YX view)
             yx_corners = list(self.shapes_yx_layer.data[0])
+            yx_y_min = min(c[1] for c in yx_corners)
+            yx_y_max = max(c[1] for c in yx_corners)
+
             new_yx_corners = []
             for corner in yx_corners:
                 x, y = corner
-                if y == min(c[1] for c in yx_corners):
+                if y == yx_y_min:
                     new_y = y_min
                 else:
                     new_y = y_max
@@ -455,6 +472,12 @@ class RoiDetectionWidget(QWidget):
             QMessageBox.warning(self, "Error", "No data path set")
             return
 
+        # Commit any pending interactive edits before reading layer.data
+        # This is necessary because napari keeps transform edits in an
+        # internal buffer until the layer mode switches away from editing
+        self._commit_shape_edits(self.shapes_yx_layer)
+        self._commit_shape_edits(self.shapes_zy_layer)
+        
         # Extract bounding box from YX Shapes layer
         # YX is transposed (X, Y): row=X, col=Y
         yx_corners = list(self.shapes_yx_layer.data[0])
@@ -479,9 +502,7 @@ class RoiDetectionWidget(QWidget):
         try:
             with open(output_path, "w") as f:
                 json.dump(bbox_3d, f)
-            self.status_label.setText(f"Bounding box saved to {output_path}")
             self._update_roi_info(x_start, x_end, y_start, y_end, z_start, z_end)
-            print(f"[ROI_DEBUG] Saved bbox to {output_path}: {bbox_3d}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save bounding box: {e}")
 
