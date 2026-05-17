@@ -23,17 +23,7 @@ def test_widget_creation():
     widget = DispimPipelineWidget(viewer)
     assert widget is not None
     assert hasattr(widget, "tab_widget")
-    assert widget.tab_widget.count() == 5  # 5 processing steps
-
-
-def test_data_loader_widget():
-    """Test that the data loader widget can be created."""
-    from napari_pyspim._data_loader import DataLoaderWidget
-
-    viewer = Viewer()
-    widget = DataLoaderWidget(viewer)
-    assert widget is not None
-    assert hasattr(widget, "load_button")
+    assert widget.tab_widget.count() == 4  # 4 processing steps
 
 
 def test_roi_detection_widget():

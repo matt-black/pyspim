@@ -1,498 +1,498 @@
 """
-ROI detection widget for automated and manual region of interest detection and cropping.
+ROI detection widget for manual region of interest detection and cropping.
 """
 
-import math
+import json
+import os
+
+import numpy as np
 from PyQt5.QtCore import pyqtSignal
-from qtpy.QtCore import QThread
+from qtpy.QtCore import QThread, QTimer
 from qtpy.QtWidgets import (
-    QButtonGroup,
-    QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QRadioButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-# Lazy import to avoid CUDA compilation at module level
-# from pyspim import roi
 
+class ProjectionLoaderWorker(QThread):
+    """Worker thread for loading data and computing projections for both views."""
 
-class RoiDetectionWorker(QThread):
-    """Worker thread for ROI detection."""
-
-    roi_detected = pyqtSignal(dict)
+    projections_loaded = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, a_raw, b_raw, method="otsu", process_single_channel=None):
+    def __init__(self, data_path: str, channel: int, projection_type: str):
         super().__init__()
-        self.a_raw = a_raw
-        self.b_raw = b_raw
-        self.method = method
-        # 'a', 'b', or None for both
-        self.process_single_channel = process_single_channel
+        self.data_path = data_path
+        self.channel = channel  # 0-indexed
+        self.projection_type = projection_type  # 'max', 'sum', 'mean'
+
+    def _compute_projections(self, volume, proj_type):
+        """Compute YX and ZY projections from a volume."""
+        if proj_type == "max":
+            yx_proj = np.max(volume, axis=0)  # shape: (Y, X)
+            zy_proj = np.max(volume, axis=2)  # shape: (Z, Y)
+        elif proj_type == "sum":
+            yx_proj = np.sum(volume, axis=0)
+            zy_proj = np.sum(volume, axis=2)
+        elif proj_type == "mean":
+            yx_proj = np.mean(volume, axis=0)
+            zy_proj = np.mean(volume, axis=2)
+        else:
+            raise ValueError(f"Unknown projection type: {proj_type}")
+        return yx_proj, zy_proj
 
     def run(self):
-        """Detect ROIs in background thread."""
+        """Load data and compute projections for both views in background thread."""
         try:
-            # Lazy import to avoid CUDA compilation at module level
-            from pyspim import roi
+            from pyspim.data import dispim as data
 
-            if self.process_single_channel == "a":
-                # Process only channel A
-                roia = roi.detect_roi_3d(self.a_raw, self.method)
-                roic = roia
-                a_cropped = self.a_raw[
-                    roic[0][0] : roic[0][1],
-                    roic[1][0] : roic[1][1],
-                    roic[2][0] : roic[2][1],
-                ]
-                b_cropped = None
+            with data.uManagerAcquisition(self.data_path, False, np) as acq:
+                # Load volumes for both heads
+                # Raw data structure: ZYX (Z is leading dimension)
+                volume_a = acq.get('a', self.channel, 0)
+                volume_b = acq.get('b', self.channel, 0)
 
-            elif self.process_single_channel == "b":
-                # Process only channel B
-                roib = roi.detect_roi_3d(self.b_raw, self.method)
-                roic = roib
-                b_cropped = self.b_raw[
-                    roic[0][0] : roic[0][1],
-                    roic[1][0] : roic[1][1],
-                    roic[2][0] : roic[2][1],
-                ]
-                a_cropped = None
-
-            else:
-                # Process both channels
-                roia = roi.detect_roi_3d(self.a_raw, self.method)
-                roib = roi.detect_roi_3d(self.b_raw, self.method)
-                roic = roi.combine_rois(roia, roib)
-
-                a_cropped = self.a_raw[
-                    roic[0][0] : roic[0][1],
-                    roic[1][0] : roic[1][1],
-                    roic[2][0] : roic[2][1],
-                ]
-                b_cropped = self.b_raw[
-                    roic[0][0] : roic[0][1],
-                    roic[1][0] : roic[1][1],
-                    roic[2][0] : roic[2][1],
-                ]
+            # Compute projections for View A
+            yx_proj_a, zy_proj_a = self._compute_projections(volume_a, self.projection_type)
+            # Compute projections for View B
+            yx_proj_b, zy_proj_b = self._compute_projections(volume_b, self.projection_type)
 
             result = {
-                "a_cropped": a_cropped,
-                "b_cropped": b_cropped,
-                "roi_coords": roic,
-                "method": self.method,
-                "process_single_channel": self.process_single_channel,
+                "yx_proj_a": yx_proj_a,
+                "zy_proj_a": zy_proj_a,
+                "yx_proj_b": yx_proj_b,
+                "zy_proj_b": zy_proj_b,
+                "volume_shape_a": volume_a.shape,
+                "volume_shape_b": volume_b.shape,
+                "data_path": self.data_path,
             }
 
-            self.roi_detected.emit(result)
+            self.projections_loaded.emit(result)
 
         except Exception as e:
             self.error_occurred.emit(str(e))
 
 
 class RoiDetectionWidget(QWidget):
-    """Widget for ROI detection and cropping."""
+    """Widget for manual ROI detection and cropping."""
 
     roi_applied = pyqtSignal(dict)
 
     def __init__(self, viewer):
         super().__init__()
         self.viewer = viewer
-        self.worker = None
-        self.input_data = None
-        self.manual_roi_coords = None
+        self.loader_worker = None
+        self.data_path = None
+        # Layer references - 4 image layers (2 views x 2 projections)
+        self.projection_yx_a_layer = None
+        self.projection_yx_b_layer = None
+        self.projection_zy_a_layer = None
+        self.projection_zy_b_layer = None
+        # Shared Shapes layers
+        self.shapes_yx_layer = None
+        self.shapes_zy_layer = None
+        # Flag to prevent recursive shape updates
+        self._syncing_shapes = False
         self.setup_ui()
 
     def setup_ui(self):
         """Set up the user interface."""
         layout = QVBoxLayout()
 
-        # Layer selection
-        layer_group = QGroupBox("Layer Selection")
-        layer_layout = QFormLayout()
+        # Data Path selection
+        path_group = QGroupBox("Data Path")
+        path_layout = QFormLayout()
 
-        self.layer_a_combo = QComboBox()
-        self.layer_a_combo.addItem("Select Channel A layer...")
-        self.layer_a_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Select μManager acquisition folder...")
+        self.browse_button = QPushButton("Browse")
+        self.browse_button.clicked.connect(self.browse_data_path)
 
-        self.layer_b_combo = QComboBox()
-        self.layer_b_combo.addItem("Select Channel B layer...")
-        self.layer_b_combo.currentTextChanged.connect(self.on_layer_selection_changed)
+        path_row = QHBoxLayout()
+        path_row.addWidget(self.path_edit)
+        path_row.addWidget(self.browse_button)
 
-        layer_layout.addRow("Channel A:", self.layer_a_combo)
-        layer_layout.addRow("Channel B:", self.layer_b_combo)
-        layer_group.setLayout(layer_layout)
+        path_layout.addRow("Data Path:", path_row)
 
-        # Channel selection
-        channel_group = QGroupBox("Channel Selection")
-        channel_layout = QVBoxLayout()
+        # Channel selection (1-indexed)
+        self.channel_spin = QSpinBox()
+        self.channel_spin.setRange(1, 20)
+        self.channel_spin.setValue(1)
+        path_layout.addRow("Channel:", self.channel_spin)
 
-        self.channel_group = QButtonGroup()
-        self.both_channels_radio = QRadioButton("Process both channels (A & B)")
-        self.channel_a_radio = QRadioButton("Process only channel A")
-        self.channel_b_radio = QRadioButton("Process only channel B")
+        # Projection type
+        self.projection_combo = QComboBox()
+        self.projection_combo.addItems(["max", "sum", "mean"])
+        self.projection_combo.setCurrentText("max")
+        path_layout.addRow("Projection:", self.projection_combo)
 
-        self.channel_group.addButton(self.both_channels_radio, 0)
-        self.channel_group.addButton(self.channel_a_radio, 1)
-        self.channel_group.addButton(self.channel_b_radio, 2)
+        # Load button
+        self.load_button = QPushButton("Load")
+        self.load_button.clicked.connect(self.load_projections)
+        self.load_button.setEnabled(False)
+        path_layout.addRow(self.load_button)
 
-        self.both_channels_radio.setChecked(True)
-
-        channel_layout.addWidget(self.both_channels_radio)
-        channel_layout.addWidget(self.channel_a_radio)
-        channel_layout.addWidget(self.channel_b_radio)
-        channel_group.setLayout(channel_layout)
-
-        # ROI method selection
-        method_group = QGroupBox("ROI Detection Method")
-        method_layout = QFormLayout()
-
-        self.method_combo = QComboBox()
-        self.method_combo.addItems(["otsu", "triangle"])
-        self.method_combo.setCurrentText("otsu")
-        self.method_combo.currentTextChanged.connect(self.on_method_changed)
-
-        method_layout.addRow("Threshold Method:", self.method_combo)
-        method_group.setLayout(method_layout)
-
-        # Acquisition parameters (for reference and metadata)
-        acq_group = QGroupBox("Acquisition Parameters")
-        acq_layout = QFormLayout()
-
-        self.step_size_spin = QDoubleSpinBox()
-        self.step_size_spin.setRange(0.1, 10.0)
-        self.step_size_spin.setValue(0.5)
-        self.step_size_spin.setSuffix(" μm")
-        self.step_size_spin.setDecimals(3)
-
-        self.pixel_size_spin = QDoubleSpinBox()
-        self.pixel_size_spin.setRange(0.01, 1.0)
-        self.pixel_size_spin.setValue(0.1625)
-        self.pixel_size_spin.setSuffix(" μm")
-        self.pixel_size_spin.setDecimals(4)
-
-        self.theta_spin = QDoubleSpinBox()
-        self.theta_spin.setRange(0, 90)
-        self.theta_spin.setValue(45)
-        self.theta_spin.setSuffix("°")
-        self.theta_spin.setDecimals(1)
-
-        acq_layout.addRow("Step Size:", self.step_size_spin)
-        acq_layout.addRow("Pixel Size:", self.pixel_size_spin)
-        acq_layout.addRow("Theta (angle):", self.theta_spin)
-        acq_group.setLayout(acq_layout)
-
-
-
-
-
-        # Detection button
-        self.detect_button = QPushButton("Detect and Apply ROI")
-        self.detect_button.clicked.connect(self.detect_roi)
-        self.detect_button.setEnabled(False)
+        path_group.setLayout(path_layout)
 
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
 
         # Status label
-        self.status_label = QLabel("Select layers for ROI detection")
+        self.status_label = QLabel("Select data path and click Load")
 
         # ROI info display
         self.roi_info_label = QLabel("")
         self.roi_info_label.setWordWrap(True)
 
+        # Save button
+        self.save_button = QPushButton("Save")
+        self.save_button.clicked.connect(self.save_bbox)
+        self.save_button.setEnabled(False)
+
         # Add widgets to layout
-        layout.addWidget(layer_group)
-        layout.addWidget(channel_group)
-        layout.addWidget(method_group)
-        layout.addWidget(acq_group)
-        layout.addWidget(self.detect_button)
+        layout.addWidget(path_group)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
         layout.addWidget(self.roi_info_label)
+        layout.addWidget(self.save_button)
         layout.addStretch()
 
         self.setLayout(layout)
 
-        # Update layer lists when viewer layers change
-        self.viewer.layers.events.inserted.connect(self.update_layer_lists)
-        self.viewer.layers.events.removed.connect(self.update_layer_lists)
+        # Connect path validation
+        self.path_edit.textChanged.connect(self.validate_path)
 
-    def update_layer_lists(self, event=None):
-        """Update the layer selection dropdowns."""
-        # Store current selections
-        current_a = self.layer_a_combo.currentText()
-        current_b = self.layer_b_combo.currentText()
+    def browse_data_path(self):
+        """Open file dialog to select data path."""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select μManager Acquisition Folder"
+        )
+        if path:
+            self.path_edit.setText(path)
 
-        # Clear and repopulate
-        self.layer_a_combo.clear()
-        self.layer_b_combo.clear()
-
-        # Add placeholder items
-        self.layer_a_combo.addItem("Select Channel A layer...")
-        self.layer_b_combo.addItem("Select Channel B layer...")
-
-        # Add available layers
-        for layer in self.viewer.layers:
-            if hasattr(layer, 'data') and layer.data is not None:
-                self.layer_a_combo.addItem(layer.name)
-                self.layer_b_combo.addItem(layer.name)
-
-        # Restore selections if they still exist
-        if current_a and current_a in [self.layer_a_combo.itemText(i) for i in range(self.layer_a_combo.count())]:
-            self.layer_a_combo.setCurrentText(current_a)
-        if current_b and current_b in [self.layer_b_combo.itemText(i) for i in range(self.layer_b_combo.count())]:
-            self.layer_b_combo.setCurrentText(current_b)
-
-        self.on_layer_selection_changed()
-
-    def on_layer_selection_changed(self):
-        """Handle layer selection changes."""
-        a_selected = self.layer_a_combo.currentText() != "Select Channel A layer..."
-        b_selected = self.layer_b_combo.currentText() != "Select Channel B layer..."
-
-        # Update parameters from selected layers
-        self._update_parameters_from_selected_layers()
-
-        # Update button states
-        has_data = a_selected or b_selected
-        
-        print(f"=== DEBUG: Layer selection changed ===")
-        print(f"  a_selected: {a_selected} (text: '{self.layer_a_combo.currentText()}')")
-        print(f"  b_selected: {b_selected} (text: '{self.layer_b_combo.currentText()}')")
-        print(f"  has_data: {has_data}")
-        print(f"  detect_button enabled: {has_data}")
-        
-        self.detect_button.setEnabled(has_data)
-
-        # Update status
-        if a_selected and b_selected:
-            self.status_label.setText("Ready for ROI detection")
-        elif a_selected:
-            self.status_label.setText("Channel A selected - ready for ROI detection")
-        elif b_selected:
-            self.status_label.setText("Channel B selected - ready for ROI detection")
+    def validate_path(self):
+        """Validate the selected data path."""
+        path = self.path_edit.text()
+        if path and os.path.exists(path):
+            self.load_button.setEnabled(True)
         else:
-            self.status_label.setText("Select layers for ROI detection")
+            self.load_button.setEnabled(False)
 
-    def _update_parameters_from_selected_layers(self):
-        """Update parameters from selected layer metadata."""
-        # Check both selected layers for metadata
-        layers_to_check = []
-        
-        if self.layer_a_combo.currentText() != "Select Channel A layer...":
+    def _remove_existing_layers(self):
+        """Remove any existing projection and shapes layers."""
+        layers_to_remove = []
+        if self.projection_yx_a_layer:
+            layers_to_remove.append(self.projection_yx_a_layer)
+        if self.projection_yx_b_layer:
+            layers_to_remove.append(self.projection_yx_b_layer)
+        if self.projection_zy_a_layer:
+            layers_to_remove.append(self.projection_zy_a_layer)
+        if self.projection_zy_b_layer:
+            layers_to_remove.append(self.projection_zy_b_layer)
+        if self.shapes_yx_layer:
+            layers_to_remove.append(self.shapes_yx_layer)
+        if self.shapes_zy_layer:
+            layers_to_remove.append(self.shapes_zy_layer)
+
+        for layer in layers_to_remove:
             try:
-                layer_a = self.viewer.layers[self.layer_a_combo.currentText()]
-                layers_to_check.append(layer_a)
-            except (KeyError, ValueError):
+                self.viewer.layers.remove(layer)
+            except (ValueError, TypeError):
                 pass
 
-        if self.layer_b_combo.currentText() != "Select Channel B layer...":
-            try:
-                layer_b = self.viewer.layers[self.layer_b_combo.currentText()]
-                layers_to_check.append(layer_b)
-            except (KeyError, ValueError):
-                pass
+        # Reset references
+        self.projection_yx_a_layer = None
+        self.projection_yx_b_layer = None
+        self.projection_zy_a_layer = None
+        self.projection_zy_b_layer = None
+        self.shapes_yx_layer = None
+        self.shapes_zy_layer = None
 
-        # Try to get parameters from layer metadata
-        for layer in layers_to_check:
-            if hasattr(layer, 'metadata') and layer.metadata:
-                metadata = layer.metadata
-                
-                if 'step_size' in metadata:
-                    self.step_size_spin.setValue(metadata['step_size'])
-                
-                if 'pixel_size' in metadata:
-                    self.pixel_size_spin.setValue(metadata['pixel_size'])
-                
-                if 'theta' in metadata:
-                    theta_rad = metadata['theta']
-                    theta_deg = theta_rad * 180 / math.pi
-                    self.theta_spin.setValue(theta_deg)
-                
-                # Found parameters, no need to check other layers
-                break
+    def load_projections(self):
+        """Load data and compute projections for both views."""
+        data_path = self.path_edit.text()
+        channel = self.channel_spin.value() - 1  # Convert to 0-indexed
+        projection_type = self.projection_combo.currentText()
 
-    def on_method_changed(self, method):
-        """Handle method selection change."""
-        # Update button states based on layer selection
-        a_selected = self.layer_a_combo.currentText() != "Select Channel A layer..."
-        b_selected = self.layer_b_combo.currentText() != "Select Channel B layer..."
-        has_data = a_selected or b_selected
-        
-        print(f"=== DEBUG: Method changed to '{method}' ===")
-        print(f"  a_selected: {a_selected} (text: '{self.layer_a_combo.currentText()}')")
-        print(f"  b_selected: {b_selected} (text: '{self.layer_b_combo.currentText()}')")
-        print(f"  has_data: {has_data}")
-        
-        self.detect_button.setEnabled(has_data)
+        if not data_path or not os.path.exists(data_path):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
 
+        # Remove any existing layers
+        self._remove_existing_layers()
 
+        self.load_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.status_label.setText("Loading data and computing projections...")
+        self.roi_info_label.setText("")
+
+        # Store current settings
+        self.data_path = data_path
+
+        # Create and start worker (loads both views)
+        self.loader_worker = ProjectionLoaderWorker(data_path, channel, projection_type)
+        self.loader_worker.projections_loaded.connect(self.on_projections_loaded)
+        self.loader_worker.error_occurred.connect(self.on_error)
+        self.loader_worker.start()
+
+    def on_projections_loaded(self, result):
+        """Handle successful projection loading - schedule on main thread."""
+        print(f"[ROI_DEBUG] on_projections_loaded called with result keys: {result.keys()}")
+        QTimer.singleShot(0, lambda: self._on_projections_loaded_main(result))
+
+    def _on_projections_loaded_main(self, result):
+        """Add layers on main thread."""
+        try:
+            yx_proj_a = result["yx_proj_a"]  # original shape (Y, X)
+            zy_proj_a = result["zy_proj_a"]  # original shape (Z, Y)
+            yx_proj_b = result["yx_proj_b"]  # original shape (Y, X)
+            zy_proj_b = result["zy_proj_b"]  # original shape (Z, Y)
+            volume_shape_a = result["volume_shape_a"]
+            volume_shape_b = result["volume_shape_b"]
+
+            # Transpose YX from (Y, X) to (X, Y) so Y is horizontal in both views
+            yx_proj_a_t = yx_proj_a.T  # shape: (X, Y)
+            yx_proj_b_t = yx_proj_b.T  # shape: (X, Y)
+
+            print(f"[ROI_DEBUG] YX A original: {yx_proj_a.shape}, transposed: {yx_proj_a_t.shape}")
+            print(f"[ROI_DEBUG] YX B original: {yx_proj_b.shape}, transposed: {yx_proj_b_t.shape}")
+            print(f"[ROI_DEBUG] ZY A: {zy_proj_a.shape}")
+            print(f"[ROI_DEBUG] ZY B: {zy_proj_b.shape}")
+
+            # Determine shapes from View A (assumed same size as View B)
+            X, Y = yx_proj_a_t.shape
+            Z, Y_zy = zy_proj_a.shape
+
+            # Add YX projection layer View A (transposed: X, Y)
+            self.projection_yx_a_layer = self.viewer.add_image(
+                yx_proj_a_t,
+                name="YX Projection (View A)",
+                colormap="red",
+                opacity=0.5,
+                blending="additive",
+            )
+
+            # Add YX projection layer View B (transposed: X, Y) - same coordinates as A
+            self.projection_yx_b_layer = self.viewer.add_image(
+                yx_proj_b_t,
+                name="YX Projection (View B)",
+                colormap="cyan",
+                opacity=0.5,
+                blending="additive",
+            )
+
+            # Add ZY projection layer View A (Z, Y) - offset horizontally to not overlap YX
+            offset_y = -Z  # gap between YX and ZY views
+            self.projection_zy_a_layer = self.viewer.add_image(
+                zy_proj_a,
+                name="ZY Projection (View A)",
+                colormap="red",
+                opacity=0.5,
+                blending="additive",
+                translate=(offset_y, 0),
+            )
+
+            # Add ZY projection layer View B (Z, Y) - same offset as A
+            self.projection_zy_b_layer = self.viewer.add_image(
+                zy_proj_b,
+                name="ZY Projection (View B)",
+                colormap="cyan",
+                opacity=0.5,
+                blending="additive",
+                translate=(offset_y, 0),
+            )
+
+            # Add shared Shapes layers with full-coverage rectangles
+            # YX projection (transposed): shape (X, Y), coords are (row=X, col=Y)
+            yx_rect = [[(0, 0), (0, Y - 1), (X - 1, Y - 1), (X - 1, 0)]]
+            self.shapes_yx_layer = self.viewer.add_shapes(
+                yx_rect,
+                shape_type="rectangle",
+                name="YX ROI (Shared)",
+                edge_color="yellow",
+                face_color="transparent",
+                edge_width=2,
+                translate=self.projection_yx_a_layer.translate,
+            )
+
+            # ZY projection: shape (Z, Y), coords are (row=Z, col=Y)
+            zy_rect = [[(0, 0), (0, Y_zy - 1), (Z - 1, Y_zy - 1), (Z - 1, 0)]]
+            self.shapes_zy_layer = self.viewer.add_shapes(
+                zy_rect,
+                shape_type="rectangle",
+                name="ZY ROI (Shared)",
+                edge_color="yellow",
+                face_color="transparent",
+                edge_width=2,
+                translate=self.projection_zy_a_layer.translate,
+            )
+
+            # Connect shapes data change events for Y-axis sync
+            self.shapes_yx_layer.events.data.connect(self.on_yx_shapes_changed)
+            self.shapes_zy_layer.events.data.connect(self.on_zy_shapes_changed)
+
+            # Update UI state
+            self.load_button.setEnabled(True)
+            self.save_button.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            self.status_label.setText(
+                f"Projections loaded! Volume A: {volume_shape_a}, Volume B: {volume_shape_b}"
+            )
+            print("[ROI_DEBUG] Layers added successfully, buttons enabled")
+
+        except Exception as e:
+            print(f"[ROI_DEBUG] Error in _on_projections_loaded_main: {e}")
+            import traceback
+            traceback.print_exc()
+            self.on_error(str(e))
+
+    def on_yx_shapes_changed(self):
+        """Handle changes to YX shapes layer - sync Y bounds to ZY layer.
+
+        YX layer is transposed (X, Y): row=X, col=Y
+        ZY layer is (Z, Y): row=Z, col=Y
+        Y is on the column axis for both views.
+        """
+        if self._syncing_shapes:
+            return
+        self._syncing_shapes = True
+
+        try:
+            if not self.shapes_yx_layer or not self.shapes_zy_layer:
+                return
+            if len(self.shapes_yx_layer.data) == 0:
+                return
+
+            # Extract Y bounds from YX shapes (column coordinates, since YX is transposed)
+            yx_corners = list(self.shapes_yx_layer.data[0])
+            y_min = int(min(c[1] for c in yx_corners))
+            y_max = int(max(c[1] for c in yx_corners))
+
+            # Update ZY shapes with new Y bounds (column coordinates in ZY view)
+            zy_corners = list(self.shapes_zy_layer.data[0])
+            new_zy_corners = []
+            for corner in zy_corners:
+                z, y = corner
+                if y == min(c[1] for c in zy_corners):
+                    new_y = y_min
+                else:
+                    new_y = y_max
+                new_zy_corners.append([z, new_y])
+
+            self.shapes_zy_layer.data = [new_zy_corners]
+
+        finally:
+            self._syncing_shapes = False
+
+    def on_zy_shapes_changed(self):
+        """Handle changes to ZY shapes layer - sync Y bounds to YX layer.
+
+        ZY layer is (Z, Y): row=Z, col=Y
+        YX layer is transposed (X, Y): row=X, col=Y
+        Y is on the column axis for both views.
+        """
+        if self._syncing_shapes:
+            return
+        self._syncing_shapes = True
+
+        try:
+            if not self.shapes_yx_layer or not self.shapes_zy_layer:
+                return
+            if len(self.shapes_zy_layer.data) == 0:
+                return
+
+            # Extract Y bounds from ZY shapes (column coordinates)
+            zy_corners = list(self.shapes_zy_layer.data[0])
+            y_min = int(min(c[1] for c in zy_corners))
+            y_max = int(max(c[1] for c in zy_corners))
+
+            # Update YX shapes with new Y bounds (column coordinates in transposed YX view)
+            yx_corners = list(self.shapes_yx_layer.data[0])
+            new_yx_corners = []
+            for corner in yx_corners:
+                x, y = corner
+                if y == min(c[1] for c in yx_corners):
+                    new_y = y_min
+                else:
+                    new_y = y_max
+                new_yx_corners.append([x, new_y])
+
+            self.shapes_yx_layer.data = [new_yx_corners]
+
+        finally:
+            self._syncing_shapes = False
+
+    def _update_roi_info(self, x_start, x_end, y_start, y_end, z_start, z_end):
+        """Update ROI information display."""
+        info_text = f"""
+        <b>ROI Bounding Box:</b><br>
+        Z: {z_start} to {z_end} ({z_end - z_start} pixels)<br>
+        Y: {y_start} to {y_end} ({y_end - y_start} pixels)<br>
+        X: {x_start} to {x_end} ({x_end - x_start} pixels)
+        """
+        self.roi_info_label.setText(info_text)
+
+    def save_bbox(self):
+        """Save bounding box to JSON file."""
+        if not self.shapes_yx_layer or not self.shapes_zy_layer:
+            QMessageBox.warning(self, "Error", "Please load projections first")
+            return
+        if not self.data_path:
+            QMessageBox.warning(self, "Error", "No data path set")
+            return
+
+        # Extract bounding box from YX Shapes layer
+        # YX is transposed (X, Y): row=X, col=Y
+        yx_corners = list(self.shapes_yx_layer.data[0])
+        x_start = int(min(c[0] for c in yx_corners))
+        x_end = int(max(c[0] for c in yx_corners)) + 1
+        y_start = int(min(c[1] for c in yx_corners))
+        y_end = int(max(c[1] for c in yx_corners)) + 1
+
+        # Extract bounding box from ZY Shapes layer
+        # ZY: (row=Z, col=Y)
+        zy_corners = list(self.shapes_zy_layer.data[0])
+        z_start = int(min(c[0] for c in zy_corners))
+        z_end = int(max(c[0] for c in zy_corners)) + 1
+
+        # Reconstruct 3D bbox: ((z_start, z_end), (y_start, y_end), (x_start, x_end))
+        bbox_3d = [[z_start, z_end], [y_start, y_end], [x_start, x_end]]
+
+        # Save to JSON file (shared for both views)
+        filename = "bbox_raw.json"
+        output_path = os.path.join(self.data_path, filename)
+
+        try:
+            with open(output_path, "w") as f:
+                json.dump(bbox_3d, f)
+            self.status_label.setText(f"Bounding box saved to {output_path}")
+            self._update_roi_info(x_start, x_end, y_start, y_end, z_start, z_end)
+            print(f"[ROI_DEBUG] Saved bbox to {output_path}: {bbox_3d}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save bounding box: {e}")
+
+    def on_error(self, error_msg):
+        """Handle error."""
+        QMessageBox.critical(self, "Error", f"Operation failed: {error_msg}")
+        self.status_label.setText("Error during operation")
+        self.load_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
 
     def set_input_data(self, data_dict):
         """Set input data from previous step (for backward compatibility)."""
-        self.input_data = data_dict
-        # Automatically update parameters from input data if available
-        if data_dict:
-            if "step_size" in data_dict:
-                self.step_size_spin.setValue(data_dict["step_size"])
-            
-            if "pixel_size" in data_dict:
-                self.pixel_size_spin.setValue(data_dict["pixel_size"])
-            
-            if "theta" in data_dict:
-                theta_rad = data_dict["theta"]
-                theta_deg = theta_rad * 180 / math.pi
-                self.theta_spin.setValue(theta_deg)
-
-    def detect_roi(self):
-        """Detect ROI using selected method."""
-        # Get selected layers
-        a_layer_name = self.layer_a_combo.currentText()
-        b_layer_name = self.layer_b_combo.currentText()
-        
-        if a_layer_name == "Select Channel A layer..." and b_layer_name == "Select Channel B layer...":
-            QMessageBox.warning(self, "Error", "Please select at least one layer for ROI detection")
-            return
-
-        # Get data from selected layers
-        a_raw = None
-        b_raw = None
-
-        if a_layer_name != "Select Channel A layer...":
-            try:
-                a_layer = self.viewer.layers[a_layer_name]
-                a_raw = a_layer.data
-            except (KeyError, ValueError) as e:
-                QMessageBox.warning(self, "Error", f"Could not get data from layer {a_layer_name}: {e}")
-                return
-
-        if b_layer_name != "Select Channel B layer...":
-            try:
-                b_layer = self.viewer.layers[b_layer_name]
-                b_raw = b_layer.data
-            except (KeyError, ValueError) as e:
-                QMessageBox.warning(self, "Error", f"Could not get data from layer {b_layer_name}: {e}")
-                return
-
-        method = self.method_combo.currentText()
-
-        # Determine which channel to process
-        process_single_channel = None
-        if self.channel_a_radio.isChecked():
-            process_single_channel = "a"
-        elif self.channel_b_radio.isChecked():
-            process_single_channel = "b"
-
-        self.detect_button.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate progress
-        self.status_label.setText("Detecting ROI...")
-
-        # Create and start worker
-        self.worker = RoiDetectionWorker(a_raw, b_raw, method, process_single_channel)
-        self.worker.roi_detected.connect(self.on_roi_detected)
-        self.worker.error_occurred.connect(self.on_error)
-        self.worker.start()
-
-
-
-
-
-    def _add_cropped_layer(self, data, name, roi_coords, method):
-        """Add cropped data as a new layer."""
-        # Remove old layer if it exists
-        try:
-            layer = self.viewer.layers[name]
-            self.viewer.layers.remove(layer)
-        except (KeyError, ValueError):
-            pass
-
-        # Prepare metadata
-        metadata = {
-            "roi_coords": roi_coords,
-            "method": method,
-            "original_shape": data.shape,
-        }
-
-        # Add current spin box values to metadata
-        metadata["step_size"] = self.step_size_spin.value()
-        metadata["pixel_size"] = self.pixel_size_spin.value()
-        metadata["theta"] = self.theta_spin.value() * math.pi / 180
-
-        # Add new layer
-        self.viewer.add_image(data, name=name, metadata=metadata)
-
-    def on_roi_detected(self, result):
-        """Handle successful ROI detection."""
-        a_cropped = result["a_cropped"]
-        b_cropped = result["b_cropped"]
-        roi_coords = result["roi_coords"]
-
-        # Add cropped data as new layers (only for processed channels)
-        if a_cropped is not None:
-            source_name = self.layer_a_combo.currentText()
-            output_name = f"{source_name}_cropped"
-            self._add_cropped_layer(
-                a_cropped, output_name, roi_coords, result["method"]
-            )
-        if b_cropped is not None:
-            source_name = self.layer_b_combo.currentText()
-            output_name = f"{source_name}_cropped"
-            self._add_cropped_layer(
-                b_cropped, output_name, roi_coords, result["method"]
-            )
-
-        # Update status and info
-        if a_cropped is not None and b_cropped is not None:
-            status_text = (
-                f"ROI applied successfully! A: {a_cropped.shape}, B: {b_cropped.shape}"
-            )
-        elif a_cropped is not None:
-            status_text = f"ROI applied successfully! A: {a_cropped.shape}"
-        else:
-            status_text = f"ROI applied successfully! B: {b_cropped.shape}"
-
-        self.status_label.setText(status_text)
-        self._update_roi_info(roi_coords)
-
-        self.detect_button.setEnabled(True)
-        self.progress_bar.setVisible(False)
-
-        # Emit signal with cropped data
-        output_data = result.copy()
-        # Add current parameters to output data
-        output_data["step_size"] = self.step_size_spin.value()
-        output_data["pixel_size"] = self.pixel_size_spin.value()
-        output_data["theta"] = self.theta_spin.value() * math.pi / 180
-        self.roi_applied.emit(output_data)
-
-    def on_error(self, error_msg):
-        """Handle ROI detection error."""
-        QMessageBox.critical(self, "Error", f"ROI detection failed: {error_msg}")
-        self.status_label.setText("Error during ROI detection")
-        self.detect_button.setEnabled(True)
-        self.progress_bar.setVisible(False)
-
-    def _update_roi_info(self, roi_coords):
-        """Update ROI information display."""
-        if roi_coords:
-            info_text = f"""
-            <b>ROI Coordinates:</b><br>
-            X: {roi_coords[0][0]} to {roi_coords[0][1]} ({roi_coords[0][1] - roi_coords[0][0]} pixels)<br>
-            Y: {roi_coords[1][0]} to {roi_coords[1][1]} ({roi_coords[1][1] - roi_coords[1][0]} pixels)<br>
-            Z: {roi_coords[2][0]} to {roi_coords[2][1]} ({roi_coords[2][1] - roi_coords[2][0]} pixels)
-            """
-            self.roi_info_label.setText(info_text)
-        else:
-            self.roi_info_label.setText("Using full image (no ROI)")
+        # No longer used - we load data directly now
+        pass
