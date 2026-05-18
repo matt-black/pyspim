@@ -36,16 +36,6 @@ def test_roi_detection_widget():
     assert hasattr(widget, "detect_button")
 
 
-def test_deskewing_widget():
-    """Test that the deskewing widget can be created."""
-    from napari_pyspim._deskewing import DeskewingWidget
-
-    viewer = Viewer()
-    widget = DeskewingWidget(viewer)
-    assert widget is not None
-    assert hasattr(widget, "deskew_button")
-
-
 def test_registration_widget():
     """Test that the registration widget can be created."""
     from napari_pyspim._registration import RegistrationWidget

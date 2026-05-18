@@ -3,15 +3,13 @@ Main widget for the diSPIM processing pipeline.
 
 This widget provides a tabbed interface for all processing steps:
 1. ROI Detection
-2. Deskewing
-3. Registration
-4. Deconvolution
+2. Registration
+3. Deconvolution
 """
 
 from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from ._deconvolution import DeconvolutionWidget
-from ._deskewing import DeskewingWidget
 from ._registration import RegistrationWidget
 from ._roi_detection import RoiDetectionWidget
 
@@ -33,15 +31,13 @@ class DispimPipelineWidget(QWidget):
 
         # Create individual step widgets
         self.roi_detection = RoiDetectionWidget(self.viewer)
-        self.deskewing = DeskewingWidget(self.viewer)
         self.registration = RegistrationWidget(self.viewer)
         self.deconvolution = DeconvolutionWidget(self.viewer)
 
         # Add tabs
         self.tab_widget.addTab(self.roi_detection, "1. ROI Detection")
-        self.tab_widget.addTab(self.deskewing, "2. Deskewing")
-        self.tab_widget.addTab(self.registration, "3. Registration")
-        self.tab_widget.addTab(self.deconvolution, "4. Deconvolution")
+        self.tab_widget.addTab(self.registration, "2. Registration")
+        self.tab_widget.addTab(self.deconvolution, "3. Deconvolution")
 
         # Connect signals for data flow between steps
         self._connect_signals()
@@ -51,11 +47,8 @@ class DispimPipelineWidget(QWidget):
 
     def _connect_signals(self):
         """Connect signals between widgets for data flow."""
-        # ROI detection -> Deskewing
-        self.roi_detection.roi_applied.connect(self.deskewing.set_input_data)
-
-        # Deskewing -> Registration
-        self.deskewing.deskewed.connect(self.registration.set_input_data)
+        # ROI detection -> Registration
+        self.roi_detection.roi_applied.connect(self.registration.set_input_data)
 
         # Registration -> Deconvolution
         self.registration.registered.connect(self.deconvolution.set_input_data)
