@@ -454,6 +454,14 @@ class RegistrationWidget(QWidget):
         self.transform_combo.setCurrentText("t+r+s")
 
         params_layout.addRow("Transform Type:", self.transform_combo)
+
+        self.crop_to_common_checkbox = QCheckBox("Crop to Common")
+        self.crop_to_common_checkbox.setToolTip(
+            "When enabled, crops deskewed volumes to the overlapping region "
+            "determined by the pre-reg translation before registration."
+        )
+        params_layout.addRow(self.crop_to_common_checkbox)
+
         params_group.setLayout(params_layout)
 
         # Register button
@@ -530,6 +538,8 @@ class RegistrationWidget(QWidget):
 
         # Reset pre-reg transform state
         self._pre_reg_transform = [0.0, 0.0, 0.0]
+        # Reset crop checkbox
+        self.crop_to_common_checkbox.setChecked(False)
         self._syncing_transforms = False
         self._pixel_size = None
         self.reset_transform_button.setEnabled(False)
@@ -829,6 +839,68 @@ class RegistrationWidget(QWidget):
                 theta_deg = theta_rad * 180 / math.pi
                 self.theta_spin.setValue(theta_deg)
 
+    def _compute_common_crops(self, a_shape, b_shape, t0):
+        """Compute crop slices for both volumes to their common overlapping region.
+
+        Uses the pre-reg translation to determine the area where View A and
+        translated View B overlap, then returns crop slices for each volume.
+
+        Args:
+            a_shape: Shape of View A deskewed volume (Z, Y, X).
+            b_shape: Shape of View B deskewed volume (Z, Y, X).
+            t0: Pre-reg translation in pixel units [tz, ty, tx].
+
+        Returns:
+            Tuple of (a_slices, b_slices, cropped_shape) where each slices is
+            a tuple of three slice objects for (Z, Y, X) dimensions.
+            Returns (None, None, None) if no valid overlap exists.
+        """
+        Za, Ya, Xa = a_shape
+        Zb, Yb, Xb = b_shape
+        tz, ty, tx = t0
+
+        # Compute overlap in View A's coordinate system
+        # View A occupies [0, Za] x [0, Ya] x [0, Xa]
+        # View B translated occupies [tz, tz+Zb] x [ty, ty+Yb] x [tx, tx+Xb]
+        z_start_a = max(0, tz)
+        z_end_a = min(Za, tz + Zb)
+        y_start_a = max(0, ty)
+        y_end_a = min(Ya, ty + Yb)
+        x_start_a = max(0, tx)
+        x_end_a = min(Xa, tx + Xb)
+
+        # Check if valid overlap exists
+        if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
+            return None, None, None
+
+        # Crop slices for View A (directly from overlap in A's coordinates)
+        a_slices = (
+            slice(int(z_start_a), int(z_end_a)),
+            slice(int(y_start_a), int(y_end_a)),
+            slice(int(x_start_a), int(x_end_a)),
+        )
+
+        # Crop slices for View B (shifted back to B's own coordinates by subtracting translation)
+        z_start_b = max(0, -tz)
+        z_end_b = min(Zb, Za - tz)
+        y_start_b = max(0, -ty)
+        y_end_b = min(Yb, Ya - ty)
+        x_start_b = max(0, -tx)
+        x_end_b = min(Xb, Xa - tx)
+
+        b_slices = (
+            slice(int(z_start_b), int(z_end_b)),
+            slice(int(y_start_b), int(y_end_b)),
+            slice(int(x_start_b), int(x_end_b)),
+        )
+
+        cropped_shape = (
+            int(z_end_a - z_start_a),
+            int(y_end_a - y_start_a),
+            int(x_end_a - x_start_a),
+        )
+        return a_slices, b_slices, cropped_shape
+
     def register_data(self):
         """Register the deskewed data using background worker."""
         if self.a_deskewed is None or self.b_deskewed is None:
@@ -845,13 +917,43 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         self.status_label.setText("Starting registration...")
 
-        # Convert pre-reg transform from micrometers to pixel units for RegistrationWorker
+        # Convert pre-reg transform from micrometers to pixel units
         pixel_size = self.pixel_size_spin.value()
         t0 = [t / pixel_size for t in self._pre_reg_transform]
 
+        # Determine volumes to register and initial translation
+        a_vol = self.a_deskewed
+        b_vol = self.b_deskewed
+        initial_t = list(t0)
+
+        # Apply cropping if "Crop to Common" is enabled
+        crop_enabled = self.crop_to_common_checkbox.isChecked()
+        if crop_enabled:
+            a_slices, b_slices, cropped_shape = self._compute_common_crops(
+                self.a_deskewed.shape, self.b_deskewed.shape, t0
+            )
+            if a_slices is None:
+                QMessageBox.warning(
+                    self,
+                    "No Common Region",
+                    "The pre-reg translation results in no overlapping region "
+                    "between View A and View B. Disabling crop and proceeding "
+                    "with full volumes.",
+                )
+                self.crop_to_common_checkbox.setChecked(False)
+                self.update_progress("No common region found - using full volumes")
+            else:
+                a_vol = self.a_deskewed[a_slices]
+                b_vol = self.b_deskewed[b_slices]
+                initial_t = [0, 0, 0]  # Pre-reg translation accounted for by crop
+                self.update_progress(
+                    f"Cropped to common region: "
+                    f"{cropped_shape[0]}x{cropped_shape[1]}x{cropped_shape[2]}"
+                )
+
         # Create and start worker
         self.reg_worker = RegistrationWorker(
-            self.a_deskewed, self.b_deskewed, transform_type, initial_translation=t0
+            a_vol, b_vol, transform_type, initial_translation=initial_t
         )
         self.reg_worker.registered.connect(self.on_registered)
         self.reg_worker.error_occurred.connect(self.on_error)
