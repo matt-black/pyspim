@@ -15,6 +15,7 @@ except ImportError:
     import numpy as cp
     print("Warning: CuPy not available, using NumPy (CPU only)")
 import numpy as np
+from napari.utils.transforms import Affine
 from PyQt5.QtCore import pyqtSignal
 from qtpy.QtCore import QThread, QTimer
 from qtpy.QtWidgets import (
@@ -219,11 +220,13 @@ class RegistrationWorker(QThread):
         a_deskewed,
         b_deskewed,
         transform_type="t+r+s",
+        initial_translation=None,
     ):
         super().__init__()
         self.a_deskewed = a_deskewed
         self.b_deskewed = b_deskewed
         self.transform_type = transform_type
+        self.initial_translation = initial_translation if initial_translation is not None else [0, 0, 0]
 
     def run(self):
         """Perform registration in background thread."""
@@ -241,8 +244,8 @@ class RegistrationWorker(QThread):
             # Set up initial parameters and bounds
             self.progress_updated.emit("Setting up optimization parameters...")
 
-            # Default initial translation
-            t0 = [0, 0, 0]
+            # Use initial translation from pre-reg transform (in pixel units), or default to [0, 0, 0]
+            t0 = self.initial_translation
 
             if self.transform_type == "t":
                 par0 = t0
@@ -335,6 +338,12 @@ class RegistrationWidget(QWidget):
         self.projection_zy_b_layer = None
         self.projection_xz_a_layer = None
         self.projection_xz_b_layer = None
+        # Pre-registration transform state (stored in micrometers: [tz, ty, tx])
+        self._pre_reg_transform = [0.0, 0.0, 0.0]
+        # Flag to prevent recursive sync when programmatically updating layers
+        self._syncing_transforms = False
+        # Store pixel size for layer scale
+        self._pixel_size = None
         self.setup_ui()
 
     def setup_ui(self):
@@ -407,7 +416,7 @@ class RegistrationWidget(QWidget):
         deskew_group.setLayout(deskew_layout)
 
         # Load & Deskew button
-        self.load_deskew_button = QPushButton("Load & Deskew")
+        self.load_deskew_button = QPushButton("Load + Deskew")
         self.load_deskew_button.clicked.connect(self.load_and_deskew)
         self.load_deskew_button.setEnabled(False)
 
@@ -416,7 +425,7 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setVisible(False)
 
         # Status label
-        self.status_label = QLabel("Select data path and click Load & Deskew")
+        self.status_label = QLabel("Select data path and click Load + Deskew")
 
         # Pre-Registration group
         pre_reg_group = QGroupBox("Pre-Registration")
@@ -427,6 +436,7 @@ class RegistrationWidget(QWidget):
 
         self.reset_transform_button = QPushButton("Reset Transform")
         self.reset_transform_button.setEnabled(False)
+        self.reset_transform_button.clicked.connect(self._reset_transform)
         pre_reg_layout.addWidget(self.reset_transform_button)
 
         pre_reg_tip = QLabel("Use transform mode on View B layers to pre-align.")
@@ -518,7 +528,12 @@ class RegistrationWidget(QWidget):
         self.projection_xz_a_layer = None
         self.projection_xz_b_layer = None
 
+        # Reset pre-reg transform state
+        self._pre_reg_transform = [0.0, 0.0, 0.0]
+        self._syncing_transforms = False
+        self._pixel_size = None
         self.reset_transform_button.setEnabled(False)
+        self._update_pre_reg_label()
 
     def load_and_deskew(self):
         """Load data, deskew, and display projections."""
@@ -593,6 +608,14 @@ class RegistrationWidget(QWidget):
             X, Y = yx_proj_a_t.shape
             Z, Y_zy = zy_proj_a.shape
 
+            # Get pixel size for layer scale (in micrometers)
+            pixel_size = self.pixel_size_spin.value()
+            self._pixel_size = pixel_size
+
+            # Convert display offsets from pixels to micrometers
+            offset_z_um = -Z * pixel_size  # gap above YX view
+            offset_x_um = Y * pixel_size   # offset to right of YX view
+
             # Add YX projection layer View A (transposed: X, Y)
             self.projection_yx_a_layer = self.viewer.add_image(
                 yx_proj_a_t,
@@ -600,6 +623,7 @@ class RegistrationWidget(QWidget):
                 colormap="red",
                 opacity=0.5,
                 blending="additive",
+                scale=(pixel_size, pixel_size),
             )
 
             # Add YX projection layer View B (transposed: X, Y) - same coordinates as A
@@ -609,17 +633,18 @@ class RegistrationWidget(QWidget):
                 colormap="cyan",
                 opacity=0.5,
                 blending="additive",
+                scale=(pixel_size, pixel_size),
             )
 
             # Add ZY projection layer View A (Z, Y) - offset vertically (above) YX
-            offset_z = -Z  # gap above YX view
             self.projection_zy_a_layer = self.viewer.add_image(
                 zy_proj_a,
                 name="ZY Projection (View A)",
                 colormap="red",
                 opacity=0.5,
                 blending="additive",
-                translate=(offset_z, 0),
+                scale=(pixel_size, pixel_size),
+                translate=(offset_z_um, 0),
             )
 
             # Add ZY projection layer View B (Z, Y) - same offset as A
@@ -629,20 +654,21 @@ class RegistrationWidget(QWidget):
                 colormap="cyan",
                 opacity=0.5,
                 blending="additive",
-                translate=(offset_z, 0),
+                scale=(pixel_size, pixel_size),
+                translate=(offset_z_um, 0),
             )
 
-            # Add XZ projection layer View A (Z, X) - offset horizontally (right of) YX
+            # Add XZ projection layer View A (X, Z) - offset horizontally (right of) YX
             # XZ shape is (Z, X), transpose to (X, Z) for display
             xz_proj_a_t = xz_proj_a.T  # shape: (X, Z)
-            offset_x = Y  # offset to right of YX view by its width
             self.projection_xz_a_layer = self.viewer.add_image(
                 xz_proj_a_t,
                 name="XZ Projection (View A)",
                 colormap="red",
                 opacity=0.5,
                 blending="additive",
-                translate=(0, offset_x),
+                scale=(pixel_size, pixel_size),
+                translate=(0, offset_x_um),
             )
 
             # Add XZ projection layer View B (X, Z) - same offset as A
@@ -653,13 +679,23 @@ class RegistrationWidget(QWidget):
                 colormap="cyan",
                 opacity=0.5,
                 blending="additive",
-                translate=(0, offset_x),
+                scale=(pixel_size, pixel_size),
+                translate=(0, offset_x_um),
             )
+
+            # Connect affine change events for View B layers
+            # The Transform mode in napari updates layer.affine, not layer.translate
+            for layer in [self.projection_yx_b_layer, self.projection_zy_b_layer, self.projection_xz_b_layer]:
+                if layer is not None:
+                    layer.events.affine.connect(self._on_view_b_layer_affine_changed)
 
             # Lock View A layers (make non-editable)
             for layer in [self.projection_yx_a_layer, self.projection_zy_a_layer, self.projection_xz_a_layer]:
                 if layer is not None:
                     layer.editable = False
+
+            # Enable reset button
+            self.reset_transform_button.setEnabled(True)
 
             # Update UI state
             self.load_deskew_button.setEnabled(True)
@@ -673,6 +709,105 @@ class RegistrationWidget(QWidget):
             import traceback
             traceback.print_exc()
             self.on_error(str(e))
+
+    def _on_view_b_layer_affine_changed(self, event):
+        """Handle affine transform change on View B projection layers.
+
+        When the user drags a View B layer in Transform mode, napari updates
+        layer.affine. Extract the translation from layer.affine.translate
+        (in micrometers since layers have scale set), update the shared
+        pre-reg transform, and sync other View B layers.
+        """
+        # Prevent recursive sync
+        if self._syncing_transforms:
+            return
+
+        layer = event.source
+        if layer is None:
+            return
+
+        # Extract translation from the affine transform
+        # Values are in micrometers (world coordinates) since layers have scale set
+        current_affine_translate = list(layer.affine.translate)
+
+        # Determine which volume axes this layer corresponds to
+        if layer is self.projection_yx_b_layer:
+            # Display (X, Y) -> affine_translate[0] = tx, [1] = ty
+            tx = current_affine_translate[0]
+            ty = current_affine_translate[1]
+            self._pre_reg_transform[2] = tx  # tx
+            self._pre_reg_transform[1] = ty  # ty
+        elif layer is self.projection_zy_b_layer:
+            # Display (Z, Y) -> affine_translate[0] = tz, [1] = ty
+            tz = current_affine_translate[0]
+            ty = current_affine_translate[1]
+            self._pre_reg_transform[0] = tz  # tz
+            self._pre_reg_transform[1] = ty  # ty
+        elif layer is self.projection_xz_b_layer:
+            # Display (X, Z) -> affine_translate[0] = tx, [1] = tz
+            tx = current_affine_translate[0]
+            tz = current_affine_translate[1]
+            self._pre_reg_transform[2] = tx  # tx
+            self._pre_reg_transform[0] = tz  # tz
+
+        # Sync other View B layers and update UI
+        self._sync_view_b_layers()
+        self._update_pre_reg_label()
+
+    def _sync_view_b_layers(self):
+        """Apply the current pre-reg transform to all View B layers via affine.
+
+        Each layer gets the translation components that correspond to its
+        displayed volume axes. Values are in micrometers.
+        """
+        self._syncing_transforms = True
+        try:
+            tz, ty, tx = self._pre_reg_transform
+
+            # YX layer: display (X, Y) -> affine translate by (tx, ty)
+            if self.projection_yx_b_layer is not None:
+                matrix = np.eye(3)
+                matrix[0, 2] = tx
+                matrix[1, 2] = ty
+                self.projection_yx_b_layer.affine = Affine(
+                    affine_matrix=matrix,
+                    ndim=2,
+                )
+
+            # ZY layer: display (Z, Y) -> affine translate by (tz, ty)
+            if self.projection_zy_b_layer is not None:
+                matrix = np.eye(3)
+                matrix[0, 2] = tz
+                matrix[1, 2] = ty
+                self.projection_zy_b_layer.affine = Affine(
+                    affine_matrix=matrix,
+                    ndim=2,
+                )
+
+            # XZ layer: display (X, Z) -> affine translate by (tx, tz)
+            if self.projection_xz_b_layer is not None:
+                matrix = np.eye(3)
+                matrix[0, 2] = tx
+                matrix[1, 2] = tz
+                self.projection_xz_b_layer.affine = Affine(
+                    affine_matrix=matrix,
+                    ndim=2,
+                )
+        finally:
+            self._syncing_transforms = False
+
+    def _update_pre_reg_label(self):
+        """Update the pre-reg transform label, displaying values in micrometers."""
+        tz, ty, tx = self._pre_reg_transform
+        self.pre_reg_label.setText(
+            f"Pre-reg transform: ({tz:.1f}, {ty:.1f}, {tx:.1f}) μm"
+        )
+
+    def _reset_transform(self):
+        """Reset the pre-reg transform to [0, 0, 0] and reset View B layer positions."""
+        self._pre_reg_transform = [0.0, 0.0, 0.0]
+        self._sync_view_b_layers()
+        self._update_pre_reg_label()
 
     def update_progress(self, message):
         """Update progress message."""
@@ -710,9 +845,13 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         self.status_label.setText("Starting registration...")
 
+        # Convert pre-reg transform from micrometers to pixel units for RegistrationWorker
+        pixel_size = self.pixel_size_spin.value()
+        t0 = [t / pixel_size for t in self._pre_reg_transform]
+
         # Create and start worker
         self.reg_worker = RegistrationWorker(
-            self.a_deskewed, self.b_deskewed, transform_type
+            self.a_deskewed, self.b_deskewed, transform_type, initial_translation=t0
         )
         self.reg_worker.registered.connect(self.on_registered)
         self.reg_worker.error_occurred.connect(self.on_error)
