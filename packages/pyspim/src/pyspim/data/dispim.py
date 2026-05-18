@@ -129,7 +129,9 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
             if window is None:
                 return self._xp.asarray(self._z[chan, ...])
             else:
-                window = tuple([slice(chan, chan + 1)] + list(window))
+                window = tuple(
+                    [slice(chan, chan + 1)] + list(window)
+                ) # type: ignore
                 return self._xp.asarray(self._z[window]).squeeze()
         else:
             if window is None:
@@ -137,7 +139,7 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
             else:
                 window = tuple(
                     [slice(time, time + 1), slice(chan, chan + 1)] + list(window)
-                )
+                ) # type: ignore
                 return self._xp.asarray(self._z[window]).squeeze()
 
     def get(
@@ -207,13 +209,15 @@ class uManagerAcquisitionMultiPos(_uManagerAcquision):
                 window = tuple(
                     [slice(position, position + 1), slice(chan, chan + 1)]
                     + list(window)
-                )
+                ) # type: ignore
                 return self._xp.asarray(self._z[window]).squeeze()
         elif len(self._z.shape) == 4:
             if window is None:
                 return self._xp.asarray(self._z[chan, ...])
             else:
-                window = tuple([slice(chan, chan + 1)] + list(window))
+                window = tuple(
+                    [slice(chan, chan + 1)] + list(window)
+                ) # type: ignore
                 return self._xp.asarray(self._z[window]).squeeze()
         else:
             raise NotImplementedError("multipos/multi-time is TODO")

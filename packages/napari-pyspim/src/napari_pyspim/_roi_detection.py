@@ -9,6 +9,7 @@ import numpy as np
 from PyQt5.QtCore import pyqtSignal
 from qtpy.QtCore import QThread, QTimer
 from qtpy.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -31,11 +32,22 @@ class ProjectionLoaderWorker(QThread):
     projections_loaded = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, data_path: str, channel: int, projection_type: str):
+    def __init__(
+        self,
+        data_path: str,
+        channel: int,
+        projection_type: str,
+        multi_pos: bool = False,
+        time: int = 0,
+        position: int = 0,
+    ):
         super().__init__()
         self.data_path = data_path
         self.channel = channel  # 0-indexed
         self.projection_type = projection_type  # 'max', 'sum', 'mean'
+        self.multi_pos = multi_pos
+        self.time = time
+        self.position = position
 
     def _compute_projections(self, volume, proj_type):
         """Compute YX and ZY projections from a volume."""
@@ -57,11 +69,15 @@ class ProjectionLoaderWorker(QThread):
         try:
             from pyspim.data import dispim as data
 
-            with data.uManagerAcquisition(self.data_path, False, np) as acq:
+            with data.uManagerAcquisition(self.data_path, self.multi_pos, np) as acq:
                 # Load volumes for both heads
                 # Raw data structure: ZYX (Z is leading dimension)
-                volume_a = acq.get('a', self.channel, 0)
-                volume_b = acq.get('b', self.channel, 0)
+                if self.multi_pos:
+                    volume_a = acq.get(self.position, 'a', self.channel, self.time)
+                    volume_b = acq.get(self.position, 'b', self.channel, self.time)
+                else:
+                    volume_a = acq.get('a', self.channel, self.time)
+                    volume_b = acq.get('b', self.channel, self.time)
 
             # Compute projections for View A
             yx_proj_a, zy_proj_a = self._compute_projections(volume_a, self.projection_type)
@@ -131,6 +147,27 @@ class RoiDetectionWidget(QWidget):
         self.channel_spin.setValue(1)
         path_layout.addRow("Channel:", self.channel_spin)
 
+        # Multi-Position checkbox
+        self.multi_pos_checkbox = QCheckBox("Multi-Position")
+        self.multi_pos_checkbox.setToolTip("Enable for multi-position acquisitions")
+        self.multi_pos_checkbox.toggled.connect(self._on_multi_pos_toggled)
+        path_layout.addRow(self.multi_pos_checkbox)
+
+        # Time selection
+        self.time_spin = QSpinBox()
+        self.time_spin.setRange(0, 1000)
+        self.time_spin.setValue(0)
+        self.time_spin.setToolTip("Timepoint to load")
+        path_layout.addRow("Time:", self.time_spin)
+
+        # Position selection (hidden by default)
+        self.position_spin = QSpinBox()
+        self.position_spin.setRange(0, 100)
+        self.position_spin.setValue(0)
+        self.position_spin.setToolTip("Position index for multi-position acquisitions")
+        self.position_spin.setVisible(False)
+        path_layout.addRow("Position:", self.position_spin)
+
         # Projection type
         self.projection_combo = QComboBox()
         self.projection_combo.addItems(["max", "sum", "mean"])
@@ -190,6 +227,22 @@ class RoiDetectionWidget(QWidget):
         else:
             self.load_button.setEnabled(False)
 
+    def _on_multi_pos_toggled(self, checked: bool):
+        """Handle Multi-Position checkbox toggled."""
+        self.position_spin.setVisible(checked)
+        if checked:
+            # Try to auto-detect number of positions from the data
+            path = self.path_edit.text()
+            if path and os.path.exists(path):
+                try:
+                    from pyspim.data import dispim as data
+                    with data.uManagerAcquisition(path, True, np) as acq:
+                        num_pos = acq.num_positions
+                        self.position_spin.setRange(0, max(0, num_pos - 1))
+                except Exception:
+                    # If auto-detection fails, keep default range
+                    pass
+
     def _remove_existing_layers(self):
         """Remove any existing projection and shapes layers."""
         layers_to_remove = []
@@ -225,6 +278,9 @@ class RoiDetectionWidget(QWidget):
         data_path = self.path_edit.text()
         channel = self.channel_spin.value() - 1  # Convert to 0-indexed
         projection_type = self.projection_combo.currentText()
+        multi_pos = self.multi_pos_checkbox.isChecked()
+        time = self.time_spin.value()
+        position = self.position_spin.value()
 
         if not data_path or not os.path.exists(data_path):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
@@ -244,7 +300,9 @@ class RoiDetectionWidget(QWidget):
         self.data_path = data_path
 
         # Create and start worker (loads both views)
-        self.loader_worker = ProjectionLoaderWorker(data_path, channel, projection_type)
+        self.loader_worker = ProjectionLoaderWorker(
+            data_path, channel, projection_type, multi_pos, time, position
+        )
         self.loader_worker.projections_loaded.connect(self.on_projections_loaded)
         self.loader_worker.error_occurred.connect(self.on_error)
         self.loader_worker.start()

@@ -58,6 +58,9 @@ class LoadDeskewWorker(QThread):
         theta: float,
         method: str = "orthogonal",
         ignore_bbox: bool = False,
+        multi_pos: bool = False,
+        time: int = 0,
+        position: int = 0,
     ):
         super().__init__()
         self.data_path = data_path
@@ -68,6 +71,9 @@ class LoadDeskewWorker(QThread):
         self.theta = theta
         self.method = method
         self.ignore_bbox = ignore_bbox
+        self.multi_pos = multi_pos
+        self.time = time
+        self.position = position
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists."""
@@ -125,9 +131,13 @@ class LoadDeskewWorker(QThread):
 
             # Load data
             self.progress_updated.emit("Loading data...")
-            with data.uManagerAcquisition(self.data_path, False, np) as acq:
-                volume_a = acq.get("a", self.channel, 0, window=window)
-                volume_b = acq.get("b", self.channel, 0, window=window)
+            with data.uManagerAcquisition(self.data_path, self.multi_pos, np) as acq:
+                if self.multi_pos:
+                    volume_a = acq.get(self.position, "a", self.channel, self.time, window=window)
+                    volume_b = acq.get(self.position, "b", self.channel, self.time, window=window)
+                else:
+                    volume_a = acq.get("a", self.channel, self.time, window=window)
+                    volume_b = acq.get("b", self.channel, self.time, window=window)
 
             self.progress_updated.emit(
                 f"Data loaded - A: {volume_a.shape}, B: {volume_b.shape}"
@@ -371,6 +381,27 @@ class RegistrationWidget(QWidget):
         self.channel_spin.setValue(1)
         path_layout.addRow("Channel:", self.channel_spin)
 
+        # Multi-Position checkbox
+        self.multi_pos_checkbox = QCheckBox("Multi-Position")
+        self.multi_pos_checkbox.setToolTip("Enable for multi-position acquisitions")
+        self.multi_pos_checkbox.toggled.connect(self._on_multi_pos_toggled)
+        path_layout.addRow(self.multi_pos_checkbox)
+
+        # Time selection
+        self.time_spin = QSpinBox()
+        self.time_spin.setRange(0, 1000)
+        self.time_spin.setValue(0)
+        self.time_spin.setToolTip("Timepoint to load")
+        path_layout.addRow("Time:", self.time_spin)
+
+        # Position selection (hidden by default)
+        self.position_spin = QSpinBox()
+        self.position_spin.setRange(0, 100)
+        self.position_spin.setValue(0)
+        self.position_spin.setToolTip("Position index for multi-position acquisitions")
+        self.position_spin.setVisible(False)
+        path_layout.addRow("Position:", self.position_spin)
+
         # Projection type
         self.projection_combo = QComboBox()
         self.projection_combo.addItems(["max", "sum", "mean"])
@@ -506,6 +537,22 @@ class RegistrationWidget(QWidget):
         else:
             self.load_deskew_button.setEnabled(False)
 
+    def _on_multi_pos_toggled(self, checked: bool):
+        """Handle Multi-Position checkbox toggled."""
+        self.position_spin.setVisible(checked)
+        if checked:
+            # Try to auto-detect number of positions from the data
+            path = self.path_edit.text()
+            if path and os.path.exists(path):
+                try:
+                    from pyspim.data import dispim as data
+                    with data.uManagerAcquisition(path, True, np) as acq:
+                        num_pos = acq.num_positions
+                        self.position_spin.setRange(0, max(0, num_pos - 1))
+                except Exception:
+                    # If auto-detection fails, keep default range
+                    pass
+
     def _remove_existing_layers(self):
         """Remove any existing projection layers."""
         layers_to_remove = []
@@ -579,10 +626,14 @@ class RegistrationWidget(QWidget):
 
         # Create and start worker
         ignore_bbox = self.ignore_bbox_checkbox.isChecked()
+        multi_pos = self.multi_pos_checkbox.isChecked()
+        time = self.time_spin.value()
+        position = self.position_spin.value()
         self.load_worker = LoadDeskewWorker(
             data_path, channel, projection_type,
             pixel_size, step_size, theta_rad,
             method, ignore_bbox,
+            multi_pos, time, position,
         )
         self.load_worker.ready.connect(self.on_load_deskew_ready)
         self.load_worker.error_occurred.connect(self.on_error)
