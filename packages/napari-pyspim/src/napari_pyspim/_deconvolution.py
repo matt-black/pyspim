@@ -73,7 +73,10 @@ def make_gaussian_psf_volume(
 
     # Apply rotation in the ZX plane (axes 0 and 2) if theta is non-zero
     if theta != 0.0:
-        psf_volume = ndimage.rotate(psf_volume, theta, axes=(0, 2), reshape=False)
+        psf_volume = ndimage.rotate(
+            psf_volume, theta, axes=(0, 2), reshape=True,
+            mode="constant", cval=0
+        )
 
     # Normalize to unit total intensity
     psf_volume = normalize_psf_im(psf_volume)
@@ -500,6 +503,11 @@ class DeconvolutionWidget(QWidget):
         self.backprojector_group.setVisible(False)
         psf_layout.addWidget(self.backprojector_group)
 
+        # Show PSF button
+        self.show_psf_button = QPushButton("Show PSF")
+        self.show_psf_button.clicked.connect(self.show_psf)
+        psf_layout.addWidget(self.show_psf_button)
+
         psf_group.setLayout(psf_layout)
 
         # === Deconvolution Parameters Section ===
@@ -701,6 +709,31 @@ class DeconvolutionWidget(QWidget):
         self.overlap_y.setEnabled(checked)
         self.overlap_x.setEnabled(checked)
 
+    def show_psf(self):
+        """Generate PSF volumes and display them as napari layers for inspection."""
+        try:
+            psf_a, psf_b, _, _ = self._get_psf_and_backprojectors()
+
+            # Remove existing PSF layers if they exist
+            for layer_name in ["PSF: View A", "PSF: View B"]:
+                try:
+                    self.viewer.layers.remove(self.viewer.layers[layer_name])
+                except (KeyError, ValueError):
+                    pass
+
+            # Add PSF layers
+            self.viewer.add_image(psf_a, name="PSF: View A")
+            self.viewer.add_image(psf_b, name="PSF: View B")
+
+            self.status_label.setText("PSF layers added: PSF: View A, PSF: View B")
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Validation Error", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to generate PSF: {e}")
+            import traceback
+            traceback.print_exc()
+
     def browse_path(self, view):
         """Browse for zarr directory path."""
         path = QFileDialog.getExistingDirectory(self, f"Select zarr directory for View {view.upper()}")
@@ -837,18 +870,20 @@ class DeconvolutionWidget(QWidget):
             fwhm_b_lat = self.psf_b_fwhm_lateral.value()
             fwhm_b_ax = self.psf_b_fwhm_axial.value()
 
-            size_a_ax = math.ceil(fwhm_a_ax * 3)
-            size_a_lat = math.ceil(fwhm_a_lat * 3)
-            size_b_ax = math.ceil(fwhm_b_ax * 3)
-            size_b_lat = math.ceil(fwhm_b_lat * 3)
-
+            size_a = math.ceil(max(fwhm_a_ax, fwhm_a_lat) * 3)
+            if size_a % 2 == 0:
+                size_a += 1
+            size_b = math.ceil(max(fwhm_b_ax, fwhm_b_lat) * 3)
+            if size_b % 2 == 0:
+                size_b += 1
+            
             psf_a = make_gaussian_psf_volume(
                 fwhm_ax=fwhm_a_ax, fwhm_lat=fwhm_a_lat,
-                size_ax=size_a_ax, size_lat=size_a_lat, theta=theta_a
+                size_ax=size_a, size_lat=size_a, theta=theta_a
             )
             psf_b = make_gaussian_psf_volume(
                 fwhm_ax=fwhm_b_ax, fwhm_lat=fwhm_b_lat,
-                size_ax=size_b_ax, size_lat=size_b_lat, theta=theta_b
+                size_ax=size_b, size_lat=size_b, theta=theta_b
             )
         else:  # Custom
             path_a = self.psf_a_path.text()
