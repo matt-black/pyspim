@@ -27,7 +27,7 @@ __cuda_module.compile()  # throw compiler errors here, if problems
 def deskew_stage_scan(
     im: NDArray, pixel_size: float, step_size: float, direction: int, **kwargs
 ) -> NDArray:
-    """deskew_stage_scan Deskew the input volume, ``im``.
+    """Deskew the input volume, ``im``.
 
     Args:
         im (NDArray): input volume

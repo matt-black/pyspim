@@ -1,6 +1,7 @@
 import math
 
 import cupy
+from cupyx.scipy.ndimage import zoom
 
 from .dispim import deskew_stage_scan as deskew_stage_scan_dispim
 from .ortho import deskew_stage_scan as deskew_stage_scan_orthogonal
@@ -22,7 +23,12 @@ def deskew_stage_scan(
             im, pixel_size, step_size, direction, theta, True
         )
     elif method == "dispim":
-        return deskew_stage_scan_dispim(im, pixel_size, step_size, direction)
+        # NOTE: the "dispim" method does not isotropize the voxels, 
+        # whereas the other 2 deskewing methods do
+        # to account for this, we use the `zoom` to scale the "z" axis up
+        # see `cupyx.scipy.ndimage.zoom` documentation for kwargs to pass
+        dsk = deskew_stage_scan_dispim(im, pixel_size, step_size, direction)
+        return zoom(dsk, (step_size / pixel_size, 1, 1), **kwargs)
     elif method == "shear":
         shr = deskew_stage_scan_shear(
             cupy.asarray(im), pixel_size, step_size, direction, **kwargs

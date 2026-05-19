@@ -184,16 +184,16 @@ __global__ void affineTransform(
 
     const int3 vol_dim = make_int3(sx_i-1, sy_i-1, sz_i-1);
     // determine chunk for this gpu
-    int z_per_gpu = (sz_i + num_gpu - 1) / num_gpu;
+    int z_per_gpu = (sz_o + num_gpu - 1) / num_gpu;
     int z_start = gpu_id * z_per_gpu;
-    int z_end = min((gpu_id + 1) * z_per_gpu, int(sz_i));
+    int z_end = min((gpu_id + 1) * z_per_gpu, int(sz_o));
     // determine which thread we're in, initialize values to 0
     int thread_id = xyz2idx(threadIdx.x, threadIdx.y, threadIdx.z,
                             blockDim.x, blockDim.y);
     for (int z = z0; z < z_end; z += z_stride) {{
         if (z >= z_start) {{
-            for (int y = y0; y < sy_i; y += y_stride) {{
-                for (int x = x0; x < sx_i; x += x_stride) {{
+            for (int y = y0; y < sy_o; y += y_stride) {{
+                for (int x = x0; x < sx_o; x += x_stride) {{
                     // get current voxel and coordinate in transformed coordinate system
                     float4 voxel = make_float4(x, y, z, 1.0f);
                     int oidx = xyz2idx(x, y, z, sx_o, sy_o);
@@ -274,9 +274,9 @@ __global__ void affineTransform(
                         int z_rd = __float2int_rd(z_r);
                         float dz = z_r - (float)z_rd;
                         //range-check that transformed coordinate is valid
-                        if (x_rd >= 0 && x_rd < sx_o-1 &&
-                            y_rd >= 0 && y_rd < sy_o-1 &&
-                            z_rd >= 0 && z_rd < sz_o-1) {{
+                        if (x_rd >= 0 && x_rd < sx_i-1 &&
+                            y_rd >= 0 && y_rd < sy_i-1 &&
+                            z_rd >= 0 && z_rd < sz_i-1) {{
                             float val = lerp3(
                                 in, x_rd, y_rd, z_rd, dx, dy, dz, sx_i, sy_i
                             );

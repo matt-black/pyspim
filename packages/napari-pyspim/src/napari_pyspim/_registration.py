@@ -61,6 +61,7 @@ class LoadDeskewWorker(QThread):
         multi_pos: bool = False,
         time: int = 0,
         position: int = 0,
+        auto_crop: bool = True,
     ):
         super().__init__()
         self.data_path = data_path
@@ -74,6 +75,7 @@ class LoadDeskewWorker(QThread):
         self.multi_pos = multi_pos
         self.time = time
         self.position = position
+        self.auto_crop = auto_crop
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists."""
@@ -152,13 +154,13 @@ class LoadDeskewWorker(QThread):
                 kwargs = {
                     "rotation_thetas": (0, 0, 0),
                     "interp_method": "linear",
-                    "auto_crop": False,
-                    "preserve_dtype": False,
+                    "auto_crop": self.auto_crop,
+                    "preserve_dtype": True,
                     "block_size": (8,8,8),
                 }
             elif self.method == "ortho":
                 kwargs = {
-                    "preserve_dtype": False,
+                    "preserve_dtype": True,
                     "stream": None,
                 }
             else:
@@ -175,18 +177,37 @@ class LoadDeskewWorker(QThread):
                 pass
             # Deskew View B (direction = -1)
             self.progress_updated.emit("Deskewing View B...")
+            if self.method == "shear":
+                kwargs["rotation_thetas"] = (0, math.pi/2, 0)
             b_dsk = dsk.deskew_stage_scan(
                 volume_b, self.pixel_size, step_size_lat, -1, 
                 theta=(self.theta / (math.pi/180.0)),
                 method=self.method,
                 **kwargs,
             )
+            if self.method == "dispim":
+                # need to rotate the volume in the XZ plane so that it is in 
+                # the same coordinate system as that of view A
+                from pyspim.interp.affine import transform as affine_transform
+                from pyspim._matrix import rotation_about_point_matrix
+                R = rotation_about_point_matrix(
+                    0, math.pi/2, 0,
+                    *[s/2 for s in b_dsk.shape[::-1]]
+                )
+                b_dsk = affine_transform(
+                    b_dsk, 
+                    R,
+                    "linear",
+                    True,
+                    (b_dsk.shape[0], b_dsk.shape[1], b_dsk.shape[2]),
+                    8, 8, 8
+                )
             try:
                 b_dsk = b_dsk.get()
             except:
                 pass
-            a_dsk = a_dsk.astype(np.float32)
-            b_dsk = b_dsk.astype(np.float32)
+            # a_dsk = a_dsk.astype(np.float32)
+            # b_dsk = b_dsk.astype(np.float32)
 
             self.progress_updated.emit(f"Deskewing completed")
 
@@ -323,6 +344,346 @@ class RegistrationWorker(QThread):
             self.error_occurred.emit(str(e))
 
 
+class ApplyWorker(QThread):
+    """Worker thread for applying registration transformations to specified ranges."""
+
+    finished = pyqtSignal()
+    error_occurred = pyqtSignal(str)
+    progress_updated = pyqtSignal(str, int)  # message, percentage (0-100)
+
+    def __init__(
+        self,
+        data_path: str,
+        params_path: str,
+        time_range: tuple,
+        channel_range: tuple,  # 1-indexed
+        multi_pos: bool,
+        position: int,
+        output_folder: str,
+        ignore_bbox: bool,
+    ):
+        super().__init__()
+        self.data_path = data_path
+        self.params_path = params_path
+        self.time_range = time_range
+        self.channel_range = channel_range
+        self.multi_pos = multi_pos
+        self.position = position
+        self.output_folder = output_folder
+        self.ignore_bbox = ignore_bbox
+
+    def _load_bbox(self):
+        """Load bounding box from bbox_raw.json if it exists and not ignored."""
+        if self.ignore_bbox:
+            return None
+        bbox_path = os.path.join(self.data_path, "bbox_raw.json")
+        if not os.path.exists(bbox_path):
+            return None
+        try:
+            with open(bbox_path, "r") as f:
+                bbox = json.load(f)
+            window = (
+                slice(bbox[0][0], bbox[0][1]),
+                slice(bbox[1][0], bbox[1][1]),
+                slice(bbox[2][0], bbox[2][1]),
+            )
+            return window
+        except (json.JSONDecodeError, IndexError, TypeError):
+            return None
+
+    def _get_deskew_kwargs(self, method: str) -> dict:
+        """Get kwargs for deskew based on method, matching LoadDeskewWorker logic."""
+        if method == "shear":
+            return {
+                "rotation_thetas": (0, 0, 0),
+                "interp_method": "linear",
+                "auto_crop": False,
+                "preserve_dtype": True,
+                "block_size": (8, 8, 8),
+            }
+        elif method == "ortho":
+            return {
+                "preserve_dtype": True,
+                "stream": None,
+            }
+        else:  # dispim
+            return {"preserve_dtype": True}
+
+    def _compute_common_crops(self, a_shape, b_shape, t0):
+        """Compute crop slices for both volumes to their common overlapping region.
+
+        Replicates the logic from RegistrationWidget._compute_common_crops().
+
+        Args:
+            a_shape: Shape of View A deskewed volume (Z, Y, X).
+            b_shape: Shape of View B deskewed volume (Z, Y, X).
+            t0: Pre-reg translation in pixel units [tz, ty, tx].
+
+        Returns:
+            Tuple of (a_slices, b_slices, cropped_shape) or (None, None, None) if no overlap.
+        """
+        Za, Ya, Xa = a_shape
+        Zb, Yb, Xb = b_shape
+        tz, ty, tx = t0
+
+        z_start_a = max(0, tz)
+        z_end_a = min(Za, tz + Zb)
+        y_start_a = max(0, ty)
+        y_end_a = min(Ya, ty + Yb)
+        x_start_a = max(0, tx)
+        x_end_a = min(Xa, tx + Xb)
+
+        if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
+            return None, None, None
+
+        a_slices = (
+            slice(int(z_start_a), int(z_end_a)),
+            slice(int(y_start_a), int(y_end_a)),
+            slice(int(x_start_a), int(x_end_a)),
+        )
+
+        z_start_b = max(0, -tz)
+        z_end_b = min(Zb, Za - tz)
+        y_start_b = max(0, -ty)
+        y_end_b = min(Yb, Ya - ty)
+        x_start_b = max(0, -tx)
+        x_end_b = min(Xb, Xa - tx)
+
+        b_slices = (
+            slice(int(z_start_b), int(z_end_b)),
+            slice(int(y_start_b), int(y_end_b)),
+            slice(int(x_start_b), int(x_end_b)),
+        )
+
+        cropped_shape = (
+            int(z_end_a - z_start_a),
+            int(y_end_a - y_start_a),
+            int(x_end_a - x_start_a),
+        )
+        return a_slices, b_slices, cropped_shape
+
+    def run(self):
+        """Apply deskewing and registration to specified time/channel ranges."""
+        try:
+            import math
+            import shutil
+            import zarr
+            from pyspim.data import dispim as data
+            from pyspim import deskew as dsk
+            from pyspim.interp import affine
+
+            # Load parameters
+            with open(self.params_path, "r") as f:
+                params = json.load(f)
+
+            dp = params["deskewing_parameters"]
+            method = dp["method"]
+            step_size = dp["step_size_um"]
+            pixel_size = dp["pixel_size_um"]
+            theta_deg = dp["theta_degrees"]
+            theta_rad = theta_deg * math.pi / 180
+            affine_matrix = np.array(params["affine_registration_matrix"])
+
+            # Load registration parameters for crop_to_common logic
+            rp = params["registration_parameters"]
+            crop_to_common = rp.get("crop_to_common", False)
+            pre_reg = params["pre_reg_transform"]
+            # Convert pre-reg transform from micrometers to pixel units
+            pre_reg_t = [
+                pre_reg["tz_um"] / pixel_size,
+                pre_reg["ty_um"] / pixel_size,
+                pre_reg["tx_um"] / pixel_size,
+            ]
+
+            # Calculate lateral step size
+            step_size_lat = step_size / math.cos(theta_rad)
+
+            # Get deskew kwargs
+            deskew_kwargs = self._get_deskew_kwargs(method)
+
+            # Load bbox
+            window = self._load_bbox()
+
+            # Prepare output folder
+            if os.path.exists(self.output_folder):
+                shutil.rmtree(self.output_folder)
+            os.makedirs(self.output_folder, exist_ok=True)
+
+            # Determine channel indices (0-indexed)
+            chan_start = self.channel_range[0] - 1
+            chan_end = self.channel_range[1] - 1
+            channels = list(range(chan_start, chan_end + 1))
+            n_channels = len(channels)
+
+            time_start, time_end = self.time_range
+            total_items = (time_end - time_start + 1) * len(channels)
+            current_item = 0
+
+            for t in range(time_start, time_end + 1):
+                # Process first channel to determine output shape
+                first_chan = channels[0]
+                self.progress_updated.emit(
+                    f"Processing Time {t}, Channel {first_chan + 1} (determining shape)...", 0
+                )
+
+                # Load and process first channel to get output shape
+                with data.uManagerAcquisition(self.data_path, self.multi_pos, np) as acq:
+                    if self.multi_pos:
+                        vol_a = acq.get(self.position, "a", first_chan, t, window=window)
+                        vol_b = acq.get(self.position, "b", first_chan, t, window=window)
+                    else:
+                        vol_a = acq.get("a", first_chan, t, window=window)
+                        vol_b = acq.get("b", first_chan, t, window=window)
+
+                a_dsk = dsk.deskew_stage_scan(
+                    vol_a, pixel_size, step_size_lat, 1,
+                    theta=theta_rad, method=method, **deskew_kwargs
+                )
+                try:
+                    a_dsk = a_dsk.get()
+                except:
+                    pass
+
+                b_dsk = dsk.deskew_stage_scan(
+                    vol_b, pixel_size, step_size_lat, -1,
+                    theta=theta_rad, method=method, **deskew_kwargs
+                )
+                try:
+                    b_dsk = b_dsk.get()
+                except:
+                    pass
+
+                # Apply crop_to_common if enabled in saved params
+                if crop_to_common:
+                    a_slices, b_slices, cropped_shape = self._compute_common_crops(
+                        a_dsk.shape, b_dsk.shape, pre_reg_t
+                    )
+                    if a_slices is not None:
+                        a_dsk = a_dsk[a_slices]
+                        b_dsk = b_dsk[b_slices]
+
+                # Apply affine transform to B
+                b_cupy = cp.asarray(b_dsk)
+                b_reg = affine.transform(
+                    b_cupy,
+                    cp.asarray(affine_matrix),
+                    interp_method="cubspl",
+                    preserve_dtype=True,
+                    out_shp=None,
+                    block_size_z=8,
+                    block_size_y=8,
+                    block_size_x=8,
+                )
+                b_reg = b_reg.get()
+
+                # Crop to smallest size
+                min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
+                out_shape = (n_channels, *min_shape)
+
+                # Create zarr arrays for this timepoint
+                a_zarr_path = os.path.join(self.output_folder, f"a_t{t}.zarr")
+                b_zarr_path = os.path.join(self.output_folder, f"b_t{t}.zarr")
+
+                arr_a = zarr.open(
+                    a_zarr_path, mode="w", shape=out_shape,
+                    dtype=np.uint16, chunks=(1, 64, 256, 256),
+                )
+                arr_b = zarr.open(
+                    b_zarr_path, mode="w", shape=out_shape,
+                    dtype=np.uint16, chunks=(1, 64, 256, 256),
+                )
+
+                # Write first channel
+                a_final = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
+                b_final = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
+                arr_a[0, ...] = a_final.astype(np.uint16)
+                arr_b[0, ...] = b_final.astype(np.uint16)
+
+                current_item += 1
+                percentage = int((current_item / total_items) * 100)
+                self.progress_updated.emit(
+                    f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage
+                )
+
+                # Process remaining channels
+                for chan_idx in channels[1:]:
+                    c = chan_idx - chan_start  # index within the range
+
+                    # Load raw data
+                    with data.uManagerAcquisition(self.data_path, self.multi_pos, np) as acq:
+                        if self.multi_pos:
+                            vol_a = acq.get(self.position, "a", chan_idx, t, window=window)
+                            vol_b = acq.get(self.position, "b", chan_idx, t, window=window)
+                        else:
+                            vol_a = acq.get("a", chan_idx, t, window=window)
+                            vol_b = acq.get("b", chan_idx, t, window=window)
+
+                    # Deskew View A
+                    a_dsk = dsk.deskew_stage_scan(
+                        vol_a, pixel_size, step_size_lat, 1,
+                        theta=theta_rad, method=method, **deskew_kwargs
+                    )
+                    try:
+                        a_dsk = a_dsk.get()
+                    except:
+                        pass
+
+                    # Deskew View B
+                    b_dsk = dsk.deskew_stage_scan(
+                        vol_b, pixel_size, step_size_lat, -1,
+                        theta=theta_rad, method=method, **deskew_kwargs
+                    )
+                    try:
+                        b_dsk = b_dsk.get()
+                    except:
+                        pass
+
+                    # Apply crop_to_common if enabled in saved params
+                    if crop_to_common:
+                        a_slices, b_slices, cropped_shape = self._compute_common_crops(
+                            a_dsk.shape, b_dsk.shape, pre_reg_t
+                        )
+                        if a_slices is not None:
+                            a_dsk = a_dsk[a_slices]
+                            b_dsk = b_dsk[b_slices]
+
+                    # Apply affine transform to B
+                    b_cupy = cp.asarray(b_dsk)
+                    b_reg = affine.transform(
+                        b_cupy,
+                        cp.asarray(affine_matrix),
+                        interp_method="cubspl",
+                        preserve_dtype=True,
+                        out_shp=None,
+                        block_size_z=8,
+                        block_size_y=8,
+                        block_size_x=8,
+                    )
+                    b_reg = b_reg.get()
+
+                    # Crop to the determined shape
+                    a_final = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
+                    b_final = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
+
+                    # Write to zarr arrays
+                    arr_a[c, ...] = a_final.astype(np.uint16)
+                    arr_b[c, ...] = b_final.astype(np.uint16)
+
+                    current_item += 1
+                    percentage = int((current_item / total_items) * 100)
+                    self.progress_updated.emit(
+                        f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage
+                    )
+
+            self.progress_updated.emit("Apply completed!", 100)
+            self.finished.emit()
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error_occurred.emit(str(e))
+
+
 class RegistrationWidget(QWidget):
     """Widget for registering dual-view data.
     
@@ -337,6 +698,7 @@ class RegistrationWidget(QWidget):
         self.viewer = viewer
         self.load_worker = None
         self.reg_worker = None
+        self.apply_worker = None
         self.input_data = None
         # Stored deskewed data for registration
         self.a_deskewed = None
@@ -354,6 +716,9 @@ class RegistrationWidget(QWidget):
         self._syncing_transforms = False
         # Store pixel size for layer scale
         self._pixel_size = None
+        # Store registration results for saving
+        self.registration_matrix = None
+        self.correlation_ratio = None
         self.setup_ui()
 
     def setup_ui(self):
@@ -444,6 +809,21 @@ class RegistrationWidget(QWidget):
         deskew_layout.addRow("Step Size:", self.step_size_spin)
         deskew_layout.addRow("Pixel Size:", self.pixel_size_spin)
         deskew_layout.addRow("Theta (angle):", self.theta_spin)
+
+        # Auto-Crop checkbox (only visible for shear method)
+        self.auto_crop_checkbox = QCheckBox("Auto-Crop")
+        self.auto_crop_checkbox.setToolTip(
+            "When using shear deskewing, automatically crop the output "
+            "to remove empty borders introduced by the shearing process."
+        )
+        self.auto_crop_checkbox.setChecked(True)
+        deskew_layout.addRow(self.auto_crop_checkbox)
+
+        # Connect method combo to show/hide auto-crop checkbox
+        self.method_combo.currentTextChanged.connect(self._on_method_changed)
+        # Set initial visibility based on default method
+        self._on_method_changed()
+
         deskew_group.setLayout(deskew_layout)
 
         # Load & Deskew button
@@ -500,6 +880,51 @@ class RegistrationWidget(QWidget):
         self.register_button.clicked.connect(self.register_data)
         self.register_button.setEnabled(False)
 
+        # Save button
+        self.save_button = QPushButton("Save Parameters")
+        self.save_button.clicked.connect(self.save_registration_params)
+        self.save_button.setEnabled(False)
+
+        # Apply group (always visible, enabled when params file exists)
+        self.apply_group = QGroupBox("Apply")
+        apply_layout = QVBoxLayout()
+
+        # Time range
+        time_row = QHBoxLayout()
+        time_row.addWidget(QLabel("Time:"))
+        self.time_min_spin = QSpinBox()
+        self.time_min_spin.setRange(0, 1000)
+        self.time_min_spin.setValue(0)
+        self.time_max_spin = QSpinBox()
+        self.time_max_spin.setRange(0, 1000)
+        self.time_max_spin.setValue(0)
+        time_row.addWidget(self.time_min_spin)
+        time_row.addWidget(QLabel("-"))
+        time_row.addWidget(self.time_max_spin)
+        apply_layout.addLayout(time_row)
+
+        # Channel range
+        chan_row = QHBoxLayout()
+        chan_row.addWidget(QLabel("Channel:"))
+        self.channel_min_spin = QSpinBox()
+        self.channel_min_spin.setRange(1, 20)
+        self.channel_min_spin.setValue(1)
+        self.channel_max_spin = QSpinBox()
+        self.channel_max_spin.setRange(1, 20)
+        self.channel_max_spin.setValue(1)
+        chan_row.addWidget(self.channel_min_spin)
+        chan_row.addWidget(QLabel("-"))
+        chan_row.addWidget(self.channel_max_spin)
+        apply_layout.addLayout(chan_row)
+
+        # Apply button
+        self.apply_button = QPushButton("Apply")
+        self.apply_button.clicked.connect(self.apply_registration)
+        self.apply_button.setEnabled(False)
+        apply_layout.addWidget(self.apply_button)
+
+        self.apply_group.setLayout(apply_layout)
+
         # Results info
         self.results_label = QLabel("")
         self.results_label.setWordWrap(True)
@@ -513,6 +938,7 @@ class RegistrationWidget(QWidget):
         layout.addWidget(pre_reg_group)
         layout.addWidget(params_group)
         layout.addWidget(self.register_button)
+        layout.addWidget(self.save_button)
         layout.addWidget(self.results_label)
         layout.addStretch()
 
@@ -520,6 +946,7 @@ class RegistrationWidget(QWidget):
 
         # Connect path validation
         self.path_edit.textChanged.connect(self.validate_path)
+        self.path_edit.textChanged.connect(self._update_apply_section)
 
     def browse_data_path(self):
         """Open file dialog to select data path."""
@@ -552,6 +979,11 @@ class RegistrationWidget(QWidget):
                 except Exception:
                     # If auto-detection fails, keep default range
                     pass
+
+    def _on_method_changed(self, method: str = ""):
+        """Handle Method combo box changed - show/hide Auto-Crop checkbox."""
+        current_method = method if method else self.method_combo.currentText()
+        self.auto_crop_checkbox.setVisible(current_method == "shear")
 
     def _remove_existing_layers(self):
         """Remove any existing projection layers."""
@@ -591,6 +1023,8 @@ class RegistrationWidget(QWidget):
         self._pixel_size = None
         self.reset_transform_button.setEnabled(False)
         self._update_pre_reg_label()
+        # Disable apply section when loading new data
+        self._set_apply_enabled(False)
 
     def load_and_deskew(self):
         """Load data, deskew, and display projections."""
@@ -611,6 +1045,10 @@ class RegistrationWidget(QWidget):
 
         self.load_deskew_button.setEnabled(False)
         self.register_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self._set_apply_enabled(False)
+        self.registration_matrix = None
+        self.correlation_ratio = None
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         self.status_label.setText("Loading data and deskewing...")
@@ -622,7 +1060,7 @@ class RegistrationWidget(QWidget):
         theta_deg = self.theta_spin.value()
         theta_rad = theta_deg * math.pi / 180
         method = self.method_combo.currentText()
-        
+        auto_crop = self.auto_crop_checkbox.isChecked()
 
         # Create and start worker
         ignore_bbox = self.ignore_bbox_checkbox.isChecked()
@@ -634,6 +1072,7 @@ class RegistrationWidget(QWidget):
             pixel_size, step_size, theta_rad,
             method, ignore_bbox,
             multi_pos, time, position,
+            auto_crop,
         )
         self.load_worker.ready.connect(self.on_load_deskew_ready)
         self.load_worker.error_occurred.connect(self.on_error)
@@ -1017,6 +1456,9 @@ class RegistrationWidget(QWidget):
         b_registered = result["b_registered"]
         transform_matrix = result["transform_matrix"]
         cr = result["correlation_ratio"]
+        # Store for saving
+        self.registration_matrix = transform_matrix
+        self.correlation_ratio = cr
 
         # Add registered data as new layers
         output_a_name = "deskewed_A_registered"
@@ -1072,6 +1514,7 @@ class RegistrationWidget(QWidget):
 
         self.register_button.setEnabled(True)
         self.load_deskew_button.setEnabled(True)
+        self.save_button.setEnabled(True)
         self.progress_bar.setVisible(False)
 
         # Emit signal with registered data
@@ -1093,4 +1536,191 @@ class RegistrationWidget(QWidget):
         self.status_label.setText("Error during operation")
         self.load_deskew_button.setEnabled(True)
         self.register_button.setEnabled(True)
+        self.save_button.setEnabled(False)
         self.progress_bar.setVisible(False)
+
+    def save_registration_params(self):
+        """Save registration parameters to a JSON file in the Data Path folder."""
+        data_path = self.path_edit.text()
+        if not data_path or not os.path.exists(data_path):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        # Build parameters dictionary
+        params = {
+            "deskewing_parameters": {
+                "method": self.method_combo.currentText(),
+                "step_size_um": self.step_size_spin.value(),
+                "pixel_size_um": self.pixel_size_spin.value(),
+                "theta_degrees": self.theta_spin.value(),
+                "auto_crop": self.auto_crop_checkbox.isChecked(),
+            },
+            "pre_reg_transform": {
+                "tz_um": self._pre_reg_transform[0],
+                "ty_um": self._pre_reg_transform[1],
+                "tx_um": self._pre_reg_transform[2],
+            },
+            "registration_parameters": {
+                "transform_type": self.transform_combo.currentText(),
+                "crop_to_common": self.crop_to_common_checkbox.isChecked(),
+            },
+            "affine_registration_matrix": self.registration_matrix.tolist(),
+            "correlation_ratio": self.correlation_ratio,
+        }
+
+        # Write JSON file
+        output_path = os.path.join(data_path, "deskew_registration_params.json")
+        try:
+            with open(output_path, "w") as f:
+                json.dump(params, f, indent=2)
+            self.status_label.setText(f"Registration parameters saved to {output_path}")
+            # Enable Apply section after successful save
+            self._update_apply_section()
+        except (IOError, OSError) as e:
+            QMessageBox.critical(self, "Error", f"Failed to save parameters: {e}")
+
+    def _detect_dataset_dimensions(self):
+        """Detect the number of timepoints and channels from the dataset.
+
+        Returns:
+            Tuple of (n_time, n_channel) where n_channel is the number of
+            logical channels (A/B pairs), not raw TIFF channel count.
+            Returns (1, 1) if detection fails.
+        """
+        data_path = self.path_edit.text()
+        if not data_path or not os.path.exists(data_path):
+            return (1, 1)
+
+        multi_pos = self.multi_pos_checkbox.isChecked()
+        try:
+            from pyspim.data import dispim as data
+            with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+                shape = acq.shape
+                if multi_pos:
+                    # 4D: (C, Z, Y, X) or 5D: (P, C, Z, Y, X)
+                    if len(shape) == 5:
+                        n_time = shape[0]  # positions as timepoints
+                        n_chan = shape[1] // 2
+                    else:
+                        n_time = 1
+                        n_chan = shape[0] // 2
+                else:
+                    # 4D: (C, Z, Y, X) or 5D: (T, C, Z, Y, X)
+                    if len(shape) == 5:
+                        n_time = shape[0]
+                        n_chan = shape[1] // 2
+                    else:
+                        n_time = 1
+                        n_chan = shape[0] // 2
+                return (max(1, n_time), max(1, n_chan))
+        except Exception:
+            return (1, 1)
+
+    def _update_apply_section(self):
+        """Update Apply section based on existence of deskew_registration_params.json."""
+        data_path = self.path_edit.text()
+        if not data_path or not os.path.exists(data_path):
+            self._set_apply_enabled(False)
+            return
+
+        params_path = os.path.join(data_path, "deskew_registration_params.json")
+        if os.path.exists(params_path):
+            n_time, n_chan = self._detect_dataset_dimensions()
+            self.time_min_spin.setRange(0, max(0, n_time - 1))
+            self.time_max_spin.setRange(0, max(0, n_time - 1))
+            self.time_min_spin.setValue(0)
+            self.time_max_spin.setValue(n_time - 1)
+            self.channel_min_spin.setRange(1, max(1, n_chan))
+            self.channel_max_spin.setRange(1, max(1, n_chan))
+            self.channel_min_spin.setValue(1)
+            self.channel_max_spin.setValue(n_chan)
+            self._set_apply_enabled(True)
+        else:
+            self._set_apply_enabled(False)
+
+    def _set_apply_enabled(self, enabled: bool):
+        """Enable or disable all controls in the Apply section."""
+        self.time_min_spin.setEnabled(enabled)
+        self.time_max_spin.setEnabled(enabled)
+        self.channel_min_spin.setEnabled(enabled)
+        self.channel_max_spin.setEnabled(enabled)
+        self.apply_button.setEnabled(enabled)
+
+    def apply_registration(self):
+        """Apply saved registration transformations to specified ranges."""
+        data_path = self.path_edit.text()
+        if not data_path or not os.path.exists(data_path):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        params_path = os.path.join(data_path, "deskew_registration_params.json")
+        if not os.path.exists(params_path):
+            QMessageBox.warning(self, "Error", "Registration parameters file not found")
+            return
+
+        time_min = self.time_min_spin.value()
+        time_max = self.time_max_spin.value()
+        chan_min = self.channel_min_spin.value()
+        chan_max = self.channel_max_spin.value()
+
+        if time_min > time_max:
+            QMessageBox.warning(self, "Error", "Time min must be <= Time max")
+            return
+        if chan_min > chan_max:
+            QMessageBox.warning(self, "Error", "Channel min must be <= Channel max")
+            return
+
+        multi_pos = self.multi_pos_checkbox.isChecked()
+        position = self.position_spin.value()
+        ignore_bbox = self.ignore_bbox_checkbox.isChecked()
+
+        # Determine output folder
+        if multi_pos:
+            output_folder = os.path.join(data_path, f"pos{position}_dskreg")
+        else:
+            output_folder = os.path.join(data_path, "dskreg")
+
+        # Remove existing output folder
+        if os.path.exists(output_folder):
+            import shutil
+            shutil.rmtree(output_folder)
+        os.makedirs(output_folder, exist_ok=True)
+
+        # Disable UI during processing
+        self.apply_button.setEnabled(False)
+        self.load_deskew_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Starting apply...")
+
+        # Create and start worker
+        self.apply_worker = ApplyWorker(
+            data_path, params_path,
+            (time_min, time_max), (chan_min, chan_max),
+            multi_pos, position, output_folder, ignore_bbox,
+        )
+        self.apply_worker.finished.connect(self._on_apply_finished)
+        self.apply_worker.error_occurred.connect(self._on_apply_error)
+        self.apply_worker.progress_updated.connect(self._on_apply_progress)
+        self.apply_worker.start()
+
+    def _on_apply_progress(self, message: str, percentage: int):
+        """Handle progress update from ApplyWorker."""
+        self.status_label.setText(message)
+        self.progress_bar.setValue(percentage)
+
+    def _on_apply_finished(self):
+        """Handle successful completion of ApplyWorker."""
+        self.status_label.setText("Apply completed!")
+        self.progress_bar.setVisible(False)
+        self.apply_button.setEnabled(True)
+        self.load_deskew_button.setEnabled(True)
+
+    def _on_apply_error(self, error_msg: str):
+        """Handle error from ApplyWorker."""
+        QMessageBox.critical(self, "Error", f"Apply failed: {error_msg}")
+        self.status_label.setText("Error during apply")
+        self.progress_bar.setVisible(False)
+        self.apply_button.setEnabled(True)
+        self.load_deskew_button.setEnabled(True)

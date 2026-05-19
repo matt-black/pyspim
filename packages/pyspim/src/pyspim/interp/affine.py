@@ -1,15 +1,12 @@
-import concurrent.futures
-import multiprocessing
 import os
 from itertools import product
-from typing import Iterable, Tuple
+from typing import Tuple
 
 import cupy
 import numpy
-import zarr
 
 from .._util import launch_params_for_volume
-from ..typing import CuLaunchParameters, NDArray
+from ..typing import NDArray
 
 ## CUDA kernel setup and module compilation
 
@@ -84,7 +81,7 @@ def output_shape_for_transform(
     coord = numpy.vstack([coord, numpy.zeros_like(coord[0, :])])
     coordT = (t @ coord)[:-1, :]
     ptp = numpy.ceil(numpy.ptp(coordT, axis=1))
-    z, y, x = int(ptp[0]), int(ptp[1]), int(ptp[2])
+    x, y, z = int(ptp[0]), int(ptp[1]), int(ptp[2])
     return z, y, x
 
 
