@@ -252,12 +252,18 @@ class RegistrationWorker(QThread):
         b_deskewed,
         transform_type="t+r+s",
         initial_translation=None,
+        metric="cr",
+        interp_method="cubspl",
+        use_piecewise=True,
     ):
         super().__init__()
         self.a_deskewed = a_deskewed
         self.b_deskewed = b_deskewed
         self.transform_type = transform_type
         self.initial_translation = initial_translation if initial_translation is not None else [0, 0, 0]
+        self.metric = metric
+        self.interp_method = interp_method
+        self.use_piecewise = use_piecewise
 
     def run(self):
         """Perform registration in background thread."""
@@ -297,24 +303,37 @@ class RegistrationWorker(QThread):
             launch_par = launch_params_for_volume(a_dsk.shape, 8, 8, 8)
 
             # Perform optimization
-            T, res = powell.optimize_affine_piecewise(
-                cp.asarray(a_dsk),
-                cp.asarray(b_dsk),
-                metric="cr",
-                transform=self.transform_type,
-                interp_method="cubspl",
-                par0=par0,
-                bounds=bounds,
-                kernel_launch_params=launch_par,
-                verbose=False,
-            )
+            if self.use_piecewise:
+                T, res = powell.optimize_affine_piecewise(
+                    cp.asarray(a_dsk),
+                    cp.asarray(b_dsk),
+                    metric=self.metric,
+                    transform=self.transform_type,
+                    interp_method=self.interp_method,
+                    par0=par0,
+                    bounds=bounds,
+                    kernel_launch_params=launch_par,
+                    verbose=False,
+                )
+            else:
+                T, res = powell.optimize_affine(
+                    cp.asarray(a_dsk),
+                    cp.asarray(b_dsk),
+                    metric=self.metric,
+                    transform=self.transform_type,
+                    interp_method=self.interp_method,
+                    par0=par0,
+                    bounds=bounds,
+                    kernel_launch_params=launch_par,
+                    verbose=False,
+                )
 
             # Apply transformation
             self.progress_updated.emit("Applying transformation...")
             b_reg = affine.transform(
                 cp.asarray(b_dsk),
                 T,
-                interp_method="cubspl",
+                interp_method=self.interp_method,
                 preserve_dtype=True,
                 out_shp=None,
                 block_size_z=8,
@@ -487,6 +506,7 @@ class ApplyWorker(QThread):
             # Load registration parameters for crop_to_common logic
             rp = params["registration_parameters"]
             crop_to_common = rp.get("crop_to_common", False)
+            interp_method = rp.get("interp_method", "cubspl")
             pre_reg = params["pre_reg_transform"]
             # Convert pre-reg transform from micrometers to pixel units
             pre_reg_t = [
@@ -567,7 +587,7 @@ class ApplyWorker(QThread):
                 b_reg = affine.transform(
                     b_cupy,
                     cp.asarray(affine_matrix),
-                    interp_method="cubspl",
+                    interp_method=interp_method,
                     preserve_dtype=True,
                     out_shp=None,
                     block_size_z=8,
@@ -652,7 +672,7 @@ class ApplyWorker(QThread):
                     b_reg = affine.transform(
                         b_cupy,
                         cp.asarray(affine_matrix),
-                        interp_method="cubspl",
+                        interp_method=interp_method,
                         preserve_dtype=True,
                         out_shp=None,
                         block_size_z=8,
@@ -865,6 +885,25 @@ class RegistrationWidget(QWidget):
         self.transform_combo.setCurrentText("t+r+s")
 
         params_layout.addRow("Transform Type:", self.transform_combo)
+
+        self.metric_combo = QComboBox()
+        self.metric_combo.addItems(["Norm. Inner Prod.", "Corr. Ratio", "Norm. XCorr"])
+        self.metric_combo.setCurrentText("Corr. Ratio")
+        params_layout.addRow("Metric:", self.metric_combo)
+
+        self.interp_method_combo = QComboBox()
+        self.interp_method_combo.addItems(["Linear", "Cubic Spline"])
+        self.interp_method_combo.setCurrentText("Cubic Spline")
+        params_layout.addRow("Interpolation Method:", self.interp_method_combo)
+
+        self.piecewise_checkbox = QCheckBox("Piecewise Optimization")
+        self.piecewise_checkbox.setToolTip(
+            "When enabled, performs piecewise optimization, optimizing each "
+            "transform component (translation, rotation, scale) sequentially. "
+            "When disabled, optimizes all components simultaneously."
+        )
+        self.piecewise_checkbox.setChecked(True)
+        params_layout.addRow(self.piecewise_checkbox)
 
         self.crop_to_common_checkbox = QCheckBox("Crop to Common")
         self.crop_to_common_checkbox.setToolTip(
@@ -1441,9 +1480,30 @@ class RegistrationWidget(QWidget):
                     f"{cropped_shape[0]}x{cropped_shape[1]}x{cropped_shape[2]}"
                 )
 
+        # Map metric display name to internal string
+        metric_map = {
+            "Norm. Inner Prod.": "nip",
+            "Corr. Ratio": "cr",
+            "Norm. XCorr": "ncc",
+        }
+        metric = metric_map.get(self.metric_combo.currentText(), "cr")
+
+        # Map interpolation method display name to internal string
+        interp_method_map = {
+            "Linear": "linear",
+            "Cubic Spline": "cubspl",
+        }
+        interp_method = interp_method_map.get(self.interp_method_combo.currentText(), "cubspl")
+
+        use_piecewise = self.piecewise_checkbox.isChecked()
+
         # Create and start worker
         self.reg_worker = RegistrationWorker(
-            a_vol, b_vol, transform_type, initial_translation=initial_t
+            a_vol, b_vol, transform_type,
+            initial_translation=initial_t,
+            metric=metric,
+            interp_method=interp_method,
+            use_piecewise=use_piecewise,
         )
         self.reg_worker.registered.connect(self.on_registered)
         self.reg_worker.error_occurred.connect(self.on_error)
@@ -1461,8 +1521,8 @@ class RegistrationWidget(QWidget):
         self.correlation_ratio = cr
 
         # Add registered data as new layers
-        output_a_name = "deskewed_A_registered"
-        output_b_name = "deskewed_B_registered"
+        output_a_name = "View A: Registered"
+        output_b_name = "View B: Registered"
 
         # Remove old layers if they exist
         for layer_name in [output_a_name, output_b_name]:
@@ -1472,6 +1532,7 @@ class RegistrationWidget(QWidget):
             except (KeyError, ValueError):
                 pass
 
+        _pixel_size = self.pixel_size_spin.value()
         self.viewer.add_image(
             a_registered,
             name=output_a_name,
@@ -1480,9 +1541,13 @@ class RegistrationWidget(QWidget):
                 "correlation_ratio": cr,
                 "transform_type": result["transform_type"],
                 "step_size": self.step_size_spin.value(),
-                "pixel_size": self.pixel_size_spin.value(),
+                "pixel_size": _pixel_size,
                 "theta": self.theta_spin.value() * math.pi / 180,
             },
+            scale=(_pixel_size, _pixel_size, _pixel_size),
+            opacity=0.5,
+            blending="additive",
+            colormap="red",
         )
 
         self.viewer.add_image(
@@ -1496,6 +1561,10 @@ class RegistrationWidget(QWidget):
                 "pixel_size": self.pixel_size_spin.value(),
                 "theta": self.theta_spin.value() * math.pi / 180,
             },
+            scale=(_pixel_size, _pixel_size, _pixel_size),
+            opacity=0.5,
+            blending="additive",
+            colormap="cyan",
         )
 
         # Update status and results
@@ -1546,6 +1615,17 @@ class RegistrationWidget(QWidget):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
 
+        # Mapping dicts for display name to internal string
+        metric_map = {
+            "Norm. Inner Prod.": "nip",
+            "Corr. Ratio": "cr",
+            "Norm. XCorr": "ncc",
+        }
+        interp_method_map = {
+            "Linear": "linear",
+            "Cubic Spline": "cubspl",
+        }
+
         # Build parameters dictionary
         params = {
             "deskewing_parameters": {
@@ -1563,6 +1643,11 @@ class RegistrationWidget(QWidget):
             "registration_parameters": {
                 "transform_type": self.transform_combo.currentText(),
                 "crop_to_common": self.crop_to_common_checkbox.isChecked(),
+                "metric": metric_map.get(self.metric_combo.currentText(), "cr"),
+                "interp_method": interp_method_map.get(
+                    self.interp_method_combo.currentText(), "cubspl"
+                ),
+                "use_piecewise": self.piecewise_checkbox.isChecked(),
             },
             "affine_registration_matrix": self.registration_matrix.tolist(),
             "correlation_ratio": self.correlation_ratio,
@@ -1573,7 +1658,7 @@ class RegistrationWidget(QWidget):
         try:
             with open(output_path, "w") as f:
                 json.dump(params, f, indent=2)
-            self.status_label.setText(f"Registration parameters saved to {output_path}")
+            self.status_label.setText(f"Registration parameters saved!")
             # Enable Apply section after successful save
             self._update_apply_section()
         except (IOError, OSError) as e:
