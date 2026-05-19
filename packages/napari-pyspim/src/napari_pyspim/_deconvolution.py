@@ -366,26 +366,26 @@ class DeconvolutionWidget(QWidget):
 
         self.psf_a_fwhm_lateral = QDoubleSpinBox()
         self.psf_a_fwhm_lateral.setRange(0.1, 100.0)
-        self.psf_a_fwhm_lateral.setValue(1.0)
         self.psf_a_fwhm_lateral.setDecimals(3)
+        self.psf_a_fwhm_lateral.setValue(2.277)
         self.psf_a_fwhm_lateral.setSuffix(" pix")
 
         self.psf_a_fwhm_axial = QDoubleSpinBox()
         self.psf_a_fwhm_axial.setRange(0.1, 500.0)
-        self.psf_a_fwhm_axial.setValue(5.0)
         self.psf_a_fwhm_axial.setDecimals(3)
+        self.psf_a_fwhm_axial.setValue(7.385)
         self.psf_a_fwhm_axial.setSuffix(" pix")
 
         self.psf_b_fwhm_lateral = QDoubleSpinBox()
         self.psf_b_fwhm_lateral.setRange(0.1, 100.0)
-        self.psf_b_fwhm_lateral.setValue(1.0)
         self.psf_b_fwhm_lateral.setDecimals(3)
+        self.psf_b_fwhm_lateral.setValue(2.277)
         self.psf_b_fwhm_lateral.setSuffix(" pix")
 
         self.psf_b_fwhm_axial = QDoubleSpinBox()
         self.psf_b_fwhm_axial.setRange(0.1, 500.0)
-        self.psf_b_fwhm_axial.setValue(5.0)
         self.psf_b_fwhm_axial.setDecimals(3)
+        self.psf_b_fwhm_axial.setValue(7.385)
         self.psf_b_fwhm_axial.setSuffix(" pix")
 
         gaussian_layout.addRow("A: FWHM, Lateral:", self.psf_a_fwhm_lateral)
@@ -439,26 +439,26 @@ class DeconvolutionWidget(QWidget):
 
         self.bp_a_fwhm_lateral = QDoubleSpinBox()
         self.bp_a_fwhm_lateral.setRange(0.1, 100.0)
-        self.bp_a_fwhm_lateral.setValue(1.0)
         self.bp_a_fwhm_lateral.setDecimals(3)
+        self.bp_a_fwhm_lateral.setValue(2.277)
         self.bp_a_fwhm_lateral.setSuffix(" pix")
 
         self.bp_a_fwhm_axial = QDoubleSpinBox()
         self.bp_a_fwhm_axial.setRange(0.1, 500.0)
-        self.bp_a_fwhm_axial.setValue(5.0)
         self.bp_a_fwhm_axial.setDecimals(3)
+        self.bp_a_fwhm_axial.setValue(7.385)
         self.bp_a_fwhm_axial.setSuffix(" pix")
 
         self.bp_b_fwhm_lateral = QDoubleSpinBox()
         self.bp_b_fwhm_lateral.setRange(0.1, 100.0)
-        self.bp_b_fwhm_lateral.setValue(1.0)
         self.bp_b_fwhm_lateral.setDecimals(3)
+        self.bp_b_fwhm_lateral.setValue(2.277)
         self.bp_b_fwhm_lateral.setSuffix(" pix")
 
         self.bp_b_fwhm_axial = QDoubleSpinBox()
         self.bp_b_fwhm_axial.setRange(0.1, 500.0)
-        self.bp_b_fwhm_axial.setValue(5.0)
         self.bp_b_fwhm_axial.setDecimals(3)
+        self.bp_b_fwhm_axial.setValue(7.385)
         self.bp_b_fwhm_axial.setSuffix(" pix")
 
         bp_gaussian_layout.addRow("A: FWHM, Lateral:", self.bp_a_fwhm_lateral)
