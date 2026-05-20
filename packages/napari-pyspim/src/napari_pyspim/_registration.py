@@ -881,14 +881,14 @@ class RegistrationWidget(QWidget):
         params_layout = QFormLayout()
 
         self.transform_combo = QComboBox()
-        self.transform_combo.addItems(["t", "t+r", "t+r+s"])
+        self.transform_combo.addItems(["t", "t+r", "t+sh", "t+ssh", "t+r+s", "t+sh+s"])
         self.transform_combo.setCurrentText("t+r+s")
 
         params_layout.addRow("Transform Type:", self.transform_combo)
 
         self.metric_combo = QComboBox()
         self.metric_combo.addItems(["Norm. Inner Prod.", "Corr. Ratio", "Norm. XCorr"])
-        self.metric_combo.setCurrentText("Corr. Ratio")
+        self.metric_combo.setCurrentText("Norm. XCorr")
         params_layout.addRow("Metric:", self.metric_combo)
 
         self.interp_method_combo = QComboBox()
@@ -978,6 +978,7 @@ class RegistrationWidget(QWidget):
         layout.addWidget(params_group)
         layout.addWidget(self.register_button)
         layout.addWidget(self.save_button)
+        layout.addWidget(self.apply_group)
         layout.addWidget(self.results_label)
         layout.addStretch()
 
@@ -1574,10 +1575,8 @@ class RegistrationWidget(QWidget):
 
         results_text = f"""
         <b>Registration Results:</b><br>
-        Transform Type: {result["transform_type"]}<br>
-        Correlation Ratio: {cr:.3f}<br>
-        A shape: {a_registered.shape}<br>
-        B shape: {b_registered.shape}
+        Metric: {cr:.3f}<br>
+        Shape: {a_registered.shape}<br>
         """
         self.results_label.setText(results_text)
 
