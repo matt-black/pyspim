@@ -489,12 +489,6 @@ class ApplyWorker(QThread):
         if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
             return None, None, None
 
-        a_slices = (
-            slice(int(z_start_a), int(z_end_a)),
-            slice(int(y_start_a), int(y_end_a)),
-            slice(int(x_start_a), int(x_end_a)),
-        )
-
         z_start_b = max(0, -tz)
         z_end_b = min(Zb, Za - tz)
         y_start_b = max(0, -ty)
@@ -502,17 +496,34 @@ class ApplyWorker(QThread):
         x_start_b = max(0, -tx)
         x_end_b = min(Xb, Xa - tx)
 
-        b_slices = (
-            slice(int(z_start_b), int(z_end_b)),
-            slice(int(y_start_b), int(y_end_b)),
-            slice(int(x_start_b), int(x_end_b)),
-        )
-
-        cropped_shape = (
+        # Compute each view's shape independently to detect truncation differences
+        shape_a = (
             int(z_end_a - z_start_a),
             int(y_end_a - y_start_a),
             int(x_end_a - x_start_a),
         )
+        shape_b = (
+            int(z_end_b - z_start_b),
+            int(y_end_b - y_start_b),
+            int(x_end_b - x_start_b),
+        )
+
+        # Use minimum to guarantee both can be cropped to this size
+        cropped_shape = tuple(min(a, b) for a, b in zip(shape_a, shape_b))
+
+        # Both slices use cropped_shape as the end offset to ensure identical output sizes
+        a_slices = (
+            slice(int(z_start_a), int(z_start_a) + cropped_shape[0]),
+            slice(int(y_start_a), int(y_start_a) + cropped_shape[1]),
+            slice(int(x_start_a), int(x_start_a) + cropped_shape[2]),
+        )
+
+        b_slices = (
+            slice(int(z_start_b), int(z_start_b) + cropped_shape[0]),
+            slice(int(y_start_b), int(y_start_b) + cropped_shape[1]),
+            slice(int(x_start_b), int(x_start_b) + cropped_shape[2]),
+        )
+
         return a_slices, b_slices, cropped_shape
 
     def run(self):
@@ -1480,13 +1491,6 @@ class RegistrationWidget(QWidget):
         if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
             return None, None, None
 
-        # Crop slices for View A (directly from overlap in A's coordinates)
-        a_slices = (
-            slice(int(z_start_a), int(z_end_a)),
-            slice(int(y_start_a), int(y_end_a)),
-            slice(int(x_start_a), int(x_end_a)),
-        )
-
         # Crop slices for View B (shifted back to B's own coordinates by subtracting translation)
         z_start_b = max(0, -tz)
         z_end_b = min(Zb, Za - tz)
@@ -1495,17 +1499,34 @@ class RegistrationWidget(QWidget):
         x_start_b = max(0, -tx)
         x_end_b = min(Xb, Xa - tx)
 
-        b_slices = (
-            slice(int(z_start_b), int(z_end_b)),
-            slice(int(y_start_b), int(y_end_b)),
-            slice(int(x_start_b), int(x_end_b)),
-        )
-
-        cropped_shape = (
+        # Compute each view's shape independently to detect truncation differences
+        shape_a = (
             int(z_end_a - z_start_a),
             int(y_end_a - y_start_a),
             int(x_end_a - x_start_a),
         )
+        shape_b = (
+            int(z_end_b - z_start_b),
+            int(y_end_b - y_start_b),
+            int(x_end_b - x_start_b),
+        )
+
+        # Use minimum to guarantee both can be cropped to this size
+        cropped_shape = tuple(min(a, b) for a, b in zip(shape_a, shape_b))
+
+        # Both slices use cropped_shape as the end offset to ensure identical output sizes
+        a_slices = (
+            slice(int(z_start_a), int(z_start_a) + cropped_shape[0]),
+            slice(int(y_start_a), int(y_start_a) + cropped_shape[1]),
+            slice(int(x_start_a), int(x_start_a) + cropped_shape[2]),
+        )
+
+        b_slices = (
+            slice(int(z_start_b), int(z_start_b) + cropped_shape[0]),
+            slice(int(y_start_b), int(y_start_b) + cropped_shape[1]),
+            slice(int(x_start_b), int(x_start_b) + cropped_shape[2]),
+        )
+
         return a_slices, b_slices, cropped_shape
 
     def register_data(self):
