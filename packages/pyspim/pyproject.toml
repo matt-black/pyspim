@@ -35,7 +35,6 @@ dependencies = [
     "zarr>=2.10.0",
     "dask>=2021.0.0",
     "numba>=0.58.1",
-    "nvmath-python[cu12-distributed]>=0.9.0",
 ]
 
 [project.optional-dependencies]
