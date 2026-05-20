@@ -255,6 +255,9 @@ class RegistrationWorker(QThread):
         metric="cr",
         interp_method="cubspl",
         use_piecewise=True,
+        bound_translation=20.0,
+        bound_rot_shear=5.0,
+        bound_scale=0.05,
     ):
         super().__init__()
         self.a_deskewed = a_deskewed
@@ -264,6 +267,9 @@ class RegistrationWorker(QThread):
         self.metric = metric
         self.interp_method = interp_method
         self.use_piecewise = use_piecewise
+        self.bound_translation = bound_translation
+        self.bound_rot_shear = bound_rot_shear
+        self.bound_scale = bound_scale
 
     def run(self):
         """Perform registration in background thread."""
@@ -273,10 +279,13 @@ class RegistrationWorker(QThread):
             from pyspim.reg import powell
             from pyspim.util import launch_params_for_volume, pad_to_same_size
 
-            self.progress_updated.emit("Padding volumes to same size...")
-
-            # Pad volumes to same size
-            a_dsk, b_dsk = pad_to_same_size(self.a_deskewed, self.b_deskewed)
+            shp_a = self.a_deskewed.shape
+            shp_b = self.b_deskewed.shape
+            # check if volumes are different size, and pad accordingly
+            if shp_a[0] != shp_b[0] or shp_a[1] != shp_b[1] or shp_a[2] != shp_b[2]:
+                self.progress_updated.emit("Padding volumes to same size...")
+                # Pad volumes to same size
+                a_dsk, b_dsk = pad_to_same_size(self.a_deskewed, self.b_deskewed)
 
             # Set up initial parameters and bounds
             self.progress_updated.emit("Setting up optimization parameters...")
@@ -284,18 +293,43 @@ class RegistrationWorker(QThread):
             # Use initial translation from pre-reg transform (in pixel units), or default to [0, 0, 0]
             t0 = self.initial_translation
 
+            bt = self.bound_translation
+            br = self.bound_rot_shear
+            bs = self.bound_scale
+
             if self.transform_type == "t":
                 par0 = t0
-                bounds = [(t - 20, t + 20) for t in t0]
+                bounds = [(t - bt, t + bt) for t in t0]
             elif self.transform_type == "t+r":
                 par0 = np.concatenate([t0, np.asarray([0, 0, 0])])
-                bounds = [(t - 20, t + 20) for t in t0] + [(-5, 5)] * 3
+                bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3
             elif self.transform_type == "t+r+s":
                 par0 = np.concatenate(
                     [t0, np.asarray([0, 0, 0]), np.asarray([1, 1, 1])]
                 )
                 bounds = (
-                    [(t - 20, t + 20) for t in t0] + [(-5, 5)] * 3 + [(0.9, 1.1)] * 3
+                    [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3 + [(1 - bs, 1 + bs)] * 3
+                )
+            elif self.transform_type == "t+sh":
+                par0 = np.concatenate(
+                    [t0, np.asarray([0, 0, 0, 0, 0, 0])]
+                )
+                bounds = (
+                    [(t - bt, t + bt) for t in t0] + [(-br, br)] * 6
+                )
+            elif self.transform_type == "t+ssh":
+                par0 = np.concatenate(
+                    [t0, np.asarray([0, 0, 0])]
+                )
+                bounds = (
+                    [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3
+                )
+            elif self.transform_type == "t+sh+s":
+                par0 = np.concatenate(
+                    [t0, np.asarray([0, 0, 0, 0, 0, 0]), np.asarray([1, 1, 1])]
+                )
+                bounds = (
+                    [(t - bt, t + bt) for t in t0] + [(-br, br)] * 6 + [(1 - bs, 1 + bs)] * 3
                 )
 
             # Determine launch parameters for GPU
@@ -881,7 +915,9 @@ class RegistrationWidget(QWidget):
         params_layout = QFormLayout()
 
         self.transform_combo = QComboBox()
-        self.transform_combo.addItems(["t", "t+r", "t+sh", "t+ssh", "t+r+s", "t+sh+s"])
+        self.transform_combo.addItems(["t", 
+                                       "t+r", "t+sh", "t+ssh", 
+                                       "t+r+s", "t+sh+s"])
         self.transform_combo.setCurrentText("t+r+s")
 
         params_layout.addRow("Transform Type:", self.transform_combo)
@@ -895,6 +931,48 @@ class RegistrationWidget(QWidget):
         self.interp_method_combo.addItems(["Linear", "Cubic Spline"])
         self.interp_method_combo.setCurrentText("Cubic Spline")
         params_layout.addRow("Interpolation Method:", self.interp_method_combo)
+
+        # Bounds group
+        bounds_group = QGroupBox("Bounds")
+        bounds_layout = QFormLayout()
+
+        self.bound_translation_spin = QDoubleSpinBox()
+        self.bound_translation_spin.setRange(0.1, 1000)
+        self.bound_translation_spin.setValue(20.0)
+        self.bound_translation_spin.setDecimals(2)
+        self.bound_translation_spin.setSuffix(" px")
+        self.bound_translation_spin.setToolTip(
+            "Maximum deviation (in pixels) from the initial translation guess "
+            "during optimization. The optimizer will search within +/- this value "
+            "for each axis."
+        )
+        bounds_layout.addRow("Translation:", self.bound_translation_spin)
+
+        self.bound_rot_shear_spin = QDoubleSpinBox()
+        self.bound_rot_shear_spin.setRange(0.1, 100)
+        self.bound_rot_shear_spin.setValue(5.0)
+        self.bound_rot_shear_spin.setDecimals(2)
+        self.bound_rot_shear_spin.setSuffix(" deg")
+        self.bound_rot_shear_spin.setToolTip(
+            "Maximum deviation (in degrees) from the initial rotation/shear guess "
+            "during optimization. The optimizer will search within +/- this value "
+            "for each parameter."
+        )
+        bounds_layout.addRow("Rotation/Shear:", self.bound_rot_shear_spin)
+
+        self.bound_scale_spin = QDoubleSpinBox()
+        self.bound_scale_spin.setRange(0.01, 0.5)
+        self.bound_scale_spin.setValue(0.05)
+        self.bound_scale_spin.setDecimals(3)
+        self.bound_scale_spin.setToolTip(
+            "Maximum fractional deviation from the initial scale guess (1.0) "
+            "during optimization. The optimizer will search within 1 +/- this "
+            "value for each axis."
+        )
+        bounds_layout.addRow("Scale:", self.bound_scale_spin)
+
+        bounds_group.setLayout(bounds_layout)
+        params_layout.addRow(bounds_group)
 
         self.piecewise_checkbox = QCheckBox("Piecewise Optimization")
         self.piecewise_checkbox.setToolTip(
@@ -1498,6 +1576,11 @@ class RegistrationWidget(QWidget):
 
         use_piecewise = self.piecewise_checkbox.isChecked()
 
+        # Read bound values from UI
+        bound_translation = self.bound_translation_spin.value()
+        bound_rot_shear = self.bound_rot_shear_spin.value()
+        bound_scale = self.bound_scale_spin.value()
+
         # Create and start worker
         self.reg_worker = RegistrationWorker(
             a_vol, b_vol, transform_type,
@@ -1505,6 +1588,9 @@ class RegistrationWidget(QWidget):
             metric=metric,
             interp_method=interp_method,
             use_piecewise=use_piecewise,
+            bound_translation=bound_translation,
+            bound_rot_shear=bound_rot_shear,
+            bound_scale=bound_scale,
         )
         self.reg_worker.registered.connect(self.on_registered)
         self.reg_worker.error_occurred.connect(self.on_error)
@@ -1647,6 +1733,9 @@ class RegistrationWidget(QWidget):
                     self.interp_method_combo.currentText(), "cubspl"
                 ),
                 "use_piecewise": self.piecewise_checkbox.isChecked(),
+                "bound_translation": self.bound_translation_spin.value(),
+                "bound_rot_shear": self.bound_rot_shear_spin.value(),
+                "bound_scale": self.bound_scale_spin.value(),
             },
             "affine_registration_matrix": self.registration_matrix.tolist(),
             "correlation_ratio": self.correlation_ratio,
