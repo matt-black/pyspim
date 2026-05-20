@@ -7,7 +7,8 @@ This widget provides a tabbed interface for all processing steps:
 3. Deconvolution
 """
 
-from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from ._deconvolution import DeconvolutionWidget
 from ._registration import RegistrationWidget
@@ -26,6 +27,10 @@ class DispimPipelineWidget(QWidget):
         """Set up the user interface with tabs for each processing step."""
         layout = QVBoxLayout()
 
+        # Do not let napari resize the dock to fit our sizeHint.
+        # The scroll area below will handle overflow instead.
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
         # Create tab widget
         self.tab_widget = QTabWidget()
 
@@ -42,7 +47,15 @@ class DispimPipelineWidget(QWidget):
         # Connect signals for data flow between steps
         self._connect_signals()
 
-        layout.addWidget(self.tab_widget)
+        # Wrap the tab widget in a scroll area so the napari window size
+        # stays fixed and a scrollbar appears when content overflows.
+        scroll = QScrollArea()
+        scroll.setWidget(self.tab_widget)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        layout.addWidget(scroll)
         self.setLayout(layout)
 
     def _connect_signals(self):

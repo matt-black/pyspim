@@ -1058,7 +1058,6 @@ class RegistrationWidget(QWidget):
         layout.addWidget(self.save_button)
         layout.addWidget(self.apply_group)
         layout.addWidget(self.results_label)
-        layout.addStretch()
 
         self.setLayout(layout)
 

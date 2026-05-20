@@ -204,7 +204,6 @@ class RoiDetectionWidget(QWidget):
         layout.addWidget(self.status_label)
         layout.addWidget(self.roi_info_label)
         layout.addWidget(self.save_button)
-        layout.addStretch()
 
         self.setLayout(layout)
 

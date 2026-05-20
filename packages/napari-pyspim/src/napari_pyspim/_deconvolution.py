@@ -662,7 +662,6 @@ class DeconvolutionWidget(QWidget):
         layout.addWidget(psf_group)
         layout.addWidget(params_group)
         layout.addLayout(action_layout)
-        layout.addStretch()
 
         self.setLayout(layout)
 
