@@ -335,7 +335,7 @@ class RoiDetectionWidget(QWidget):
                 yx_proj_a_t,
                 name="YX Projection (View A)",
                 colormap="red",
-                opacity=0.5,
+                opacity=0.8,
                 blending="additive",
             )
 
@@ -344,7 +344,7 @@ class RoiDetectionWidget(QWidget):
                 yx_proj_b_t,
                 name="YX Projection (View B)",
                 colormap="cyan",
-                opacity=0.5,
+                opacity=0.8,
                 blending="additive",
             )
 
@@ -354,7 +354,7 @@ class RoiDetectionWidget(QWidget):
                 zy_proj_a,
                 name="ZY Projection (View A)",
                 colormap="red",
-                opacity=0.5,
+                opacity=0.8,
                 blending="additive",
                 translate=(offset_y, 0),
             )
@@ -364,7 +364,7 @@ class RoiDetectionWidget(QWidget):
                 zy_proj_b,
                 name="ZY Projection (View B)",
                 colormap="cyan",
-                opacity=0.5,
+                opacity=0.8,
                 blending="additive",
                 translate=(offset_y, 0),
             )
