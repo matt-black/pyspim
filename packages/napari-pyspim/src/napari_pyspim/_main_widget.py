@@ -27,9 +27,10 @@ class DispimPipelineWidget(QWidget):
         """Set up the user interface with tabs for each processing step."""
         layout = QVBoxLayout()
 
-        # Do not let napari resize the dock to fit our sizeHint.
-        # The scroll area below will handle overflow instead.
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        # Use Preferred horizontally so napari gives a reasonable initial width,
+        # but Ignored vertically so the dock height is not forced to grow.
+        # The scroll area below will handle vertical overflow instead.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
         # Create tab widget
         self.tab_widget = QTabWidget()
