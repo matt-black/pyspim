@@ -109,6 +109,8 @@ class DeconvolutionWorker(QThread):
         chunk_size: Tuple[int, int, int],
         overlap: Tuple[int, int, int],
         save_path: Optional[str],
+        use_remote: bool = False,
+        remote_client = None,
     ):
         super().__init__()
         self.view_a = view_a
@@ -127,9 +129,18 @@ class DeconvolutionWorker(QThread):
         self.chunk_size = chunk_size
         self.overlap = overlap
         self.save_path = save_path
+        self.use_remote = use_remote
+        self.remote_client = remote_client
 
     def run(self):
         """Perform deconvolution in background thread."""
+        if self.use_remote:
+            self._run_remote()
+        else:
+            self._run_local()
+
+    def _run_local(self):
+        """Perform deconvolution locally."""
         try:
             # Lazy imports to avoid CUDA compilation at module level
             import cupy
@@ -247,6 +258,39 @@ class DeconvolutionWorker(QThread):
             self.progress_updated.emit("Reading chunkwise results...", 80)
             return numpy.asarray(zarr_out[:]).astype(numpy.float32)
 
+    def _run_remote(self):
+        """Perform deconvolution via remote server."""
+        try:
+            self.progress_updated.emit("Starting remote deconvolution...", 0)
+
+            result = self.remote_client.send_command_blocking("deconvolve", {
+                "view_a": self.view_a,
+                "view_b": self.view_b,
+                "psf_a": self.psf_a,
+                "psf_b": self.psf_b,
+                "backproj_a": self.backproj_a,
+                "backproj_b": self.backproj_b,
+                "decon_function": self.decon_function,
+                "num_iter": self.num_iter,
+                "epsilon": self.epsilon,
+                "req_both": self.req_both,
+                "boundary_correction": self.boundary_correction,
+                "boundary_sigma": self.boundary_sigma,
+                "chunkwise": self.chunkwise,
+                "chunk_size": list(self.chunk_size),
+                "overlap": list(self.overlap),
+            })
+
+            # Convert shape lists to tuples for compatibility
+            if "shape" in result and isinstance(result["shape"], list):
+                result["shape"] = tuple(result["shape"])
+
+            self.progress_updated.emit("Remote deconvolution completed!", 100)
+            self.finished.emit({"result": result, "save_path": self.save_path})
+
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
     def _save_output(self, result: numpy.ndarray):
         """Save deconvolution result to a TIFF file."""
         # save_path should not be None here (checked in run()), but be safe
@@ -272,9 +316,10 @@ class DeconvolutionWidget(QWidget):
 
     deconvolved = pyqtSignal(dict)
 
-    def __init__(self, viewer):
+    def __init__(self, viewer, remote_client=None):
         super().__init__()
         self.viewer = viewer
+        self.remote_client = remote_client
         self.decon_worker = None
         self.setup_ui()
 
@@ -1050,6 +1095,7 @@ class DeconvolutionWidget(QWidget):
             self.status_label.setText("Starting deconvolution...")
 
             # Create and start worker
+            use_remote = (self.remote_client is not None and self.remote_client.is_connected)
             self.decon_worker = DeconvolutionWorker(
                 view_a=view_a,
                 view_b=view_b,
@@ -1067,6 +1113,8 @@ class DeconvolutionWidget(QWidget):
                 chunk_size=chunk_size,
                 overlap=overlap,
                 save_path=save_path,
+                use_remote=use_remote,
+                remote_client=self.remote_client,
             )
             self.decon_worker.finished.connect(self.on_deconvolution_finished)
             self.decon_worker.error_occurred.connect(self.on_deconvolution_error)

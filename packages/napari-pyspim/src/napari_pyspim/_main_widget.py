@@ -2,6 +2,7 @@
 Main widget for the diSPIM processing pipeline.
 
 This widget provides a tabbed interface for all processing steps:
+0. Remote Connection (optional)
 1. ROI Detection
 2. Registration
 3. Deconvolution
@@ -11,6 +12,8 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from ._deconvolution import DeconvolutionWidget
+from ._remote_client import RemoteClient
+from ._remote_connection import RemoteConnectionWidget
 from ._registration import RegistrationWidget
 from ._roi_detection import RoiDetectionWidget
 
@@ -21,6 +24,7 @@ class DispimPipelineWidget(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
         self.viewer = napari_viewer
+        self.remote_client = RemoteClient()
         self.setup_ui()
 
     def setup_ui(self):
@@ -35,12 +39,16 @@ class DispimPipelineWidget(QWidget):
         # Create tab widget
         self.tab_widget = QTabWidget()
 
+        # Create Remote Connection widget
+        self.remote_connection = RemoteConnectionWidget(self.remote_client)
+
         # Create individual step widgets
-        self.roi_detection = RoiDetectionWidget(self.viewer)
-        self.registration = RegistrationWidget(self.viewer)
-        self.deconvolution = DeconvolutionWidget(self.viewer)
+        self.roi_detection = RoiDetectionWidget(self.viewer, self.remote_client)
+        self.registration = RegistrationWidget(self.viewer, self.remote_client)
+        self.deconvolution = DeconvolutionWidget(self.viewer, self.remote_client)
 
         # Add tabs
+        self.tab_widget.addTab(self.remote_connection, "0. Remote Connection")
         self.tab_widget.addTab(self.roi_detection, "1. ROI Detection")
         self.tab_widget.addTab(self.registration, "2. Registration")
         self.tab_widget.addTab(self.deconvolution, "3. Deconvolution")

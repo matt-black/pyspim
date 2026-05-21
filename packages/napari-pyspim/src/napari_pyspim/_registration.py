@@ -62,6 +62,8 @@ class LoadDeskewWorker(QThread):
         time: int = 0,
         position: int = 0,
         auto_crop: bool = True,
+        use_remote: bool = False,
+        remote_client = None,
     ):
         super().__init__()
         self.data_path = data_path
@@ -76,6 +78,8 @@ class LoadDeskewWorker(QThread):
         self.time = time
         self.position = position
         self.auto_crop = auto_crop
+        self.use_remote = use_remote
+        self.remote_client = remote_client
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists."""
@@ -123,6 +127,13 @@ class LoadDeskewWorker(QThread):
 
     def run(self):
         """Load data, deskew, and compute projections in background thread."""
+        if self.use_remote:
+            self._run_remote()
+        else:
+            self._run_local()
+
+    def _run_local(self):
+        """Load data, deskew, and compute projections locally."""
         try:
             from pyspim.data import dispim as data
             from pyspim import deskew as dsk
@@ -238,6 +249,32 @@ class LoadDeskewWorker(QThread):
             traceback.print_exc()
             self.error_occurred.emit(str(e))
 
+    def _run_remote(self):
+        """Load data, deskew, and compute projections via remote server."""
+        try:
+            result = self.remote_client.send_command_blocking("load_deskew", {
+                "data_path": self.data_path,
+                "channel": self.channel,
+                "projection_type": self.projection_type,
+                "pixel_size": self.pixel_size,
+                "step_size": self.step_size,
+                "theta": self.theta,
+                "method": self.method,
+                "ignore_bbox": self.ignore_bbox,
+                "multi_pos": self.multi_pos,
+                "time": self.time,
+                "position": self.position,
+                "auto_crop": self.auto_crop,
+            })
+            # Convert shape lists to tuples for compatibility
+            if "volume_shape_a" in result and isinstance(result["volume_shape_a"], list):
+                result["volume_shape_a"] = tuple(result["volume_shape_a"])
+            if "volume_shape_b" in result and isinstance(result["volume_shape_b"], list):
+                result["volume_shape_b"] = tuple(result["volume_shape_b"])
+            self.ready.emit(result)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
 
 class RegistrationWorker(QThread):
     """Worker thread for registration."""
@@ -258,6 +295,8 @@ class RegistrationWorker(QThread):
         bound_translation=20.0,
         bound_rot_shear=5.0,
         bound_scale=0.05,
+        use_remote: bool = False,
+        remote_client = None,
     ):
         super().__init__()
         self.a_deskewed = a_deskewed
@@ -270,9 +309,18 @@ class RegistrationWorker(QThread):
         self.bound_translation = bound_translation
         self.bound_rot_shear = bound_rot_shear
         self.bound_scale = bound_scale
+        self.use_remote = use_remote
+        self.remote_client = remote_client
 
     def run(self):
         """Perform registration in background thread."""
+        if self.use_remote:
+            self._run_remote()
+        else:
+            self._run_local()
+
+    def _run_local(self):
+        """Perform registration locally."""
         try:
             # Lazy imports to avoid CUDA compilation at module level
             from pyspim.interp import affine
@@ -390,6 +438,52 @@ class RegistrationWorker(QThread):
                 "correlation_ratio": cr,
                 "transform_type": self.transform_type,
             }
+
+            self.registered.emit(result)
+
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+    def _run_remote(self):
+        """Perform registration via remote server."""
+        try:
+            # For remote mode, send zarr paths instead of arrays
+            # The a_deskewed/b_deskewed should be zarr paths from load_deskew
+            a_path = self.a_deskewed if isinstance(self.a_deskewed, str) else None
+            b_path = self.b_deskewed if isinstance(self.b_deskewed, str) else None
+
+            if a_path is None or b_path is None:
+                # Fallback: send arrays directly (for local deskew + remote register)
+                self.progress_updated.emit("Sending deskewed volumes to remote server...")
+                result = self.remote_client.send_command_blocking("register", {
+                    "a_deskewed": self.a_deskewed,
+                    "b_deskewed": self.b_deskewed,
+                    "transform_type": self.transform_type,
+                    "initial_translation": self.initial_translation,
+                    "metric": self.metric,
+                    "interp_method": self.interp_method,
+                    "use_piecewise": self.use_piecewise,
+                    "bound_translation": self.bound_translation,
+                    "bound_rot_shear": self.bound_rot_shear,
+                    "bound_scale": self.bound_scale,
+                })
+            else:
+                result = self.remote_client.send_command_blocking("register", {
+                    "a_zarr_path": a_path,
+                    "b_zarr_path": b_path,
+                    "transform_type": self.transform_type,
+                    "initial_translation": self.initial_translation,
+                    "metric": self.metric,
+                    "interp_method": self.interp_method,
+                    "use_piecewise": self.use_piecewise,
+                    "bound_translation": self.bound_translation,
+                    "bound_rot_shear": self.bound_rot_shear,
+                    "bound_scale": self.bound_scale,
+                })
+
+            # Convert shape lists to tuples for compatibility
+            if "shape" in result and isinstance(result["shape"], list):
+                result["shape"] = tuple(result["shape"])
 
             self.registered.emit(result)
 
@@ -758,9 +852,10 @@ class RegistrationWidget(QWidget):
 
     registered = pyqtSignal(dict)
 
-    def __init__(self, viewer):
+    def __init__(self, viewer, remote_client=None):
         super().__init__()
         self.viewer = viewer
+        self.remote_client = remote_client
         self.load_worker = None
         self.reg_worker = None
         self.apply_worker = None
@@ -1195,12 +1290,15 @@ class RegistrationWidget(QWidget):
         multi_pos = self.multi_pos_checkbox.isChecked()
         time = self.time_spin.value()
         position = self.position_spin.value()
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
         self.load_worker = LoadDeskewWorker(
             data_path, channel, projection_type,
             pixel_size, step_size, theta_rad,
             method, ignore_bbox,
             multi_pos, time, position,
             auto_crop,
+            use_remote=use_remote,
+            remote_client=self.remote_client,
         )
         self.load_worker.ready.connect(self.on_load_deskew_ready)
         self.load_worker.error_occurred.connect(self.on_error)
@@ -1602,6 +1700,7 @@ class RegistrationWidget(QWidget):
         bound_scale = self.bound_scale_spin.value()
 
         # Create and start worker
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
         self.reg_worker = RegistrationWorker(
             a_vol, b_vol, transform_type,
             initial_translation=initial_t,
@@ -1611,6 +1710,8 @@ class RegistrationWidget(QWidget):
             bound_translation=bound_translation,
             bound_rot_shear=bound_rot_shear,
             bound_scale=bound_scale,
+            use_remote=use_remote,
+            remote_client=self.remote_client,
         )
         self.reg_worker.registered.connect(self.on_registered)
         self.reg_worker.error_occurred.connect(self.on_error)

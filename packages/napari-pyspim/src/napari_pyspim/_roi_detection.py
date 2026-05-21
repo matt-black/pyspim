@@ -40,6 +40,8 @@ class ProjectionLoaderWorker(QThread):
         multi_pos: bool = False,
         time: int = 0,
         position: int = 0,
+        use_remote: bool = False,
+        remote_client = None,
     ):
         super().__init__()
         self.data_path = data_path
@@ -48,6 +50,8 @@ class ProjectionLoaderWorker(QThread):
         self.multi_pos = multi_pos
         self.time = time
         self.position = position
+        self.use_remote = use_remote
+        self.remote_client = remote_client
 
     def _compute_projections(self, volume, proj_type):
         """Compute YX and ZY projections from a volume."""
@@ -66,6 +70,13 @@ class ProjectionLoaderWorker(QThread):
 
     def run(self):
         """Load data and compute projections for both views in background thread."""
+        if self.use_remote:
+            self._run_remote()
+        else:
+            self._run_local()
+
+    def _run_local(self):
+        """Load data and compute projections locally."""
         try:
             from pyspim.data import dispim as data
 
@@ -99,15 +110,38 @@ class ProjectionLoaderWorker(QThread):
         except Exception as e:
             self.error_occurred.emit(str(e))
 
+    def _run_remote(self):
+        """Load data and compute projections via remote server."""
+        try:
+            result = self.remote_client.send_command_blocking("compute_projections", {
+                "data_path": self.data_path,
+                "channel": self.channel,
+                "projection_type": self.projection_type,
+                "multi_pos": self.multi_pos,
+                "time": self.time,
+                "position": self.position,
+            })
+            # Convert shape lists to tuples for compatibility
+            if "volume_shape_a" in result and isinstance(result["volume_shape_a"], list):
+                result["volume_shape_a"] = tuple(result["volume_shape_a"])
+            if "volume_shape_b" in result and isinstance(result["volume_shape_b"], list):
+                result["volume_shape_b"] = tuple(result["volume_shape_b"])
+            result["data_path"] = self.data_path
+            self.projections_loaded.emit(result)
+
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
 
 class RoiDetectionWidget(QWidget):
     """Widget for manual ROI detection and cropping."""
 
     roi_applied = pyqtSignal(dict)
 
-    def __init__(self, viewer):
+    def __init__(self, viewer, remote_client=None):
         super().__init__()
         self.viewer = viewer
+        self.remote_client = remote_client
         self.loader_worker = None
         self.data_path = None
         # Layer references - 4 image layers (2 views x 2 projections)
@@ -299,8 +333,11 @@ class RoiDetectionWidget(QWidget):
         self.data_path = data_path
 
         # Create and start worker (loads both views)
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
         self.loader_worker = ProjectionLoaderWorker(
-            data_path, channel, projection_type, multi_pos, time, position
+            data_path, channel, projection_type, multi_pos, time, position,
+            use_remote=use_remote,
+            remote_client=self.remote_client,
         )
         self.loader_worker.projections_loaded.connect(self.on_projections_loaded)
         self.loader_worker.error_occurred.connect(self.on_error)
