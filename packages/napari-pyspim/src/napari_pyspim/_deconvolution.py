@@ -12,8 +12,9 @@ import tifffile
 import zarr
 from scipy import ndimage
 
-from pyspim.psf.gauss import generate_psf_im, normalize_psf_im
 from PyQt5.QtCore import pyqtSignal
+
+from ._psf import generate_psf_im, normalize_psf_im
 from qtpy.QtCore import QThread, QTimer
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -316,10 +317,11 @@ class DeconvolutionWidget(QWidget):
 
     deconvolved = pyqtSignal(dict)
 
-    def __init__(self, viewer, remote_client=None):
+    def __init__(self, viewer, remote_client=None, has_pyspim=True):
         super().__init__()
         self.viewer = viewer
         self.remote_client = remote_client
+        self.has_pyspim = has_pyspim
         self.decon_worker = None
         self.setup_ui()
 
@@ -1050,6 +1052,18 @@ class DeconvolutionWidget(QWidget):
 
     def deconvolve_data(self):
         """Start deconvolution based on UI parameters."""
+        # Check if local computation is possible
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not self.has_pyspim and not use_remote:
+            QMessageBox.warning(
+                self, "pyspim Not Available",
+                "Local computation requires pyspim, which is not installed.\n\n"
+                "Either:\n"
+                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
+                "2. Install pyspim: pip install napari-pyspim[full]"
+            )
+            return
+
         try:
             # Validate and collect input arrays
             view_a, view_b = self._get_input_arrays()

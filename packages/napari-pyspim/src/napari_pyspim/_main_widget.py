@@ -11,6 +11,7 @@ This widget provides a tabbed interface for all processing steps:
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
+from . import HAS_PYSPIM
 from ._deconvolution import DeconvolutionWidget
 from ._remote_client import RemoteClient
 from ._remote_connection import RemoteConnectionWidget
@@ -42,10 +43,10 @@ class DispimPipelineWidget(QWidget):
         # Create Remote Connection widget
         self.remote_connection = RemoteConnectionWidget(self.remote_client)
 
-        # Create individual step widgets
-        self.roi_detection = RoiDetectionWidget(self.viewer, self.remote_client)
-        self.registration = RegistrationWidget(self.viewer, self.remote_client)
-        self.deconvolution = DeconvolutionWidget(self.viewer, self.remote_client)
+        # Create individual step widgets, passing HAS_PYSPIM to control local mode
+        self.roi_detection = RoiDetectionWidget(self.viewer, self.remote_client, has_pyspim=HAS_PYSPIM)
+        self.registration = RegistrationWidget(self.viewer, self.remote_client, has_pyspim=HAS_PYSPIM)
+        self.deconvolution = DeconvolutionWidget(self.viewer, self.remote_client, has_pyspim=HAS_PYSPIM)
 
         # Add tabs
         self.tab_widget.addTab(self.remote_connection, "0. Remote Connection")

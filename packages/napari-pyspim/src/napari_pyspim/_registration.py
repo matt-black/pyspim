@@ -852,10 +852,11 @@ class RegistrationWidget(QWidget):
 
     registered = pyqtSignal(dict)
 
-    def __init__(self, viewer, remote_client=None):
+    def __init__(self, viewer, remote_client=None, has_pyspim=True):
         super().__init__()
         self.viewer = viewer
         self.remote_client = remote_client
+        self.has_pyspim = has_pyspim
         self.load_worker = None
         self.reg_worker = None
         self.apply_worker = None
@@ -1259,6 +1260,18 @@ class RegistrationWidget(QWidget):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
 
+        # Check if local computation is possible
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not self.has_pyspim and not use_remote:
+            QMessageBox.warning(
+                self, "pyspim Not Available",
+                "Local computation requires pyspim, which is not installed.\n\n"
+                "Either:\n"
+                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
+                "2. Install pyspim: pip install napari-pyspim[full]"
+            )
+            return
+
         # Remove any existing layers
         self._remove_existing_layers()
 
@@ -1635,6 +1648,18 @@ class RegistrationWidget(QWidget):
             )
             return
 
+        # Check if local computation is possible
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not self.has_pyspim and not use_remote:
+            QMessageBox.warning(
+                self, "pyspim Not Available",
+                "Local computation requires pyspim, which is not installed.\n\n"
+                "Either:\n"
+                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
+                "2. Install pyspim: pip install napari-pyspim[full]"
+            )
+            return
+
         transform_type = self.transform_combo.currentText()
 
         self.register_button.setEnabled(False)
@@ -1945,6 +1970,18 @@ class RegistrationWidget(QWidget):
         data_path = self.path_edit.text()
         if not data_path or not os.path.exists(data_path):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        # Check if local computation is possible
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not self.has_pyspim and not use_remote:
+            QMessageBox.warning(
+                self, "pyspim Not Available",
+                "Local computation requires pyspim, which is not installed.\n\n"
+                "Either:\n"
+                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
+                "2. Install pyspim: pip install napari-pyspim[full]"
+            )
             return
 
         params_path = os.path.join(data_path, "deskew_registration_params.json")

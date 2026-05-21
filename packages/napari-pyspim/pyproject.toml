@@ -26,28 +26,26 @@ classifiers = [
 ]
 
 dependencies = [
-    "pyspim",
     "napari>=0.4.0",
     "npe2>=0.7.0",
     "qtpy>=1.9.0",
     "pyqt5==5.15.11",
     "matplotlib>=3.5.0",
     "pyqt5-qt5==5.15.2",
-    "cupy-cuda12x>=10.0.0",
     "paramiko>=5.0.0",
     "msgpack>=1.1.1",
     "fsspec>=2025.7.0",
     "sshfs>=2025.11.0",
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+    "tifffile>=2021.0.0",
+    "zarr>=2.10.0",
 ]
 
-[project.urls]
-Repository = "https://github.com/matt-black/pyspim"
-BugTracker = "https://github.com/matt-black/pyspim/issues"
-Documentation = "https://github.com/matt-black/pyspim/wiki"
-SourceCode = "https://github.com/matt-black/pyspim"
-UserSupport = "https://github.com/matt-black/pyspim/issues"
-
 [project.optional-dependencies]
+full = [
+    "pyspim",  # Includes cupy-cuda12x, dask, h5py, scikit-image, etc.
+]
 testing = [
     "tox",
     "pytest",
@@ -56,6 +54,13 @@ testing = [
     "pytest-mock",
     "napari[testing]",
 ]
+
+[project.urls]
+Repository = "https://github.com/matt-black/pyspim"
+BugTracker = "https://github.com/matt-black/pyspim/issues"
+Documentation = "https://github.com/matt-black/pyspim/wiki"
+SourceCode = "https://github.com/matt-black/pyspim"
+UserSupport = "https://github.com/matt-black/pyspim/issues"
 
 # npe2 manifest is defined in napari.yaml
 

@@ -138,10 +138,11 @@ class RoiDetectionWidget(QWidget):
 
     roi_applied = pyqtSignal(dict)
 
-    def __init__(self, viewer, remote_client=None):
+    def __init__(self, viewer, remote_client=None, has_pyspim=True):
         super().__init__()
         self.viewer = viewer
         self.remote_client = remote_client
+        self.has_pyspim = has_pyspim
         self.loader_worker = None
         self.data_path = None
         # Layer references - 4 image layers (2 views x 2 projections)
@@ -317,6 +318,18 @@ class RoiDetectionWidget(QWidget):
 
         if not data_path or not os.path.exists(data_path):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        # Check if local computation is possible
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not self.has_pyspim and not use_remote:
+            QMessageBox.warning(
+                self, "pyspim Not Available",
+                "Local computation requires pyspim, which is not installed.\n\n"
+                "Either:\n"
+                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
+                "2. Install pyspim: pip install napari-pyspim[full]"
+            )
             return
 
         # Remove any existing layers
