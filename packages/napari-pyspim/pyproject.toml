@@ -33,7 +33,11 @@ dependencies = [
     "pyqt5==5.15.11",
     "matplotlib>=3.5.0",
     "pyqt5-qt5==5.15.2",
-    "cupy-cuda13x>=10.0.0",
+    "cupy-cuda12x>=10.0.0",
+    "paramiko>=5.0.0",
+    "msgpack>=1.1.1",
+    "fsspec>=2025.7.0",
+    "sshfs>=2025.11.0",
 ]
 
 [project.urls]
