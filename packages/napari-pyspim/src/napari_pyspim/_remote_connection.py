@@ -272,7 +272,7 @@ class RemoteConnectionWidget(QWidget):
 
     def _disconnect(self):
         """Disconnect from remote server."""
-        self._client.disconnect()
+        self._client.disconnect_ssh()
 
     def _set_connecting_state(self, connecting: bool):
         """Update UI for connecting/disconnecting state."""

@@ -16,8 +16,7 @@ except ImportError:
     print("Warning: CuPy not available, using NumPy (CPU only)")
 import numpy as np
 from napari.utils.transforms import Affine
-from PyQt5.QtCore import pyqtSignal
-from qtpy.QtCore import QThread, QTimer
+from qtpy.QtCore import QThread, QTimer, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -36,6 +35,8 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from ._sftp_browser import SftpBrowserDialog
+
 # Lazy imports to avoid CUDA compilation at module level
 # from pyspim.reg import pcc, powell
 # from pyspim.interp import affine
@@ -44,9 +45,9 @@ from qtpy.QtWidgets import (
 class LoadDeskewWorker(QThread):
     """Worker thread for loading data, deskewing, and computing projections."""
 
-    ready = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(str)
+    ready = Signal(dict)
+    error_occurred = Signal(str)
+    progress_updated = Signal(str)
 
     def __init__(
         self,
@@ -279,9 +280,9 @@ class LoadDeskewWorker(QThread):
 class RegistrationWorker(QThread):
     """Worker thread for registration."""
 
-    registered = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(str)
+    registered = Signal(dict)
+    error_occurred = Signal(str)
+    progress_updated = Signal(str)
 
     def __init__(
         self,
@@ -494,9 +495,9 @@ class RegistrationWorker(QThread):
 class ApplyWorker(QThread):
     """Worker thread for applying registration transformations to specified ranges."""
 
-    finished = pyqtSignal()
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(str, int)  # message, percentage (0-100)
+    finished = Signal()
+    error_occurred = Signal(str)
+    progress_updated = Signal(str, int)  # message, percentage (0-100)
 
     def __init__(
         self,
@@ -850,7 +851,7 @@ class RegistrationWidget(QWidget):
     and automated registration.
     """
 
-    registered = pyqtSignal(dict)
+    registered = Signal(dict)
 
     def __init__(self, viewer, remote_client=None, has_pyspim=True):
         super().__init__()
@@ -1173,20 +1174,33 @@ class RegistrationWidget(QWidget):
         self.path_edit.textChanged.connect(self._update_apply_section)
 
     def browse_data_path(self):
-        """Open file dialog to select data path."""
-        path = QFileDialog.getExistingDirectory(
-            self, "Select μManager Acquisition Folder"
-        )
+        """Open file dialog to select data path.
+        
+        Uses SFTP browser when connected to a remote server, otherwise local dialog.
+        """
+        if self.remote_client is not None and self.remote_client.is_connected:
+            path = SftpBrowserDialog.browse(
+                self.remote_client, parent=self
+            )
+        else:
+            path = QFileDialog.getExistingDirectory(
+                self, "Select μManager Acquisition Folder"
+            )
         if path:
             self.path_edit.setText(path)
 
     def validate_path(self):
         """Validate the selected data path."""
         path = self.path_edit.text()
-        if path and os.path.exists(path):
+        if not path:
+            self.load_deskew_button.setEnabled(False)
+            return
+        # Accept any non-empty path when in remote mode (SFTP browser is trusted)
+        use_remote = self.remote_client is not None and self.remote_client.is_connected
+        if use_remote:
             self.load_deskew_button.setEnabled(True)
         else:
-            self.load_deskew_button.setEnabled(False)
+            self.load_deskew_button.setEnabled(os.path.exists(path))
 
     def _on_multi_pos_toggled(self, checked: bool):
         """Handle Multi-Position checkbox toggled."""
@@ -1194,7 +1208,9 @@ class RegistrationWidget(QWidget):
         if checked:
             # Try to auto-detect number of positions from the data
             path = self.path_edit.text()
-            if path and os.path.exists(path):
+            # Skip auto-detection in remote mode (requires local data access)
+            use_remote = self.remote_client is not None and self.remote_client.is_connected
+            if path and (not use_remote) and os.path.exists(path):
                 try:
                     from pyspim.data import dispim as data
                     with data.uManagerAcquisition(path, True, np) as acq:
@@ -1256,12 +1272,11 @@ class RegistrationWidget(QWidget):
         channel = self.channel_spin.value() - 1  # Convert to 0-indexed
         projection_type = self.projection_combo.currentText()
 
-        if not data_path or not os.path.exists(data_path):
-            QMessageBox.warning(self, "Error", "Please select a valid data path")
-            return
-
         # Check if local computation is possible
         use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not data_path or (not use_remote and not os.path.exists(data_path)):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
         if not self.has_pyspim and not use_remote:
             QMessageBox.warning(
                 self, "pyspim Not Available",
@@ -1842,7 +1857,8 @@ class RegistrationWidget(QWidget):
     def save_registration_params(self):
         """Save registration parameters to a JSON file in the Data Path folder."""
         data_path = self.path_edit.text()
-        if not data_path or not os.path.exists(data_path):
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not data_path or (not use_remote and not os.path.exists(data_path)):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
 
@@ -1907,7 +1923,8 @@ class RegistrationWidget(QWidget):
             Returns (1, 1) if detection fails.
         """
         data_path = self.path_edit.text()
-        if not data_path or not os.path.exists(data_path):
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not data_path or (not use_remote and not os.path.exists(data_path)):
             return (1, 1)
 
         multi_pos = self.multi_pos_checkbox.isChecked()
@@ -1938,12 +1955,13 @@ class RegistrationWidget(QWidget):
     def _update_apply_section(self):
         """Update Apply section based on existence of deskew_registration_params.json."""
         data_path = self.path_edit.text()
-        if not data_path or not os.path.exists(data_path):
+        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not data_path or (not use_remote and not os.path.exists(data_path)):
             self._set_apply_enabled(False)
             return
 
         params_path = os.path.join(data_path, "deskew_registration_params.json")
-        if os.path.exists(params_path):
+        if use_remote or os.path.exists(params_path):
             n_time, n_chan = self._detect_dataset_dimensions()
             self.time_min_spin.setRange(0, max(0, n_time - 1))
             self.time_max_spin.setRange(0, max(0, n_time - 1))
@@ -1968,12 +1986,11 @@ class RegistrationWidget(QWidget):
     def apply_registration(self):
         """Apply saved registration transformations to specified ranges."""
         data_path = self.path_edit.text()
-        if not data_path or not os.path.exists(data_path):
-            QMessageBox.warning(self, "Error", "Please select a valid data path")
-            return
-
         # Check if local computation is possible
         use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not data_path or (not use_remote and not os.path.exists(data_path)):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
         if not self.has_pyspim and not use_remote:
             QMessageBox.warning(
                 self, "pyspim Not Available",
@@ -1985,7 +2002,7 @@ class RegistrationWidget(QWidget):
             return
 
         params_path = os.path.join(data_path, "deskew_registration_params.json")
-        if not os.path.exists(params_path):
+        if not use_remote and not os.path.exists(params_path):
             QMessageBox.warning(self, "Error", "Registration parameters file not found")
             return
 

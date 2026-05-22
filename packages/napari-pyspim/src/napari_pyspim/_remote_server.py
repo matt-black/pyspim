@@ -98,7 +98,7 @@ def cleanup_temp_dirs():
 
 # --- Command Handlers ---
 
-def handle_ping(params):
+def handle_ping(params, **kwargs):
     """Health check."""
     import pyspim
     return {
@@ -108,7 +108,7 @@ def handle_ping(params):
     }
 
 
-def handle_compute_projections(params):
+def handle_compute_projections(params, request_id=None):
     """Load data and compute projections for ROI detection."""
     from pyspim.data import dispim as data
 
@@ -119,6 +119,8 @@ def handle_compute_projections(params):
     time = params.get('time', 0)
     position = params.get('position', 0)
 
+    send_response(request_id, None, progress="Server: loading data...")
+
     with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
         if multi_pos:
             volume_a = acq.get(position, 'a', channel, time)
@@ -126,6 +128,8 @@ def handle_compute_projections(params):
         else:
             volume_a = acq.get('a', channel, time)
             volume_b = acq.get('b', channel, time)
+
+    send_response(request_id, None, progress="Server: data loaded, computing projections...")
 
     def compute_projs(vol, proj_type):
         if proj_type == 'max':
@@ -144,6 +148,8 @@ def handle_compute_projections(params):
     yx_proj_a, zy_proj_a = compute_projs(volume_a, projection_type)
     yx_proj_b, zy_proj_b = compute_projs(volume_b, projection_type)
 
+    send_response(request_id, None, progress="Server: projections computed, sending result...")
+
     return {
         'yx_proj_a': yx_proj_a,
         'zy_proj_a': zy_proj_a,
@@ -155,7 +161,7 @@ def handle_compute_projections(params):
     }
 
 
-def handle_load_deskew(params):
+def handle_load_deskew(params, **kwargs):
     """Load data, deskew, compute projections, and save volumes as zarr."""
     import zarr
     from pyspim.data import dispim as data
@@ -302,7 +308,7 @@ def handle_load_deskew(params):
     }
 
 
-def handle_register(params):
+def handle_register(params, **kwargs):
     """Register two deskewed volumes."""
     try:
         import cupy as cp
@@ -420,7 +426,7 @@ def handle_register(params):
     }
 
 
-def handle_deconvolve(params):
+def handle_deconvolve(params, **kwargs):
     """Perform dual-view deconvolution."""
     try:
         import cupy
@@ -523,7 +529,7 @@ def handle_deconvolve(params):
     }
 
 
-def handle_save_zarr(params):
+def handle_save_zarr(params, **kwargs):
     """Move zarr archive from temp to permanent location."""
     import shutil
     temp_path = params['temp_path']
@@ -543,7 +549,7 @@ def handle_save_zarr(params):
     return {'success': True, 'permanent_path': permanent_path}
 
 
-def handle_cleanup_zarr(params):
+def handle_cleanup_zarr(params, **kwargs):
     """Remove a temp zarr directory."""
     import shutil
     temp_path = params.get('temp_path')
@@ -554,7 +560,7 @@ def handle_cleanup_zarr(params):
     return {'success': True}
 
 
-def handle_list_directory(params):
+def handle_list_directory(params, **kwargs):
     """List directory contents via os.listdir."""
     remote_path = params['path']
     try:
@@ -571,7 +577,7 @@ def handle_list_directory(params):
         return {'entries': [], 'path': remote_path, 'error': str(e)}
 
 
-def handle_check_path(params):
+def handle_check_path(params, **kwargs):
     """Check if a path exists and is a directory."""
     path = params['path']
     return {
@@ -621,8 +627,10 @@ def main():
                 send_response(request_id, None, error=f"Unknown command: {command}")
                 continue
 
+            send_response(request_id, None, progress=f"Server: received '{command}' command")
+
             try:
-                result = handler(params)
+                result = handler(params, request_id=request_id)
                 send_response(request_id, result)
             except Exception as e:
                 traceback.print_exc(file=sys.stderr)

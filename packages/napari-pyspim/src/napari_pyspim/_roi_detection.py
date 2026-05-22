@@ -6,8 +6,7 @@ import json
 import os
 
 import numpy as np
-from PyQt5.QtCore import pyqtSignal
-from qtpy.QtCore import QThread, QTimer
+from qtpy.QtCore import QThread, QTimer, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,12 +24,15 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from ._sftp_browser import SftpBrowserDialog
+
 
 class ProjectionLoaderWorker(QThread):
     """Worker thread for loading data and computing projections for both views."""
 
-    projections_loaded = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
+    projections_loaded = Signal(dict)
+    error_occurred = Signal(str)
+    progress = Signal(str)
 
     def __init__(
         self,
@@ -113,6 +115,11 @@ class ProjectionLoaderWorker(QThread):
     def _run_remote(self):
         """Load data and compute projections via remote server."""
         try:
+            # Bridge remote_client progress messages through this worker
+            self.remote_client.progress.connect(self.progress.emit)
+
+            self.progress.emit("Sending command to remote server...")
+
             result = self.remote_client.send_command_blocking("compute_projections", {
                 "data_path": self.data_path,
                 "channel": self.channel,
@@ -121,6 +128,9 @@ class ProjectionLoaderWorker(QThread):
                 "time": self.time,
                 "position": self.position,
             })
+
+            self.progress.emit("Receiving results from remote server...")
+
             # Convert shape lists to tuples for compatibility
             if "volume_shape_a" in result and isinstance(result["volume_shape_a"], list):
                 result["volume_shape_a"] = tuple(result["volume_shape_a"])
@@ -136,7 +146,7 @@ class ProjectionLoaderWorker(QThread):
 class RoiDetectionWidget(QWidget):
     """Widget for manual ROI detection and cropping."""
 
-    roi_applied = pyqtSignal(dict)
+    roi_applied = Signal(dict)
 
     def __init__(self, viewer, remote_client=None, has_pyspim=True):
         super().__init__()
@@ -246,28 +256,43 @@ class RoiDetectionWidget(QWidget):
         self.path_edit.textChanged.connect(self.validate_path)
 
     def browse_data_path(self):
-        """Open file dialog to select data path."""
-        path = QFileDialog.getExistingDirectory(
-            self, "Select μManager Acquisition Folder"
-        )
+        """Open file dialog to select data path.
+        
+        Uses SFTP browser when connected to a remote server, otherwise local dialog.
+        """
+        if self.remote_client is not None and self.remote_client.is_connected:
+            path = SftpBrowserDialog.browse(
+                self.remote_client, parent=self
+            )
+        else:
+            path = QFileDialog.getExistingDirectory(
+                self, "Select μManager Acquisition Folder"
+            )
         if path:
             self.path_edit.setText(path)
 
     def validate_path(self):
         """Validate the selected data path."""
         path = self.path_edit.text()
-        if path and os.path.exists(path):
+        if not path:
+            self.load_button.setEnabled(False)
+            return
+        # Accept any non-empty path when in remote mode (SFTP browser is trusted)
+        use_remote = self.remote_client is not None and self.remote_client.is_connected
+        if use_remote:
             self.load_button.setEnabled(True)
         else:
-            self.load_button.setEnabled(False)
+            self.load_button.setEnabled(os.path.exists(path))
 
     def _on_multi_pos_toggled(self, checked: bool):
         """Handle Multi-Position checkbox toggled."""
         self.position_spin.setVisible(checked)
         if checked:
-            # Try to auto-detect number of positions from the data
+            # Try to auto-detection number of positions from the data
             path = self.path_edit.text()
-            if path and os.path.exists(path):
+            # Skip auto-detection in remote mode (requires local data access)
+            use_remote = self.remote_client is not None and self.remote_client.is_connected
+            if path and (not use_remote) and os.path.exists(path):
                 try:
                     from pyspim.data import dispim as data
                     with data.uManagerAcquisition(path, True, np) as acq:
@@ -316,12 +341,11 @@ class RoiDetectionWidget(QWidget):
         time = self.time_spin.value()
         position = self.position_spin.value()
 
-        if not data_path or not os.path.exists(data_path):
-            QMessageBox.warning(self, "Error", "Please select a valid data path")
-            return
-
         # Check if local computation is possible
         use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if not data_path or (not use_remote and not os.path.exists(data_path)):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
         if not self.has_pyspim and not use_remote:
             QMessageBox.warning(
                 self, "pyspim Not Available",
@@ -354,6 +378,7 @@ class RoiDetectionWidget(QWidget):
         )
         self.loader_worker.projections_loaded.connect(self.on_projections_loaded)
         self.loader_worker.error_occurred.connect(self.on_error)
+        self.loader_worker.progress.connect(self.on_progress)
         self.loader_worker.start()
 
     def on_projections_loaded(self, result):
@@ -619,6 +644,10 @@ class RoiDetectionWidget(QWidget):
         self.status_label.setText("Error during operation")
         self.load_button.setEnabled(True)
         self.progress_bar.setVisible(False)
+
+    def on_progress(self, message):
+        """Handle progress update from worker."""
+        self.status_label.setText(message)
 
     def set_input_data(self, data_dict):
         """Set input data from previous step (for backward compatibility)."""

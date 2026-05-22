@@ -12,7 +12,7 @@ import tifffile
 import zarr
 from scipy import ndimage
 
-from PyQt5.QtCore import pyqtSignal
+from qtpy.QtCore import Signal
 
 from ._psf import generate_psf_im, normalize_psf_im
 from qtpy.QtCore import QThread, QTimer
@@ -88,9 +88,9 @@ def make_gaussian_psf_volume(
 class DeconvolutionWorker(QThread):
     """Worker thread for deconvolution."""
 
-    finished = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(str, int)  # message, percentage (0-100)
+    finished = Signal(dict)
+    error_occurred = Signal(str)
+    progress_updated = Signal(str, int)  # message, percentage (0-100)
 
     def __init__(
         self,
@@ -315,7 +315,7 @@ class DeconvolutionWorker(QThread):
 class DeconvolutionWidget(QWidget):
     """Widget for Richardson-Lucy deconvolution."""
 
-    deconvolved = pyqtSignal(dict)
+    deconvolved = Signal(dict)
 
     def __init__(self, viewer, remote_client=None, has_pyspim=True):
         super().__init__()

@@ -9,6 +9,7 @@ import importlib.resources
 import json
 import os
 import queue
+import time
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -16,7 +17,7 @@ from typing import Any, Callable, Dict, Optional
 import msgpack
 import numpy as np
 import paramiko
-from PyQt5.QtCore import pyqtSignal, pyqtSlot, QThread
+from qtpy.QtCore import QObject, Signal, Slot, QThread
 
 
 def encode_array(obj):
@@ -48,6 +49,21 @@ def _read_exact(stream, n):
             break
         data += chunk
     return data
+
+
+def _read_message(stdout):
+    """Read a single length-prefixed MessagePack message from stdout.
+
+    Returns the unpacked message dict, or None on EOF/connection error.
+    """
+    header = _read_exact(stdout, 8)
+    if len(header) < 8:
+        return None  # EOF
+    length = int.from_bytes(header, 'big')
+    data = _read_exact(stdout, length)
+    if len(data) < length:
+        return None  # EOF
+    return msgpack.unpackb(data, ext_hook=decode_array, raw=False)
 
 
 class _SenderThread(QThread):
@@ -90,7 +106,7 @@ class _SenderThread(QThread):
 class _ReceiverThread(QThread):
     """Thread for receiving messages from the remote server."""
 
-    message_received = pyqtSignal(dict)
+    message_received = Signal(dict)
 
     def __init__(self, stdout_stream):
         super().__init__()
@@ -105,20 +121,15 @@ class _ReceiverThread(QThread):
         """Read messages from stdout."""
         while self._running:
             try:
-                header = _read_exact(self._stdout, 8)
-                if len(header) < 8:
+                message = _read_message(self._stdout)
+                if message is None:
                     break  # EOF
-                length = int.from_bytes(header, 'big')
-                data = _read_exact(self._stdout, length)
-                if len(data) < length:
-                    break
-                message = msgpack.unpackb(data, ext_hook=decode_array, raw=False)
                 self.message_received.emit(message)
             except (OSError, EOFError, msgpack.ExtraData):
                 break
 
 
-class RemoteClient:
+class RemoteClient(QObject):
     """Manages SSH connection and communication with remote compute server.
 
     Signals:
@@ -128,12 +139,13 @@ class RemoteClient:
         progress: Emitted with progress updates from remote server (str).
     """
 
-    connected = pyqtSignal()
-    disconnected = pyqtSignal()
-    error = pyqtSignal(str)
-    progress = pyqtSignal(str)
+    connected = Signal()
+    disconnected = Signal()
+    error = Signal(str)
+    progress = Signal(str)
 
-    def __init__(self):
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._ssh = None  # paramiko.SSHClient
         self._transport = None  # paramiko.Transport
         self._sftp = None  # paramiko.SFTPClient
@@ -208,6 +220,8 @@ class RemoteClient:
             self.key_path = key_path
             self.remote_venv = remote_venv
 
+            self.progress.emit(f"Connecting to {host}:{port}...")
+
             # Create SSH client
             self._ssh = paramiko.SSHClient()
             self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -248,11 +262,18 @@ class RemoteClient:
 
         except Exception as e:
             self.error.emit(f"Connection failed: {e}")
-            self.disconnect()
+            self.disconnect_ssh()
             return False
 
     def _start_remote_server(self):
-        """Upload remote server script and start it on the remote server."""
+        """Upload remote server script and start it on the remote server.
+
+        Reads the server's "ready" message to verify the process started
+        successfully before returning.  Raises RuntimeError if the server
+        fails to start or does not send a valid ready message.
+        """
+        self.progress.emit("Uploading server script...")
+
         # Get the remote server script content
         try:
             server_source = importlib.resources.files('napari_pyspim').joinpath('_remote_server.py').read_text()
@@ -275,18 +296,65 @@ class RemoteClient:
         else:
             cmd = f'python3 {remote_script_path}'
 
+        self.progress.emit("Starting remote server process...")
+
         # Open session and get stdin/stdout
         channel = self._transport.open_session()
         channel.get_pty()
         channel.exec_command(cmd)
-        self._stdin = channel.makefile('wb', buffering=0)
-        self._stdout = channel.makefile('rb', buffering=0)
+        self._stdin = channel.makefile('wb', 0)
+        self._stdout = channel.makefile('rb', 0)
+
+        # --- Health check: read the server's "ready" message ---
+        # The remote server sends a ready message immediately on startup.
+        # Read it synchronously to verify the process is alive before
+        # handing the streams over to the sender/receiver threads.
+        self.progress.emit("Waiting for server ready message...")
+
+        ready_message = None
+        deadline = time.monotonic() + 30.0
+
+        while time.monotonic() < deadline:
+            if channel.exit_status_ready():
+                # Process already exited -- try to collect any remaining output
+                # for diagnostics (PTY merges stdout and stderr).
+                exit_code = channel.recv_exit_status()
+                remaining_parts = []
+                _read_deadline = time.monotonic() + 3.0
+                while time.monotonic() < _read_deadline and channel.recv_ready():
+                    chunk = channel.recv(4096)
+                    if not chunk:
+                        break
+                    remaining_parts.append(chunk.decode(errors='replace'))
+                remaining_text = ''.join(remaining_parts).strip()
+                raise RuntimeError(
+                    f"Remote server process exited immediately (exit code {exit_code}). "
+                    f"Command: {cmd}"
+                    + (f"\nOutput: {remaining_text}" if remaining_text else "")
+                )
+            if channel.recv_ready():
+                ready_message = _read_message(self._stdout)
+                break
+            time.sleep(0.05)
+
+        if ready_message is None:
+            raise RuntimeError(
+                "Remote server did not send a ready message within 30 seconds. "
+                "The server process may have failed to start. "
+                f"Command used: {cmd}"
+            )
+
+        if not ready_message.get('success', False):
+            error_msg = ready_message.get('error', 'Unknown error')
+            raise RuntimeError(f"Remote server reported error on startup: {error_msg}")
+
+        self.progress.emit("Remote server ready.")
 
         # Start sender/receiver threads
         self._sender = _SenderThread(self._stdin)
         self._receiver = _ReceiverThread(self._stdout)
 
-    @pyqtSlot(dict)
+    @Slot(dict)
     def _on_message_received(self, message):
         """Handle incoming message from remote server."""
         request_id = message.get('request_id')
@@ -308,7 +376,7 @@ class RemoteClient:
             if not success and error:
                 self.error.emit(error)
 
-    def disconnect(self):
+    def disconnect_ssh(self):
         """Terminate remote session and close SSH connection."""
         self._connected = False
 
@@ -374,6 +442,14 @@ class RemoteClient:
             callback(False, None, 'Not connected to remote server')
             return
 
+        # Validate sender/receiver threads are still alive
+        if self._sender is None or not self._sender.isRunning():
+            callback(False, None, 'Sender thread is not running - connection may be broken')
+            return
+        if self._receiver is None or not self._receiver.isRunning():
+            callback(False, None, 'Receiver thread is not running - connection may be broken')
+            return
+
         request_id = self._next_request_id()
         with self._lock:
             self._pending_callbacks[request_id] = callback
@@ -383,6 +459,7 @@ class RemoteClient:
             'command': command,
             'params': params,
         }
+        self.progress.emit(f"Sending '{command}' command (id={request_id})...")
         self._sender.send(message)
 
     def send_command_blocking(self, command: str, params: dict,
@@ -406,11 +483,18 @@ class RemoteClient:
             result_queue.put((success, result, error))
 
         self.send_command(command, params, callback)
+        self.progress.emit(f"Waiting for '{command}' response (timeout={timeout}s)...")
 
         try:
             success, result, error = result_queue.get(timeout=timeout)
         except queue.Empty:
-            raise RuntimeError(f"Command '{command}' timed out after {timeout}s")
+            # Diagnose: check if threads are still alive
+            sender_ok = self._sender is not None and self._sender.isRunning()
+            receiver_ok = self._receiver is not None and self._receiver.isRunning()
+            raise RuntimeError(
+                f"Command '{command}' timed out after {timeout}s. "
+                f"Sender thread alive: {sender_ok}, Receiver thread alive: {receiver_ok}"
+            )
 
         if not success:
             raise RuntimeError(f"Command '{command}' failed: {error}")
