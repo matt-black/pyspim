@@ -47,6 +47,9 @@ Documentation = "https://github.com/matt-black/pyspim/wiki"
 SourceCode = "https://github.com/matt-black/pyspim"
 UserSupport = "https://github.com/matt-black/pyspim/issues"
 
+[project.scripts]
+pyspim-remote-server = "napari_pyspim._remote_server:main"
+
 [project.optional-dependencies]
 testing = [
     "tox",

@@ -16,8 +16,7 @@ except ImportError:
     print("Warning: CuPy not available, using NumPy (CPU only)")
 import numpy as np
 from napari.utils.transforms import Affine
-from PyQt5.QtCore import pyqtSignal
-from qtpy.QtCore import QThread, QTimer
+from qtpy.QtCore import QThread, QTimer, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -44,9 +43,9 @@ from qtpy.QtWidgets import (
 class LoadDeskewWorker(QThread):
     """Worker thread for loading data, deskewing, and computing projections."""
 
-    ready = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(str)
+    ready = Signal(dict)
+    error_occurred = Signal(str)
+    progress_updated = Signal(str)
 
     def __init__(
         self,
@@ -242,9 +241,9 @@ class LoadDeskewWorker(QThread):
 class RegistrationWorker(QThread):
     """Worker thread for registration."""
 
-    registered = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(str)
+    registered = Signal(dict)
+    error_occurred = Signal(str)
+    progress_updated = Signal(str)
 
     def __init__(
         self,
@@ -400,9 +399,9 @@ class RegistrationWorker(QThread):
 class ApplyWorker(QThread):
     """Worker thread for applying registration transformations to specified ranges."""
 
-    finished = pyqtSignal()
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(str, int)  # message, percentage (0-100)
+    finished = Signal()
+    error_occurred = Signal(str)
+    progress_updated = Signal(str, int)  # message, percentage (0-100)
 
     def __init__(
         self,
@@ -756,7 +755,7 @@ class RegistrationWidget(QWidget):
     and automated registration.
     """
 
-    registered = pyqtSignal(dict)
+    registered = Signal(dict)
 
     def __init__(self, viewer):
         super().__init__()
