@@ -7,6 +7,7 @@ Can be run standalone via: pyspim-remote-server
 Or executed by the client after SFTP upload.
 """
 
+import json
 import logging
 import struct
 import sys
@@ -22,6 +23,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 START_TIME: float = time.time()
+
+# ---------------------------------------------------------------------------
+# Session storage for deskewed volumes
+# ---------------------------------------------------------------------------
+
+import uuid
+
+SESSIONS: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +174,9 @@ def handle_compute_projections(params: dict) -> dict:
             volume_a = acq.get("a", channel, time)
             volume_b = acq.get("b", channel, time)
 
-    # Compute projections
-    yx_proj_a, zy_proj_a = _compute_projections(volume_a, projection_type)
-    yx_proj_b, zy_proj_b = _compute_projections(volume_b, projection_type)
+    # Compute projections (only YX and ZY needed for ROI detection)
+    yx_proj_a, zy_proj_a, _ = _compute_projections(volume_a, projection_type)
+    yx_proj_b, zy_proj_b, _ = _compute_projections(volume_b, projection_type)
 
     return {
         "yx_proj_a": yx_proj_a,
@@ -180,21 +189,32 @@ def handle_compute_projections(params: dict) -> dict:
 
 
 def _compute_projections(volume, proj_type):
-    """Compute YX and ZY projections from a volume."""
-    import numpy as np
+    """Compute YX, ZY, and XZ projections from a volume."""
+    try:
+        import cupy as np
+        _HAS_CUPY = True
+    except:
+        import numpy as np
+        _HAS_CUPY = False
 
     if proj_type == "max":
-        yx_proj = np.max(volume, axis=0)
-        zy_proj = np.max(volume, axis=2)
+        yx_proj = np.max(volume, axis=0)  # shape: (Y, X)
+        zy_proj = np.max(volume, axis=2)  # shape: (Z, Y)
+        xz_proj = np.max(volume, axis=1)  # shape: (Z, X)
     elif proj_type == "sum":
         yx_proj = np.sum(volume, axis=0)
         zy_proj = np.sum(volume, axis=2)
+        xz_proj = np.sum(volume, axis=1)
     elif proj_type == "mean":
         yx_proj = np.mean(volume, axis=0)
         zy_proj = np.mean(volume, axis=2)
+        xz_proj = np.mean(volume, axis=1)
     else:
         raise ValueError(f"Unknown projection type: {proj_type}")
-    return yx_proj, zy_proj
+    if _HAS_CUPY:
+        return yx_proj.get(), zy_proj.get(), xz_proj.get()
+    else:
+        return yx_proj, zy_proj, xz_proj
 
 
 def handle_query_positions(params: dict) -> dict:
@@ -226,9 +246,180 @@ def handle_load_deskew(params: dict) -> dict:
 
     Mirrors ``LoadDeskewWorker.run()`` from ``_registration.py``.
 
-    TODO: Implement in Phase 4.
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+        channel : int  (0-indexed)
+        projection_type : str  ('max', 'sum', 'mean')
+        pixel_size : float
+        step_size : float
+        theta : float  (in radians)
+        method : str  ('orthogonal', 'dispim', 'shear')
+        ignore_bbox : bool
+        multi_pos : bool
+        time : int
+        position : int
+        auto_crop : bool
+
+    Returns
+    -------
+    dict with keys: session_id, yx_proj_a, zy_proj_a, xz_proj_a,
+                    yx_proj_b, zy_proj_b, xz_proj_b,
+                    volume_shape_a, volume_shape_b, method, step_size_lat
     """
-    raise NotImplementedError("load_deskew not yet implemented")
+    import math
+    try:
+        import cupy as np
+    except:
+        import numpy as np
+    import os
+
+    data_path = params["data_path"]
+    channel = params["channel"]
+    projection_type = params["projection_type"]
+    pixel_size = params["pixel_size"]
+    step_size = params["step_size"]
+    theta = params["theta"]
+    method = params["method"]
+    ignore_bbox = params.get("ignore_bbox", False)
+    multi_pos = params.get("multi_pos", False)
+    time = params.get("time", 0)
+    position = params.get("position", 0)
+    auto_crop = params.get("auto_crop", True)
+
+    from pyspim.data import dispim as data
+    from pyspim import deskew as dsk
+
+    # --- Load bounding box if present ---
+    window = None
+    if not ignore_bbox:
+        bbox_path = os.path.join(data_path, "bbox_raw.json")
+        if os.path.exists(bbox_path):
+            try:
+                with open(bbox_path, "r") as f:
+                    bbox = json.load(f)
+                window = (
+                    slice(bbox[0][0], bbox[0][1]),
+                    slice(bbox[1][0], bbox[1][1]),
+                    slice(bbox[2][0], bbox[2][1]),
+                )
+            except (json.JSONDecodeError, IndexError, TypeError):
+                pass
+
+    # --- Load data ---
+    with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+        if multi_pos:
+            volume_a = acq.get(position, "a", channel, time, window=window)
+            volume_b = acq.get(position, "b", channel, time, window=window)
+        else:
+            volume_a = acq.get("a", channel, time, window=window)
+            volume_b = acq.get("b", channel, time, window=window)
+
+    # --- Calculate lateral step size ---
+    step_size_lat = step_size / math.cos(theta)
+
+    # --- Deskew View A (direction = 1) ---
+    if method == "shear":
+        deskew_kwargs_a = {
+            "rotation_thetas": (0, 0, 0),
+            "interp_method": "linear",
+            "auto_crop": auto_crop,
+            "preserve_dtype": True,
+            "block_size": (8, 8, 8),
+        }
+    elif method == "ortho":
+        deskew_kwargs_a = {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+    else:
+        deskew_kwargs_a = {}
+
+    a_dsk = dsk.deskew_stage_scan(
+        volume_a, pixel_size, step_size_lat, 1,
+        theta=theta, method=method, **deskew_kwargs_a,
+    )
+    yx_proj_a, zy_proj_a, xz_proj_a = _compute_projections(a_dsk, projection_type)
+    try:
+        a_dsk = a_dsk.get()
+    except Exception:
+        pass
+    
+    # --- Deskew View B (direction = -1) ---
+    if method == "shear":
+        deskew_kwargs_b = {
+            "rotation_thetas": (0, math.pi / 2, 0),
+            "interp_method": "linear",
+            "auto_crop": auto_crop,
+            "preserve_dtype": True,
+            "block_size": (8, 8, 8),
+        }
+    elif method == "ortho":
+        deskew_kwargs_b = {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+    else:
+        deskew_kwargs_b = {}
+
+    b_dsk = dsk.deskew_stage_scan(
+        volume_b, pixel_size, step_size_lat, -1,
+        theta=theta, method=method, **deskew_kwargs_b,
+    )
+
+    if method == "dispim":
+        # Rotate the volume in the XZ plane so that it is in the same
+        # coordinate system as that of view A
+        from pyspim.interp.affine import transform as affine_transform
+        from pyspim._matrix import rotation_about_point_matrix
+
+        R = rotation_about_point_matrix(
+            0, math.pi / 2, 0,
+            *[s / 2 for s in b_dsk.shape[::-1]],
+        )
+        b_dsk = affine_transform(
+            b_dsk, R,
+            "linear", True,
+            (b_dsk.shape[0], b_dsk.shape[1], b_dsk.shape[2]),
+            8, 8, 8,
+        )
+
+    # --- Compute projections ---
+    yx_proj_b, zy_proj_b, xz_proj_b = _compute_projections(b_dsk, projection_type)
+
+    # --- Store deskewed volumes on server ---
+    session_id = str(uuid.uuid4())
+
+    try:
+        b_dsk = b_dsk.get()
+    except Exception:
+        pass
+
+    SESSIONS[session_id] = {
+        "a_deskewed": a_dsk,
+        "b_deskewed": b_dsk,
+        "volume_shape_a": a_dsk.shape,
+        "volume_shape_b": b_dsk.shape,
+        "method": method,
+        "step_size_lat": step_size_lat,
+        "pixel_size": pixel_size,
+        "theta": theta,
+    }
+
+    return {
+        "session_id": session_id,
+        "yx_proj_a": yx_proj_a,
+        "zy_proj_a": zy_proj_a,
+        "xz_proj_a": xz_proj_a,
+        "yx_proj_b": yx_proj_b,
+        "zy_proj_b": zy_proj_b,
+        "xz_proj_b": xz_proj_b,
+        "volume_shape_a": list(a_dsk.shape),
+        "volume_shape_b": list(b_dsk.shape),
+        "method": method,
+        "step_size_lat": step_size_lat,
+    }
 
 
 def handle_register(params: dict) -> dict:

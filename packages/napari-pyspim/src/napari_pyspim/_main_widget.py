@@ -54,7 +54,7 @@ class DispimPipelineWidget(QWidget):
             self.viewer, self.remote_client
         )
         self.roi_detection = RoiDetectionWidget(self.viewer, self.remote_client)
-        self.registration = RegistrationWidget(self.viewer)
+        self.registration = RegistrationWidget(self.viewer, self.remote_client)
         self.deconvolution = DeconvolutionWidget(self.viewer)
 
         # Add tabs
