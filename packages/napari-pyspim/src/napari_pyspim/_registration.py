@@ -295,7 +295,8 @@ class RegistrationWorker(QThread):
                 self.progress_updated.emit("Padding volumes to same size...")
                 # Pad volumes to same size
                 a_dsk, b_dsk = pad_to_same_size(self.a_deskewed, self.b_deskewed)
-
+            else:
+                a_dsk, b_dsk = self.a_deskewed, self.b_deskewed
             # Set up initial parameters and bounds
             self.progress_updated.emit("Setting up optimization parameters...")
 
