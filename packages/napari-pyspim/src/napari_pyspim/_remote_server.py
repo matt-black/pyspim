@@ -422,14 +422,245 @@ def handle_load_deskew(params: dict) -> dict:
     }
 
 
-def handle_register(params: dict) -> dict:
-    """Register two deskewed volumes.
+def _compute_common_crops_server(a_shape, b_shape, t0):
+    """Compute crop slices for both volumes to their common overlapping region.
 
-    Mirrors ``RegistrationWorker.run()`` from ``_registration.py``.
+    Server-side mirror of ``RegistrationWidget._compute_common_crops()``.
 
-    TODO: Implement in Phase 4.
+    Args:
+        a_shape: Shape of View A deskewed volume (Z, Y, X).
+        b_shape: Shape of View B deskewed volume (Z, Y, X).
+        t0: Pre-reg translation in pixel units [tz, ty, tx].
+
+    Returns:
+        Tuple of (a_slices, b_slices, cropped_shape) or (None, None, None) if no overlap.
     """
-    raise NotImplementedError("register not yet implemented")
+    Za, Ya, Xa = a_shape
+    Zb, Yb, Xb = b_shape
+    tz, ty, tx = t0
+
+    z_start_a = max(0, tz)
+    z_end_a = min(Za, tz + Zb)
+    y_start_a = max(0, ty)
+    y_end_a = min(Ya, ty + Yb)
+    x_start_a = max(0, tx)
+    x_end_a = min(Xa, tx + Xb)
+
+    if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
+        return None, None, None
+
+    z_start_b = max(0, -tz)
+    z_end_b = min(Zb, Za - tz)
+    y_start_b = max(0, -ty)
+    y_end_b = min(Yb, Ya - ty)
+    x_start_b = max(0, -tx)
+    x_end_b = min(Xb, Xa - tx)
+
+    shape_a = (
+        int(z_end_a - z_start_a),
+        int(y_end_a - y_start_a),
+        int(x_end_a - x_start_a),
+    )
+    shape_b = (
+        int(z_end_b - z_start_b),
+        int(y_end_b - y_start_b),
+        int(x_end_b - x_start_b),
+    )
+
+    cropped_shape = tuple(min(a, b) for a, b in zip(shape_a, shape_b))
+
+    a_slices = (
+        slice(int(z_start_a), int(z_start_a) + cropped_shape[0]),
+        slice(int(y_start_a), int(y_start_a) + cropped_shape[1]),
+        slice(int(x_start_a), int(x_start_a) + cropped_shape[2]),
+    )
+
+    b_slices = (
+        slice(int(z_start_b), int(z_start_b) + cropped_shape[0]),
+        slice(int(y_start_b), int(y_start_b) + cropped_shape[1]),
+        slice(int(x_start_b), int(x_start_b) + cropped_shape[2]),
+    )
+
+    return a_slices, b_slices, cropped_shape
+
+
+def handle_register(params: dict) -> dict:
+    """Register two deskewed volumes stored in a session.
+
+    Mirrors ``RegistrationWorker.run()`` from ``_registration.py`` but
+    operates on volumes already stored in ``SESSIONS`` (from a prior
+    ``load_deskew`` call).  Returns only the transform matrix and
+    correlation ratio, not the registered volumes themselves.
+
+    Parameters
+    ----------
+    params : dict
+        session_id : str
+        transform_type : str  ('t', 't+r', 't+r+s', 't+sh', 't+ssh', 't+sh+s')
+        pre_reg_translation : list  [tz, ty, tx] in pixel units
+        crop_to_common : bool
+        metric : str  ('nip', 'cr', 'ncc')
+        interp_method : str  ('linear', 'cubspl')
+        use_piecewise : bool
+        bound_translation : float
+        bound_rot_shear : float
+        bound_scale : float
+
+    Returns
+    -------
+    dict with keys: transform_matrix (nested list), correlation_ratio (float)
+    """
+    import math
+    import numpy as np
+    try:
+        import cupy as cp
+    except ImportError:
+        cp = np  # fallback to CPU
+
+    session_id = params["session_id"]
+    transform_type = params["transform_type"]
+    pre_reg_translation = params["pre_reg_translation"]  # [tz, ty, tx] in pixels
+    crop_to_common = params.get("crop_to_common", False)
+    metric = params.get("metric", "cr")
+    interp_method = params.get("interp_method", "cubspl")
+    use_piecewise = params.get("use_piecewise", True)
+    bound_translation = params.get("bound_translation", 20.0)
+    bound_rot_shear = params.get("bound_rot_shear", 5.0)
+    bound_scale = params.get("bound_scale", 0.05)
+
+    # --- Retrieve deskewed volumes from session ---
+    if session_id not in SESSIONS:
+        raise KeyError(f"Session '{session_id}' not found on server")
+
+    session = SESSIONS[session_id]
+    a_dsk = session["a_deskewed"]
+    b_dsk = session["b_deskewed"]
+
+    # --- Apply crop_to_common if requested ---
+    t0 = pre_reg_translation
+    if crop_to_common:
+        a_slices, b_slices, cropped_shape = _compute_common_crops_server(
+            a_dsk.shape, b_dsk.shape, t0
+        )
+        if a_slices is not None:
+            a_dsk = a_dsk[a_slices]
+            b_dsk = b_dsk[b_slices]
+            t0 = [0, 0, 0]  # Pre-reg translation accounted for by crop
+
+    # --- Pad volumes to same size if needed ---
+    from pyspim.util import pad_to_same_size
+    shp_a = a_dsk.shape
+    shp_b = b_dsk.shape
+    if shp_a[0] != shp_b[0] or shp_a[1] != shp_b[1] or shp_a[2] != shp_b[2]:
+        a_dsk, b_dsk = pad_to_same_size(a_dsk, b_dsk)
+
+    # --- Set up initial parameters and bounds ---
+    bt = bound_translation
+    br = bound_rot_shear
+    bs = bound_scale
+
+    if transform_type == "t":
+        par0 = list(t0)
+        bounds = [(t - bt, t + bt) for t in t0]
+    elif transform_type == "t+r":
+        par0 = list(t0) + [0, 0, 0]
+        bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3
+    elif transform_type == "t+r+s":
+        par0 = list(t0) + [0, 0, 0] + [1, 1, 1]
+        bounds = (
+            [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3 + [(1 - bs, 1 + bs)] * 3
+        )
+    elif transform_type == "t+sh":
+        par0 = list(t0) + [0, 0, 0, 0, 0, 0]
+        bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 6
+    elif transform_type == "t+ssh":
+        par0 = list(t0) + [0, 0, 0]
+        bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3
+    elif transform_type == "t+sh+s":
+        par0 = list(t0) + [0, 0, 0, 0, 0, 0] + [1, 1, 1]
+        bounds = (
+            [(t - bt, t + bt) for t in t0] + [(-br, br)] * 6 + [(1 - bs, 1 + bs)] * 3
+        )
+    else:
+        raise ValueError(f"Unknown transform type: {transform_type}")
+
+    par0 = np.array(par0, dtype=np.float64)
+
+    # --- Perform optimization ---
+    from pyspim.reg import powell
+    from pyspim.util import launch_params_for_volume
+
+    launch_par = launch_params_for_volume(a_dsk.shape, 8, 8, 8)
+
+    a_gpu = cp.asarray(a_dsk)
+    b_gpu = cp.asarray(b_dsk)
+
+    if use_piecewise:
+        T, res = powell.optimize_affine_piecewise(
+            a_gpu,
+            b_gpu,
+            metric=metric,
+            transform=transform_type,
+            interp_method=interp_method,
+            par0=par0,
+            bounds=bounds,
+            kernel_launch_params=launch_par,
+            verbose=False,
+        )
+    else:
+        T, res = powell.optimize_affine(
+            a_gpu,
+            b_gpu,
+            metric=metric,
+            transform=transform_type,
+            interp_method=interp_method,
+            par0=par0,
+            bounds=bounds,
+            kernel_launch_params=launch_par,
+            verbose=False,
+        )
+
+    # --- Extract results ---
+    if hasattr(T, "get"):
+        T = T.get()
+    if hasattr(T, "tolist"):
+        T_list = T.tolist()
+    else:
+        T_list = T
+
+    cr = 1 - res.fun
+
+    return {
+        "transform_matrix": T_list,
+        "correlation_ratio": cr,
+    }
+
+
+def handle_save_params(params: dict) -> dict:
+    """Save registration parameters to a JSON file on the remote server.
+
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+            Remote path to the data folder.
+        params_dict : dict
+            The parameters dictionary to serialize as JSON.
+
+    Returns
+    -------
+    dict with key: output_path (str)
+    """
+    import os
+
+    data_path = params["data_path"]
+    params_dict = params["params_dict"]
+
+    output_path = os.path.join(data_path, "deskew_registration_params.json")
+    with open(output_path, "w") as f:
+        json.dump(params_dict, f, indent=2)
+
+    return {"output_path": output_path}
 
 
 def handle_deconvolve(params: dict) -> dict:
@@ -473,6 +704,7 @@ COMMAND_HANDLERS = {
     "query_positions": handle_query_positions,
     "load_deskew": handle_load_deskew,
     "register": handle_register,
+    "save_params": handle_save_params,
     "deconvolve": handle_deconvolve,
     "apply_registration": handle_apply_registration,
     "save_zarr": handle_save_zarr,

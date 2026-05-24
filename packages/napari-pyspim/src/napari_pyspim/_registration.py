@@ -1688,20 +1688,41 @@ class RegistrationWidget(QWidget):
         return a_slices, b_slices, cropped_shape
 
     def register_data(self):
-        """Register the deskewed data using background worker."""
-        if self.a_deskewed is None or self.b_deskewed is None:
-            QMessageBox.warning(
-                self, "Error", "Please load and deskew data first"
-            )
-            return
+        """Register the deskewed data.
 
-        transform_type = self.transform_combo.currentText()
+        Uses remote server when connection is active and path is remote,
+        otherwise falls back to local execution using RegistrationWorker.
+        """
+        # In remote mode, we only need a valid session ID (volumes are on server)
+        # In local mode, we need the deskewed volumes locally
+        if self._remote_mode:
+            if not self._session_id:
+                QMessageBox.warning(
+                    self, "Error", "No active session. Please load and deskew data first."
+                )
+                return
+        else:
+            if self.a_deskewed is None or self.b_deskewed is None:
+                QMessageBox.warning(
+                    self, "Error", "Please load and deskew data first"
+                )
+                return
 
         self.register_button.setEnabled(False)
         self.load_deskew_button.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         self.status_label.setText("Starting registration...")
+
+        # Branch to local or remote execution
+        if self._remote_mode and self.remote_client:
+            self._register_remote()
+        else:
+            self._register_local()
+
+    def _register_local(self):
+        """Register locally using RegistrationWorker."""
+        transform_type = self.transform_combo.currentText()
 
         # Convert pre-reg transform from micrometers to pixel units
         pixel_size = self.pixel_size_spin.value()
@@ -1774,6 +1795,57 @@ class RegistrationWidget(QWidget):
         self.reg_worker.error_occurred.connect(self.on_error)
         self.reg_worker.progress_updated.connect(self.update_progress)
         self.reg_worker.start()
+
+    def _register_remote(self):
+        """Register via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self.on_error("Remote client not available")
+            return
+
+        # Convert pre-reg transform from micrometers to pixel units
+        pixel_size = self.pixel_size_spin.value()
+        pre_reg_translation = [t / pixel_size for t in self._pre_reg_transform]
+
+        # Map metric display name to internal string
+        metric_map = {
+            "Norm. Inner Prod.": "nip",
+            "Corr. Ratio": "cr",
+            "Norm. XCorr": "ncc",
+        }
+        metric = metric_map.get(self.metric_combo.currentText(), "cr")
+
+        # Map interpolation method display name to internal string
+        interp_method_map = {
+            "Linear": "linear",
+            "Cubic Spline": "cubspl",
+        }
+        interp_method = interp_method_map.get(self.interp_method_combo.currentText(), "cubspl")
+
+        params = {
+            "session_id": self._session_id,
+            "transform_type": self.transform_combo.currentText(),
+            "pre_reg_translation": pre_reg_translation,
+            "crop_to_common": self.crop_to_common_checkbox.isChecked(),
+            "metric": metric,
+            "interp_method": interp_method,
+            "use_piecewise": self.piecewise_checkbox.isChecked(),
+            "bound_translation": self.bound_translation_spin.value(),
+            "bound_rot_shear": self.bound_rot_shear_spin.value(),
+            "bound_scale": self.bound_scale_spin.value(),
+        }
+
+        # Store context for signal handler
+        self._pending_command_type = "register"
+
+        try:
+            self.remote_client.send_command(
+                command="register",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self.on_error(f"Failed to send command: {e}")
 
     def on_registered(self, result):
         """Handle successful registration."""
@@ -1889,6 +1961,60 @@ class RegistrationWidget(QWidget):
             if response.get("success"):
                 num_pos = response.get("result", {}).get("num_positions", 1)
                 self.position_spin.setRange(0, max(0, num_pos - 1))
+        elif self._pending_command_type == "register":
+            self._pending_command_type = None
+            if response.get("success"):
+                result = response.get("result", {})
+                self._on_register_ready_main(result)
+            else:
+                error_msg = response.get("error", "Unknown error")
+                self.on_error(error_msg)
+        elif self._pending_command_type == "save_params":
+            self._pending_command_type = None
+            if response.get("success"):
+                self.status_label.setText("Registration parameters saved on remote server!")
+            else:
+                error_msg = response.get("error", "Unknown error")
+                QMessageBox.critical(self, "Error", f"Failed to save parameters: {error_msg}")
+
+    def _on_register_ready_main(self, result):
+        """Handle successful remote registration results on main thread.
+
+        Unlike local registration, the remote server only returns the transform
+        matrix and correlation ratio (not the full registered volumes).
+        """
+        transform_matrix = result.get("transform_matrix")
+        cr = result.get("correlation_ratio", 0.0)
+
+        # Store for saving
+        self.registration_matrix = transform_matrix
+        self.correlation_ratio = cr
+
+        # Update status and results
+        self.status_label.setText("Registration completed on remote server!")
+
+        results_text = f"""
+        <b>Registration Results:</b><br>
+        Metric: {cr:.3f}<br>
+        (Volumes remain on remote server)
+        """
+        self.results_label.setText(results_text)
+
+        self.register_button.setEnabled(True)
+        self.load_deskew_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+
+        # Emit signal with registration results (no volumes in remote mode)
+        output_data = {
+            "transform_matrix": transform_matrix,
+            "correlation_ratio": cr,
+            "transform_type": self.transform_combo.currentText(),
+            "step_size": self.step_size_spin.value(),
+            "pixel_size": self.pixel_size_spin.value(),
+            "theta": self.theta_spin.value() * math.pi / 180,
+        }
+        self.registered.emit(output_data)
 
     def _on_remote_progress(self, message: str, percentage: int):
         """Handle progress signal from RemoteClient (runs on main thread)."""
@@ -1907,12 +2033,39 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setVisible(False)
 
     def save_registration_params(self):
-        """Save registration parameters to a JSON file in the Data Path folder."""
+        """Save registration parameters to a JSON file in the Data Path folder.
+
+        Uses remote server when connection is active and path is remote,
+        otherwise saves locally.
+        """
         data_path = self.path_edit.text()
-        if not data_path or not os.path.exists(data_path):
+        if not data_path:
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
 
+        # For local mode, validate path exists
+        if not self._remote_mode and not os.path.exists(data_path):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        # Check we have registration results
+        if self.registration_matrix is None or self.correlation_ratio is None:
+            QMessageBox.warning(
+                self, "Error", "Please register data before saving parameters."
+            )
+            return
+
+        # Build parameters dictionary
+        params_dict = self._build_registration_params()
+
+        # Branch to local or remote save
+        if self._remote_mode and self.remote_client:
+            self._save_params_remote(data_path, params_dict)
+        else:
+            self._save_params_local(data_path, params_dict)
+
+    def _build_registration_params(self) -> dict:
+        """Build the registration parameters dictionary from current UI state."""
         # Mapping dicts for display name to internal string
         metric_map = {
             "Norm. Inner Prod.": "nip",
@@ -1924,8 +2077,7 @@ class RegistrationWidget(QWidget):
             "Cubic Spline": "cubspl",
         }
 
-        # Build parameters dictionary
-        params = {
+        return {
             "deskewing_parameters": {
                 "method": self.method_combo.currentText(),
                 "step_size_um": self.step_size_spin.value(),
@@ -1954,16 +2106,41 @@ class RegistrationWidget(QWidget):
             "correlation_ratio": self.correlation_ratio,
         }
 
-        # Write JSON file
+    def _save_params_local(self, data_path: str, params_dict: dict):
+        """Save parameters to a JSON file locally."""
         output_path = os.path.join(data_path, "deskew_registration_params.json")
         try:
             with open(output_path, "w") as f:
-                json.dump(params, f, indent=2)
-            self.status_label.setText(f"Registration parameters saved!")
+                json.dump(params_dict, f, indent=2)
+            self.status_label.setText("Registration parameters saved!")
             # Enable Apply section after successful save
             self._update_apply_section()
         except (IOError, OSError) as e:
             QMessageBox.critical(self, "Error", f"Failed to save parameters: {e}")
+
+    def _save_params_remote(self, data_path: str, params_dict: dict):
+        """Save parameters via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self.on_error("Remote client not available")
+            return
+
+        params = {
+            "data_path": data_path,
+            "params_dict": params_dict,
+        }
+
+        # Store context for signal handler
+        self._pending_command_type = "save_params"
+
+        try:
+            self.remote_client.send_command(
+                command="save_params",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self.on_error(f"Failed to send command: {e}")
 
     def _detect_dataset_dimensions(self):
         """Detect the number of timepoints and channels from the dataset.
