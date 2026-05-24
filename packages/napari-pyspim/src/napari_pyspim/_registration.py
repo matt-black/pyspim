@@ -799,6 +799,7 @@ class RegistrationWidget(QWidget):
         self._pending_command_type = None  # 'load_deskew' or 'query_positions'
         self._pending_data_path = None
         self._session_id = None  # Server-side session ID for deskewed volumes
+        self._remote_params_saved = False  # Track if params file exists on remote
         self.setup_ui()
         # Connect to remote client signals if available
         if remote_client is not None:
@@ -1972,10 +1973,24 @@ class RegistrationWidget(QWidget):
         elif self._pending_command_type == "save_params":
             self._pending_command_type = None
             if response.get("success"):
+                self._remote_params_saved = True
                 self.status_label.setText("Registration parameters saved on remote server!")
+                self._update_apply_section()
             else:
                 error_msg = response.get("error", "Unknown error")
                 QMessageBox.critical(self, "Error", f"Failed to save parameters: {error_msg}")
+        elif self._pending_command_type == "apply_registration":
+            self._pending_command_type = None
+            if response.get("success"):
+                result = response.get("result", {})
+                output_folder = result.get("output_folder", "unknown")
+                self.status_label.setText(f"Apply completed! Output: {output_folder}")
+                self.progress_bar.setVisible(False)
+                self.apply_button.setEnabled(True)
+                self.load_deskew_button.setEnabled(True)
+            else:
+                error_msg = response.get("error", "Unknown error")
+                self._on_apply_error(error_msg)
 
     def _on_register_ready_main(self, result):
         """Handle successful remote registration results on main thread.
@@ -2102,7 +2117,7 @@ class RegistrationWidget(QWidget):
                 "bound_rot_shear": self.bound_rot_shear_spin.value(),
                 "bound_scale": self.bound_scale_spin.value(),
             },
-            "affine_registration_matrix": self.registration_matrix.tolist(),
+            "affine_registration_matrix": self.registration_matrix.tolist() if hasattr(self.registration_matrix, "tolist") else self.registration_matrix,
             "correlation_ratio": self.correlation_ratio,
         }
 
@@ -2180,9 +2195,26 @@ class RegistrationWidget(QWidget):
             return (1, 1)
 
     def _update_apply_section(self):
-        """Update Apply section based on existence of deskew_registration_params.json."""
+        """Update Apply section based on existence of deskew_registration_params.json.
+
+        In remote mode, relies on _remote_params_saved flag since os.path.exists
+        does not work for remote paths.
+        """
         data_path = self.path_edit.text()
-        if not data_path or not os.path.exists(data_path):
+        if not data_path:
+            self._set_apply_enabled(False)
+            return
+
+        # Remote mode: rely on flag set by save_params response
+        if self._remote_mode:
+            if self._remote_params_saved:
+                self._set_apply_enabled(True)
+            else:
+                self._set_apply_enabled(False)
+            return
+
+        # Local mode: check file system
+        if not os.path.exists(data_path):
             self._set_apply_enabled(False)
             return
 
@@ -2210,16 +2242,25 @@ class RegistrationWidget(QWidget):
         self.apply_button.setEnabled(enabled)
 
     def apply_registration(self):
-        """Apply saved registration transformations to specified ranges."""
+        """Apply saved registration transformations to specified ranges.
+
+        Uses remote server when connection is active and path is remote,
+        otherwise falls back to local execution using ApplyWorker.
+        """
         data_path = self.path_edit.text()
-        if not data_path or not os.path.exists(data_path):
+        if not data_path:
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
 
-        params_path = os.path.join(data_path, "deskew_registration_params.json")
-        if not os.path.exists(params_path):
-            QMessageBox.warning(self, "Error", "Registration parameters file not found")
-            return
+        # For local mode, validate path and params file exist
+        if not self._remote_mode:
+            if not os.path.exists(data_path):
+                QMessageBox.warning(self, "Error", "Please select a valid data path")
+                return
+            params_path = os.path.join(data_path, "deskew_registration_params.json")
+            if not os.path.exists(params_path):
+                QMessageBox.warning(self, "Error", "Registration parameters file not found")
+                return
 
         time_min = self.time_min_spin.value()
         time_max = self.time_max_spin.value()
@@ -2243,12 +2284,6 @@ class RegistrationWidget(QWidget):
         else:
             output_folder = os.path.join(data_path, "dskreg")
 
-        # Remove existing output folder
-        if os.path.exists(output_folder):
-            import shutil
-            shutil.rmtree(output_folder)
-        os.makedirs(output_folder, exist_ok=True)
-
         # Disable UI during processing
         self.apply_button.setEnabled(False)
         self.load_deskew_button.setEnabled(False)
@@ -2257,16 +2292,61 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setValue(0)
         self.status_label.setText("Starting apply...")
 
-        # Create and start worker
-        self.apply_worker = ApplyWorker(
-            data_path, params_path,
-            (time_min, time_max), (chan_min, chan_max),
-            multi_pos, position, output_folder, ignore_bbox,
-        )
-        self.apply_worker.finished.connect(self._on_apply_finished)
-        self.apply_worker.error_occurred.connect(self._on_apply_error)
-        self.apply_worker.progress_updated.connect(self._on_apply_progress)
-        self.apply_worker.start()
+        # Branch to local or remote execution
+        if self._remote_mode and self.remote_client:
+            self._apply_registration_remote(
+                data_path, output_folder,
+                (time_min, time_max), (chan_min, chan_max),
+                multi_pos, position, ignore_bbox,
+            )
+        else:
+            params_path = os.path.join(data_path, "deskew_registration_params.json")
+            self.apply_worker = ApplyWorker(
+                data_path, params_path,
+                (time_min, time_max), (chan_min, chan_max),
+                multi_pos, position, output_folder, ignore_bbox,
+            )
+            self.apply_worker.finished.connect(self._on_apply_finished)
+            self.apply_worker.error_occurred.connect(self._on_apply_error)
+            self.apply_worker.progress_updated.connect(self._on_apply_progress)
+            self.apply_worker.start()
+
+    def _apply_registration_remote(
+        self,
+        data_path: str,
+        output_folder: str,
+        time_range: tuple,
+        channel_range: tuple,
+        multi_pos: bool,
+        position: int,
+        ignore_bbox: bool,
+    ):
+        """Apply registration via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self._on_apply_error("Remote client not available")
+            return
+
+        params = {
+            "data_path": data_path,
+            "output_folder": output_folder,
+            "time_range": time_range,
+            "channel_range": channel_range,
+            "multi_pos": multi_pos,
+            "position": position,
+            "ignore_bbox": ignore_bbox,
+        }
+
+        self._pending_command_type = "apply_registration"
+
+        try:
+            self.remote_client.send_command(
+                command="apply_registration",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self._on_apply_error(f"Failed to send command: {e}")
 
     def _on_apply_progress(self, message: str, percentage: int):
         """Handle progress update from ApplyWorker."""

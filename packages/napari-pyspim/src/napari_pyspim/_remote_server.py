@@ -422,6 +422,38 @@ def handle_load_deskew(params: dict) -> dict:
     }
 
 
+def _normalize_deskew_method(method: str) -> str:
+    """Normalize deskew method name from UI display name to pyspim internal name."""
+    method_map = {
+        "orthogonal": "ortho",
+        "ortho": "ortho",
+        "dispim": "dispim",
+        "shear": "shear",
+    }
+    return method_map.get(method.lower(), method)
+
+
+def _get_deskew_kwargs(method: str) -> dict:
+    """Get kwargs for deskew based on method, matching ApplyWorker logic."""
+    import math
+
+    if method == "shear":
+        return {
+            "rotation_thetas": (0, 0, 0),
+            "interp_method": "linear",
+            "auto_crop": False,
+            "preserve_dtype": True,
+            "block_size": (8, 8, 8),
+        }
+    elif method == "ortho":
+        return {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+    else:  # dispim
+        return {"preserve_dtype": True}
+
+
 def _compute_common_crops_server(a_shape, b_shape, t0):
     """Compute crop slices for both volumes to their common overlapping region.
 
@@ -676,9 +708,262 @@ def handle_deconvolve(params: dict) -> dict:
 def handle_apply_registration(params: dict) -> dict:
     """Batch-apply deskew + registration across time/channel dimensions.
 
-    TODO: Implement in Phase 4.
+    Mirrors ApplyWorker.run() from _registration.py.
+
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+            Path to the μManager acquisition folder on the remote server.
+        output_folder : str
+            Path where output zarr files will be saved.
+        time_range : tuple
+            (time_min, time_max) inclusive range of timepoints.
+        channel_range : tuple
+            (chan_min, chan_max) 1-indexed inclusive range of channels.
+        multi_pos : bool
+            Whether this is a multi-position acquisition.
+        position : int
+            Position index for multi-position acquisitions.
+        ignore_bbox : bool
+            If True, ignore bbox_raw.json and load full dataset.
+
+    Returns
+    -------
+    dict with keys: output_folder, files_created (list of paths)
     """
-    raise NotImplementedError("apply_registration not yet implemented")
+    import math
+    import os
+    import shutil
+
+    import numpy as np
+    import zarr
+
+    try:
+        import cupy as cp
+    except ImportError:
+        cp = np
+
+    data_path = params["data_path"]
+    output_folder = params["output_folder"]
+    time_range = params["time_range"]
+    channel_range = params["channel_range"]
+    multi_pos = params.get("multi_pos", False)
+    position = params.get("position", 0)
+    ignore_bbox = params.get("ignore_bbox", False)
+    request_id = params.get("_request_id", 0)
+
+    from pyspim.data import dispim as data
+    from pyspim import deskew as dsk
+    from pyspim.interp import affine
+
+    # Load parameters from saved JSON file
+    params_path = os.path.join(data_path, "deskew_registration_params.json")
+    with open(params_path, "r") as f:
+        saved_params = json.load(f)
+
+    dp = saved_params["deskewing_parameters"]
+    method = _normalize_deskew_method(dp["method"])
+    step_size = dp["step_size_um"]
+    pixel_size = dp["pixel_size_um"]
+    theta_deg = dp["theta_degrees"]
+    theta_rad = theta_deg * math.pi / 180
+    affine_matrix = np.array(saved_params["affine_registration_matrix"])
+
+    rp = saved_params["registration_parameters"]
+    crop_to_common = rp.get("crop_to_common", False)
+    interp_method = rp.get("interp_method", "cubspl")
+    pre_reg = saved_params["pre_reg_transform"]
+    pre_reg_t = [
+        pre_reg["tz_um"] / pixel_size,
+        pre_reg["ty_um"] / pixel_size,
+        pre_reg["tx_um"] / pixel_size,
+    ]
+
+    step_size_lat = step_size / math.cos(theta_rad)
+    deskew_kwargs = _get_deskew_kwargs(method)
+
+    # Load bbox
+    window = None
+    if not ignore_bbox:
+        bbox_path = os.path.join(data_path, "bbox_raw.json")
+        if os.path.exists(bbox_path):
+            try:
+                with open(bbox_path, "r") as f:
+                    bbox = json.load(f)
+                window = (
+                    slice(bbox[0][0], bbox[0][1]),
+                    slice(bbox[1][0], bbox[1][1]),
+                    slice(bbox[2][0], bbox[2][1]),
+                )
+            except (json.JSONDecodeError, IndexError, TypeError):
+                pass
+
+    # Prepare output folder
+    if os.path.exists(output_folder):
+        shutil.rmtree(output_folder)
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Determine channel indices (0-indexed)
+    chan_start = channel_range[0] - 1
+    chan_end = channel_range[1] - 1
+    channels = list(range(chan_start, chan_end + 1))
+    n_channels = len(channels)
+
+    time_start, time_end = time_range
+    total_items = (time_end - time_start + 1) * len(channels)
+    current_item = 0
+    files_created = []
+
+    for t in range(time_start, time_end + 1):
+        # Process first channel to determine output shape
+        first_chan = channels[0]
+        send_progress(
+            sys.stdout, request_id,
+            f"Processing Time {t}, Channel {first_chan + 1} (determining shape)...", 0,
+        )
+
+        with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+            if multi_pos:
+                vol_a = acq.get(position, "a", first_chan, t, window=window)
+                vol_b = acq.get(position, "b", first_chan, t, window=window)
+            else:
+                vol_a = acq.get("a", first_chan, t, window=window)
+                vol_b = acq.get("b", first_chan, t, window=window)
+
+        a_dsk = dsk.deskew_stage_scan(
+            vol_a, pixel_size, step_size_lat, 1,
+            theta=theta_rad, method=method, **deskew_kwargs,
+        )
+        try:
+            a_dsk = a_dsk.get()
+        except Exception:
+            pass
+
+        b_dsk = dsk.deskew_stage_scan(
+            vol_b, pixel_size, step_size_lat, -1,
+            theta=theta_rad, method=method, **deskew_kwargs,
+        )
+        try:
+            b_dsk = b_dsk.get()
+        except Exception:
+            pass
+
+        if crop_to_common:
+            a_slices, b_slices, cropped_shape = _compute_common_crops_server(
+                a_dsk.shape, b_dsk.shape, pre_reg_t,
+            )
+            if a_slices is not None:
+                a_dsk = a_dsk[a_slices]
+                b_dsk = b_dsk[b_slices]
+
+        b_cupy = cp.asarray(b_dsk)
+        b_reg = affine.transform(
+            b_cupy,
+            cp.asarray(affine_matrix),
+            interp_method=interp_method,
+            preserve_dtype=True,
+            out_shp=None,
+            block_size_z=8,
+            block_size_y=8,
+            block_size_x=8,
+        )
+        b_reg = b_reg.get()
+
+        min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
+        out_shape = (n_channels, *min_shape)
+
+        a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
+        b_zarr_path = os.path.join(output_folder, f"b_t{t}.zarr")
+
+        arr_a = zarr.open(
+            a_zarr_path, mode="w", shape=out_shape,
+            dtype=np.uint16, chunks=(1, 64, 256, 256),
+        )
+        arr_b = zarr.open(
+            b_zarr_path, mode="w", shape=out_shape,
+            dtype=np.uint16, chunks=(1, 64, 256, 256),
+        )
+
+        a_final = a_dsk[: min_shape[0], : min_shape[1], : min_shape[2]]
+        b_final = b_reg[: min_shape[0], : min_shape[1], : min_shape[2]]
+        arr_a[0, ...] = a_final.astype(np.uint16)
+        arr_b[0, ...] = b_final.astype(np.uint16)
+
+        files_created.extend([a_zarr_path, b_zarr_path])
+
+        current_item += 1
+        percentage = int((current_item / total_items) * 100)
+        send_progress(
+            sys.stdout, request_id,
+            f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage,
+        )
+
+        # Process remaining channels
+        for chan_idx in channels[1:]:
+            c = chan_idx - chan_start
+
+            with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+                if multi_pos:
+                    vol_a = acq.get(position, "a", chan_idx, t, window=window)
+                    vol_b = acq.get(position, "b", chan_idx, t, window=window)
+                else:
+                    vol_a = acq.get("a", chan_idx, t, window=window)
+                    vol_b = acq.get("b", chan_idx, t, window=window)
+
+            a_dsk = dsk.deskew_stage_scan(
+                vol_a, pixel_size, step_size_lat, 1,
+                theta=theta_rad, method=method, **deskew_kwargs,
+            )
+            try:
+                a_dsk = a_dsk.get()
+            except Exception:
+                pass
+
+            b_dsk = dsk.deskew_stage_scan(
+                vol_b, pixel_size, step_size_lat, -1,
+                theta=theta_rad, method=method, **deskew_kwargs,
+            )
+            try:
+                b_dsk = b_dsk.get()
+            except Exception:
+                pass
+
+            if crop_to_common:
+                a_slices, b_slices, cropped_shape = _compute_common_crops_server(
+                    a_dsk.shape, b_dsk.shape, pre_reg_t,
+                )
+                if a_slices is not None:
+                    a_dsk = a_dsk[a_slices]
+                    b_dsk = b_dsk[b_slices]
+
+            b_cupy = cp.asarray(b_dsk)
+            b_reg = affine.transform(
+                b_cupy,
+                cp.asarray(affine_matrix),
+                interp_method=interp_method,
+                preserve_dtype=True,
+                out_shp=None,
+                block_size_z=8,
+                block_size_y=8,
+                block_size_x=8,
+            )
+            b_reg = b_reg.get()
+
+            a_final = a_dsk[: min_shape[0], : min_shape[1], : min_shape[2]]
+            b_final = b_reg[: min_shape[0], : min_shape[1], : min_shape[2]]
+
+            arr_a[c, ...] = a_final.astype(np.uint16)
+            arr_b[c, ...] = b_final.astype(np.uint16)
+
+            current_item += 1
+            percentage = int((current_item / total_items) * 100)
+            send_progress(
+                sys.stdout, request_id,
+                f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage,
+            )
+
+    return {"output_folder": output_folder, "files_created": files_created}
 
 
 def handle_save_zarr(params: dict) -> dict:
@@ -813,7 +1098,10 @@ def main():
 
         try:
             logger.info("Executing handler for command: %s", command)
-            result = handler(params)
+            # Inject request_id into params so handlers can emit progress updates
+            params_with_id = dict(params)
+            params_with_id["_request_id"] = request_id
+            result = handler(params_with_id)
             logger.info("Handler completed, sending response for request_id=%s", request_id)
             send_response(stdout, request_id, result)
         except Exception as e:
