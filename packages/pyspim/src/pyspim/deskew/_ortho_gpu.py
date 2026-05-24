@@ -70,7 +70,7 @@ void deskew_kernel(const unsigned short* __restrict__ im, // raw uint16 input
         }
 
         int z0 = (int)floorf(zpr);
-        if (z0 < 0 || z0 >= n_planes - 1) {
+        if (abs(z0 + 1) >= n_planes) {
             out[tid] = 0.0f;
             continue;
         }
@@ -79,7 +79,7 @@ void deskew_kernel(const unsigned short* __restrict__ im, // raw uint16 input
 
         float xib = xpr + (direction > 0 ? +1.0f : -1.0f) * beta * tan_ot;
         int xb0 = (int)floorf(xib);
-        if (xb0 < 0 || xb0 >= h - 1) {
+        if (abs(xb0 + 1) >= h) {
             out[tid] = 0.0f;
             continue;
         }
@@ -87,7 +87,7 @@ void deskew_kernel(const unsigned short* __restrict__ im, // raw uint16 input
 
         float xia = xpr - (direction > 0 ? +1.0f : -1.0f) * (step_pix - beta) * tan_ot;
         int xa0 = (int)floorf(xia);
-        if (xa0 < 0 || xa0 >= h - 1) {
+        if (abs(xa0 + 1) >= h) {
             out[tid] = 0.0f;
             continue;
         }
@@ -96,13 +96,19 @@ void deskew_kernel(const unsigned short* __restrict__ im, // raw uint16 input
         float wb = beta / cos_ot;              // weight for z0+1 plane
         float wa = (step_pix - beta) / cos_ot; // weight for z0 plane
 
-        long long baseA = ((long long)z0     * ny + y) * h; // lower plane
-        long long baseB = ((long long)(z0+1) * ny + y) * h; // upper plane
+        // Normalize negative indices to positive (Python-style wrapping)
+        int z0n = (z0 < 0) ? z0 + n_planes : z0;
+        int z1n = (z0 + 1 < 0) ? z0 + 1 + n_planes : z0 + 1;
+        int xb0n = (xb0 < 0) ? xb0 + h : xb0;
+        int xa0n = (xa0 < 0) ? xa0 + h : xa0;
 
-        float A0 = (float)im[baseA + xb0    ];
-        float A1 = (float)im[baseA + xb0 + 1];
-        float B0 = (float)im[baseB + xa0    ];
-        float B1 = (float)im[baseB + xa0 + 1];
+        long long baseA = ((long long)z0n     * ny + y) * h; // lower plane
+        long long baseB = ((long long)z1n * ny + y) * h; // upper plane
+
+        float A0 = (float)im[baseA + xb0n    ];
+        float A1 = (float)im[baseA + xb0n + 1];
+        float B0 = (float)im[baseB + xa0n    ];
+        float B1 = (float)im[baseB + xa0n + 1];
 
         float v_a = dxib * A1 + (1.0f - dxib) * A0;
         float v_b = dxia * B1 + (1.0f - dxia) * B0;
@@ -164,7 +170,7 @@ void deskew_kernel_u16(const unsigned short* __restrict__ im,
 
         // Determine the z0 plane index and check bounds, if so re-use thread with next point
         int z0 = (int)floorf(zpr);
-        if (z0 < 0 || z0 >= n_planes - 1) {
+        if (abs(z0 + 1) >= n_planes) {
             out[tid] = 0u;
             continue;
         }
@@ -175,7 +181,7 @@ void deskew_kernel_u16(const unsigned short* __restrict__ im,
         // or have direction as a float?
         float xib = xpr + (direction > 0 ? +1.0f : -1.0f) * beta * tan_ot;
         int xb0 = (int)floorf(xib);
-        if (xb0 < 0 || xb0 >= h - 1) {
+        if (abs(xb0 + 1) >= h) {
             out[tid] = 0u;
             continue;
         }
@@ -183,7 +189,7 @@ void deskew_kernel_u16(const unsigned short* __restrict__ im,
 
         float xia = xpr - (direction > 0 ? +1.0f : -1.0f) * (step_pix - beta) * tan_ot;
         int xa0 = (int)floorf(xia);
-        if (xa0 < 0 || xa0 >= h - 1) {
+        if (abs(xa0 + 1) >= h) {
             out[tid] = 0u;
             continue;
         }
@@ -192,13 +198,19 @@ void deskew_kernel_u16(const unsigned short* __restrict__ im,
         float wb = beta / cos_ot;
         float wa = (step_pix - beta) / cos_ot;
 
-        long long baseA = ((long long)z0     * ny + y) * h;
-        long long baseB = ((long long)(z0+1) * ny + y) * h;
+        // Normalize negative indices to positive (Python-style wrapping)
+        int z0n = (z0 < 0) ? z0 + n_planes : z0;
+        int z1n = (z0 + 1 < 0) ? z0 + 1 + n_planes : z0 + 1;
+        int xb0n = (xb0 < 0) ? xb0 + h : xb0;
+        int xa0n = (xa0 < 0) ? xa0 + h : xa0;
 
-        float A0 = (float)im[baseA + xb0    ];
-        float A1 = (float)im[baseA + xb0 + 1];
-        float B0 = (float)im[baseB + xa0    ];
-        float B1 = (float)im[baseB + xa0 + 1];
+        long long baseA = ((long long)z0n     * ny + y) * h;
+        long long baseB = ((long long)z1n * ny + y) * h;
+
+        float A0 = (float)im[baseA + xb0n    ];
+        float A1 = (float)im[baseA + xb0n + 1];
+        float B0 = (float)im[baseB + xa0n    ];
+        float B1 = (float)im[baseB + xa0n + 1];
 
         float v_a = dxib * A1 + (1.0f - dxib) * A0;
         float v_b = dxia * B1 + (1.0f - dxia) * B0;

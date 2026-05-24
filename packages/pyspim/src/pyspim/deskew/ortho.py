@@ -13,6 +13,7 @@ from typing import Tuple
 
 import cupy
 import numpy
+from numba import njit, prange
 
 from ..typing import NDArray
 from ._ortho_gpu import _deskew_gpu, _zero_triangle_gpu
@@ -54,6 +55,7 @@ def deskew_stage_scan(
     return dsk
 
 
+@njit(parallel=True)
 def _deskew_orthogonal_cpu(
     im: numpy.ndarray,
     pixel_size: float,
@@ -80,8 +82,8 @@ def _deskew_orthogonal_cpu(
     dsk = numpy.zeros((n_z, n_y, n_x), dtype=im.dtype)
     
     # Deskewing interpolation loop
-    for z in range(0, n_z):
-        for x in range(0, n_x):
+    for z in prange(0, n_z):
+        for x in prange(0, n_x):
             # compute where we are in "raw" coordinates (x'=xpr, z'=zpr)
             if direction > 0:
                 xpr = z / sin_theta
@@ -125,8 +127,8 @@ def _deskew_orthogonal_cpu(
     # (falsely) interpolated due to wrapping
     if direction < 0:
         dsk = numpy.flipud(dsk)
-    for z in range(n_z):
-        for x in range(n_x):
+    for z in prange(n_z):
+        for x in prange(n_x):
             if x <= z:
                 dsk[z, :, x] = 0
     dsk = numpy.flipud(dsk)

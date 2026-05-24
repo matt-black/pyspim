@@ -108,19 +108,25 @@ class LoadDeskewWorker(QThread):
     def _compute_projections(self, volume, proj_type):
         """Compute YX, ZY, and XZ projections from a volume."""
         if proj_type == "max":
-            yx_proj = np.max(volume, axis=0)  # shape: (Y, X)
-            zy_proj = np.max(volume, axis=2)  # shape: (Z, Y)
-            xz_proj = np.max(volume, axis=1)  # shape: (Z, X)
+            yx_proj = cp.max(volume, axis=0)  # shape: (Y, X)
+            zy_proj = cp.max(volume, axis=2)  # shape: (Z, Y)
+            xz_proj = cp.max(volume, axis=1)  # shape: (Z, X)
         elif proj_type == "sum":
-            yx_proj = np.sum(volume, axis=0)
-            zy_proj = np.sum(volume, axis=2)
-            xz_proj = np.sum(volume, axis=1)
+            yx_proj = cp.sum(volume, axis=0)
+            zy_proj = cp.sum(volume, axis=2)
+            xz_proj = cp.sum(volume, axis=1)
         elif proj_type == "mean":
-            yx_proj = np.mean(volume, axis=0)
-            zy_proj = np.mean(volume, axis=2)
-            xz_proj = np.mean(volume, axis=1)
+            yx_proj = cp.mean(volume, axis=0)
+            zy_proj = cp.mean(volume, axis=2)
+            xz_proj = cp.mean(volume, axis=1)
         else:
             raise ValueError(f"Unknown projection type: {proj_type}")
+        try:
+            yx_proj = yx_proj.get()
+            zy_proj = zy_proj.get()
+            xz_proj = xz_proj.get()
+        except:
+            pass
         return yx_proj, zy_proj, xz_proj
 
     def run(self):
@@ -135,7 +141,7 @@ class LoadDeskewWorker(QThread):
 
             # Load data
             self.progress_updated.emit("Loading data...")
-            with data.uManagerAcquisition(self.data_path, self.multi_pos, np) as acq:
+            with data.uManagerAcquisition(self.data_path, self.multi_pos, cp) as acq:
                 if self.multi_pos:
                     volume_a = acq.get(self.position, "a", self.channel, self.time, window=window)
                     volume_b = acq.get(self.position, "b", self.channel, self.time, window=window)
@@ -173,10 +179,7 @@ class LoadDeskewWorker(QThread):
                 method=self.method,
                 **kwargs,
             )
-            try:
-                a_dsk = a_dsk.get()
-            except:
-                pass
+            
             # Deskew View B (direction = -1)
             self.progress_updated.emit("Deskewing View B...")
             if self.method == "shear":
@@ -204,13 +207,7 @@ class LoadDeskewWorker(QThread):
                     (b_dsk.shape[0], b_dsk.shape[1], b_dsk.shape[2]),
                     8, 8, 8
                 )
-            try:
-                b_dsk = b_dsk.get()
-            except:
-                pass
-            # a_dsk = a_dsk.astype(np.float32)
-            # b_dsk = b_dsk.astype(np.float32)
-
+            
             self.progress_updated.emit(f"Deskewing completed")
 
             # Compute projections
@@ -218,6 +215,16 @@ class LoadDeskewWorker(QThread):
             yx_proj_a, zy_proj_a, xz_proj_a = self._compute_projections(a_dsk, self.projection_type)
             yx_proj_b, zy_proj_b, xz_proj_b = self._compute_projections(b_dsk, self.projection_type)
 
+            # move deskewed volumes to cpu, if necessary
+            try:
+                a_dsk = a_dsk.get()
+            except:
+                pass
+
+            try:
+                b_dsk = b_dsk.get()
+            except:
+                pass
             result = {
                 "a_deskewed": a_dsk,
                 "b_deskewed": b_dsk,
