@@ -1013,8 +1013,9 @@ def _check_cuda() -> bool:
 def _get_pyspim_version() -> str:
     """Return the installed pyspim version string, or 'unknown'."""
     try:
-        import pyspim  # type: ignore
-        return getattr(pyspim, "__version__", "unknown")
+        from importlib.metadata import version
+        # import pyspim  # type: ignore
+        return version('pyspim')
     except Exception:
         return "not installed"
 
