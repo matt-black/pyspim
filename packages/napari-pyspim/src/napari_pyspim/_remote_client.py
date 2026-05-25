@@ -182,10 +182,28 @@ class RemoteClient(QObject):
             # sourcing activate which can fail in non-interactive shells).
             if remote_venv:
                 python_bin = os.path.join(remote_venv, "bin", "python")
-                command = f"{python_bin} {self._remote_script_path}"
+                # Derive log path: <pyspim_root>/logs/pyspim_server_<pid>.log
+                # (pyspim_root = parent of the venv directory)
+                pyspim_root = os.path.dirname(remote_venv)
+                log_dir = os.path.join(pyspim_root, "logs")
+                self._remote_log_path = os.path.join(
+                    log_dir, f"pyspim_server_{os.getpid()}.log"
+                )
+                # Ensure the logs directory exists on the remote host
+                try:
+                    self._sftp.mkdir(log_dir)
+                except IOError:
+                    pass  # Directory already exists
+                command = (
+                    f"PYSPIM_LOG_PATH={self._remote_log_path} "
+                    f"{python_bin} {self._remote_script_path} "
+                    f"2>{self._remote_log_path}"
+                )
             else:
+                self._remote_log_path = None
                 command = f"python {self._remote_script_path}"
 
+            logger.info("[CONNECT] Remote command: %s", command)
             self._channel = self._ssh.get_transport().open_session()
             self._channel.exec_command(command)
 

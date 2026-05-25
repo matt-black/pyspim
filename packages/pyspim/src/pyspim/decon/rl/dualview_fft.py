@@ -9,7 +9,9 @@ References
 """
 
 import concurrent.futures
+import gc
 import multiprocessing
+import os
 from contextlib import nullcontext
 from functools import partial
 from itertools import repeat
@@ -762,6 +764,7 @@ def deconvolve_chunkwise(
         gpu_queue = manager.Queue()
         for gpu_id in range(n_gpu):
             gpu_queue.put(gpu_id)
+        log_path = os.environ.get("PYSPIM_LOG_PATH", default=None)
         fun = partial(
             _decon_chunk,
             out,
@@ -778,6 +781,7 @@ def deconvolve_chunkwise(
             zero_padding,
             boundary_sigma_a,
             boundary_sigma_b,
+            log_path,
         )
         futures = []
         for chunk_id, chunk in chunks.items():
@@ -818,6 +822,7 @@ def _decon_chunk(
     zero_padding: Optional[PadType],
     boundary_sigma_a: float,
     boundary_sigma_b: float,
+    log_path: str | None,
     # iterate over these
     chunk_props: ChunkProps,
     gpu_queue,
@@ -833,6 +838,25 @@ def _decon_chunk(
     import traceback
 
     logger = logging.getLogger(__name__)
+
+    # If a log path was provided, open it for appending so worker output
+    # is captured alongside the parent server's logs.
+    if log_path is not None:
+        try:
+            log_dir = os.path.dirname(log_path)
+            os.makedirs(log_dir, exist_ok=True)
+            sys.stderr = open(log_path, "a", buffering=1)  # type: ignore[assignment]
+            handler = logging.StreamHandler(sys.stderr)  # type: ignore[arg-type]
+            handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter(
+                "[%(asctime)s] %(levelname)s [pid=%(process)d] %(name)s: %(message)s"
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
+        except Exception:
+            pass
+
     gpu_id: int | None = None
     try:
         logger.warning(
@@ -845,6 +869,18 @@ def _decon_chunk(
         )
         gpu_id = gpu_queue.get()
         logger.warning("[_decon_chunk] acquired gpu_id=%d", gpu_id)
+
+        # Log GPU memory before deconvolution
+        with cupy.cuda.Device(gpu_id):
+            mem_pool = cupy.get_default_memory_pool()
+            free_mem, total_mem = cupy.cuda.Device(gpu_id).memory_info()
+            logger.warning(
+                "[_decon_chunk] gpu=%d memory before: free=%.1fMB, total=%.1fMB, "
+                "pool_free_blocks=%d",
+                gpu_id, free_mem / 1024**2, total_mem / 1024**2,
+                mem_pool.free_memory_blocks(),
+            )
+
         # load data
         a = view_a.oindex[chunk_props.read_window]
         b = view_b.oindex[chunk_props.read_window]
@@ -885,9 +921,26 @@ def _decon_chunk(
                 boundary_sigma_b,
                 verbose=False,
             ).get()[chunk_props.out_window]
+
+            # Explicit GPU memory cleanup after deconvolution
+            # to prevent GPU memory exhaustion across chunks
+            del psf_a_cp, psf_b_cp, bp_a_cp, bp_b_cp
+            cupy.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+            # Log GPU memory after cleanup
+            free_mem, total_mem = cupy.cuda.Device(gpu_id).memory_info()
+            logger.warning(
+                "[_decon_chunk] gpu=%d memory after cleanup: free=%.1fMB, total=%.1fMB",
+                gpu_id, free_mem / 1024**2, total_mem / 1024**2,
+            )
+
         logger.warning("[_decon_chunk] gpu=%d deconvolve done, writing result...", gpu_id)
         gpu_queue.put(gpu_id)
         out.set_orthogonal_selection(chunk_props.data_window, dec)
+        # Clear numpy arrays after writing
+        del a, b, dec
+        gc.collect()
         logger.warning("[_decon_chunk] gpu=%d done", gpu_id)
         return 1
     except Exception as e:
