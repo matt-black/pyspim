@@ -729,7 +729,6 @@ def deconvolve_chunkwise(
     verbose: bool,
 ):
     import logging
-    import sys
 
     logger = logging.getLogger(__name__)
     logger.warning(
