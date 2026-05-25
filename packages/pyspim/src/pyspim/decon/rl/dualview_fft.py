@@ -873,7 +873,7 @@ def _decon_chunk(
         # Log GPU memory before deconvolution
         with cupy.cuda.Device(gpu_id):
             mem_pool = cupy.get_default_memory_pool()
-            free_mem, total_mem = cupy.cuda.Device(gpu_id).memory_info()
+            free_mem, total_mem = cupy.cuda.runtime.memGetInfo()
             logger.warning(
                 "[_decon_chunk] gpu=%d memory before: free=%.1fMB, total=%.1fMB, "
                 "pool_free_blocks=%d",
@@ -929,7 +929,7 @@ def _decon_chunk(
             gc.collect()
 
             # Log GPU memory after cleanup
-            free_mem, total_mem = cupy.cuda.Device(gpu_id).memory_info()
+            free_mem, total_mem = cupy.cuda.runtime.memGetInfo()
             logger.warning(
                 "[_decon_chunk] gpu=%d memory after cleanup: free=%.1fMB, total=%.1fMB",
                 gpu_id, free_mem / 1024**2, total_mem / 1024**2,
