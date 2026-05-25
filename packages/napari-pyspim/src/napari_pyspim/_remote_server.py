@@ -867,8 +867,7 @@ def handle_apply_registration(params: dict) -> dict:
             block_size_z=8,
             block_size_y=8,
             block_size_x=8,
-        )
-        b_reg = b_reg.get()
+        ).get()
 
         min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
         out_shape = (n_channels, *min_shape)

@@ -464,7 +464,7 @@ class ApplyWorker(QThread):
                 "preserve_dtype": True,
                 "block_size": (8, 8, 8),
             }
-        elif method == "ortho":
+        elif method.startswith("ortho"):
             return {
                 "preserve_dtype": True,
                 "stream": None,
@@ -547,6 +547,7 @@ class ApplyWorker(QThread):
             from pyspim.interp import affine
 
             # Load parameters
+            print(f"[ApplyWorker] Loading params from: {self.params_path}")
             with open(self.params_path, "r") as f:
                 params = json.load(f)
 
@@ -583,6 +584,7 @@ class ApplyWorker(QThread):
             if os.path.exists(self.output_folder):
                 shutil.rmtree(self.output_folder)
             os.makedirs(self.output_folder, exist_ok=True)
+            print(f"[ApplyWorker] Output folder created: {self.output_folder}")
 
             # Determine channel indices (0-indexed)
             chan_start = self.channel_range[0] - 1
@@ -593,6 +595,10 @@ class ApplyWorker(QThread):
             time_start, time_end = self.time_range
             total_items = (time_end - time_start + 1) * len(channels)
             current_item = 0
+
+            self.progress_updated.emit(
+                f"Starting apply: {time_end - time_start + 1} timepoints x {n_channels} channels", 0
+            )
 
             for t in range(time_start, time_end + 1):
                 # Process first channel to determine output shape
@@ -648,9 +654,7 @@ class ApplyWorker(QThread):
                     block_size_z=8,
                     block_size_y=8,
                     block_size_x=8,
-                )
-                b_reg = b_reg.get()
-
+                ).get()
                 # Crop to smallest size
                 min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
                 out_shape = (n_channels, *min_shape)
@@ -2206,12 +2210,21 @@ class RegistrationWidget(QWidget):
             self._set_apply_enabled(False)
             return
 
-        # Remote mode: rely on flag set by save_params response
+        # Remote mode: check via SFTP first, then fall back to flag
         if self._remote_mode:
             if self._remote_params_saved:
                 self._set_apply_enabled(True)
             else:
-                self._set_apply_enabled(False)
+                # Check if params file exists on remote server via SFTP
+                try:
+                    sftp = self.remote_client.get_sftp_client()
+                    params_path = f"{data_path}/deskew_registration_params.json"
+                    sftp.stat(params_path)
+                    # File exists
+                    self._remote_params_saved = True
+                    self._set_apply_enabled(True)
+                except (FileNotFoundError, AttributeError):
+                    self._set_apply_enabled(False)
             return
 
         # Local mode: check file system

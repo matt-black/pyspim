@@ -6,13 +6,14 @@ to list and navigate remote directories.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import stat as _stat
 from typing import Optional
 
 import paramiko
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QKeyEvent, QStandardItem, QStandardItemModel
+from qtpy.QtGui import QStandardItem, QStandardItemModel
 from qtpy.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -62,7 +63,7 @@ class _DirectoryModel(QStandardItemModel):  # type: ignore[name-defined]
 
 
 class SftpBrowserDialog(QDialog):
-    """Dialog for browsing remote directories via SFTP.
+    """Dialog for browsing remote directories or files via SFTP.
 
     Parameters
     ----------
@@ -74,6 +75,12 @@ class SftpBrowserDialog(QDialog):
         Starting directory path.
     title : str
         Dialog title.
+    select_file : bool
+        If True, allow selecting individual files (double-click or Select).
+        If False, only directories can be selected (default).
+    file_filter : str, optional
+        Glob-like filter pattern for file selection mode (e.g., "*.npy *.tif").
+        Only files matching the pattern are selectable.
     """
 
     def __init__(
@@ -82,11 +89,15 @@ class SftpBrowserDialog(QDialog):
         parent=None,  # type: ignore[no-untyped-def]
         initial_path: str = "/",
         title: str = "Browse Remote Directory",
+        select_file: bool = False,
+        file_filter: Optional[str] = None,
     ):
         super().__init__(parent)
         self.sftp = sftp_client
         self.selected_path: Optional[str] = None
         self._current_path = initial_path
+        self._select_file = select_file
+        self._file_filter = file_filter
         self.setWindowTitle(title)
         self.setMinimumSize(600, 400)
         self._model = _DirectoryModel(self)
@@ -170,16 +181,45 @@ class SftpBrowserDialog(QDialog):
         if path:
             self._navigate_to(path)
 
+    def _file_matches_filter(self, name: str) -> bool:
+        """Check if filename matches the configured filter patterns."""
+        if self._file_filter is None:
+            return True
+        for pattern in self._file_filter.split():
+            if fnmatch.fnmatch(name, pattern):
+                return True
+        return False
+
     def _on_double_click(self, index):
         name = self._model.data(index, Qt.ItemDataRole.DisplayRole)  # type: ignore[attr-defined]
         is_dir = self._model.data(index.sibling(index.row(), 1), Qt.ItemDataRole.DisplayRole) == "Dir"  # type: ignore[attr-defined]
         if is_dir:
             new_path = os.path.join(self._current_path, name)
             self._navigate_to(new_path)
+        elif self._select_file:
+            # In file selection mode, double-click selects the file
+            if self._file_matches_filter(name):
+                self.selected_path = os.path.join(self._current_path, name)
+                self.accept()
 
     def _on_select(self):
-        """Accept the current directory as the selected path."""
-        self.selected_path = self._current_path
+        """Accept selection based on current mode."""
+        if self._select_file:
+            # File selection mode: select currently highlighted file
+            selected = self.table.selectionModel().selectedRows()
+            if not selected:
+                return  # No file selected
+            index = selected[0]
+            name = self._model.data(index, Qt.ItemDataRole.DisplayRole)  # type: ignore[attr-defined]
+            is_dir = self._model.data(index.sibling(index.row(), 1), Qt.ItemDataRole.DisplayRole) == "Dir"  # type: ignore[attr-defined]
+            if is_dir:
+                return  # Can't select directories in file mode
+            if not self._file_matches_filter(name):
+                return  # File doesn't match filter
+            self.selected_path = os.path.join(self._current_path, name)
+        else:
+            # Directory selection mode
+            self.selected_path = self._current_path
         self.accept()
 
     def keyPressEvent(self, event):  # type: ignore[override]
