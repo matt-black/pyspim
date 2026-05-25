@@ -924,7 +924,6 @@ def _load_psf_file(path: str) -> "np.ndarray":
 
 def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, shape: tuple) -> str:
     """Save deconvolution result from a zarr array to the specified format."""
-    import os
     import tifffile
     import zarr
 
@@ -936,8 +935,7 @@ def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, sh
         if not save_path.endswith(".zarr"):
             save_path = save_path + ".zarr"
         # Copy to final location
-        final_store = zarr.DirectoryStore(save_path)
-        final_zarr = zarr.open(final_store, mode="w", shape=shape, dtype=np.float32)
+        final_zarr = zarr.open(save_path, mode="w", shape=shape, dtype=np.float32)
         final_zarr[:] = out[:]
         return save_path
     else:
@@ -968,8 +966,8 @@ def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, sh
 
 def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format: str, shape: tuple) -> str:
     """Save deconvolution result from a numpy array to the specified format."""
-    import os
     import tifffile
+    import numpy as np
     import zarr
 
     is_multichannel = len(shape) > 3
@@ -978,8 +976,7 @@ def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format
     if output_format == "Zarr":
         if not save_path.endswith(".zarr"):
             save_path = save_path + ".zarr"
-        final_store = zarr.DirectoryStore(save_path)
-        final_zarr = zarr.open(final_store, mode="w", shape=shape, dtype=np.float32)
+        final_zarr = zarr.open(save_path, mode="w", shape=shape, dtype=np.float32)
         final_zarr[:] = result
         return save_path
     else:
