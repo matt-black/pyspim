@@ -728,6 +728,16 @@ def deconvolve_chunkwise(
     boundary_sigma_b: float,
     verbose: bool,
 ):
+    import logging
+    import sys
+
+    logger = logging.getLogger(__name__)
+    logger.warning(
+        "[deconvolve_chunkwise] volume=%s, chunk_size=%s, overlap=%s, "
+        "decon_function=%s, num_iter=%d",
+        view_a.shape, chunk_size, overlap, decon_function, num_iter,
+    )
+
     if len(view_a.shape) == 4:
         channel_slice = slice(None)
         ch_a, z_a, r_a, c_a = view_a.shape
@@ -742,6 +752,11 @@ def deconvolve_chunkwise(
     )
     chunks = calculate_conv_chunks(z_a, r_a, c_a, chunk_size, overlap, channel_slice)
     n_gpu = cupy.cuda.runtime.getDeviceCount()
+    logger.warning(
+        "[deconvolve_chunkwise] n_gpu=%d, n_chunks=%d, "
+        "view_a.store=%r, view_b.store=%r, out.store=%r",
+        n_gpu, len(chunks), view_a.store, view_b.store, out.store,
+    )
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=n_gpu, mp_context=multiprocessing.get_context("spawn")
     ) as executor, multiprocessing.Manager() as manager:
@@ -766,16 +781,23 @@ def deconvolve_chunkwise(
             boundary_sigma_b,
         )
         futures = []
-        for _, chunk in chunks.items():
+        for chunk_id, chunk in chunks.items():
             future = executor.submit(fun, chunk, gpu_queue)
-            futures.append(future)
+            futures.append((chunk_id, future))
         if verbose:
             pbar = tqdm(total=len(futures), desc="Deconvolving Chunks")
         else:
             pbar = nullcontext
         with pbar:
-            for future in concurrent.futures.as_completed(futures):
-                val = future.result()
+            for chunk_id, future in futures:
+                try:
+                    val = future.result()
+                except Exception as e:
+                    logger.error(
+                        "[deconvolve_chunkwise] Chunk %s failed: %s",
+                        chunk_id, e, exc_info=True,
+                    )
+                    raise
                 if verbose:
                     pbar.update(1)
                     pbar.set_postfix({"data": val > 0})
@@ -801,43 +823,82 @@ def _decon_chunk(
     chunk_props: ChunkProps,
     gpu_queue,
 ):
-    gpu_id = gpu_queue.get()
-    # load data
-    a = view_a.oindex[chunk_props.read_window]
-    b = view_b.oindex[chunk_props.read_window]
-    # in many large volumes, there's large chunks of black-space
-    # (e.g. using the 'shear' or 'dispim' deskewing)
-    # so just do a quick check and see if we're in one of those, and if we
-    # are, return immediately (skip doing deconvolution)
-    if numpy.all(a == 0) and numpy.all(b == 0):
+    """Deconvolve a single chunk.
+
+    Wrapped in try/except so that any exception inside the worker process
+    is printed to stderr (with a full traceback) *before* re-raising,
+    making the root cause visible instead of a generic BrokenProcessPool.
+    """
+    import logging
+    import sys
+    import traceback
+
+    logger = logging.getLogger(__name__)
+    gpu_id: int | None = None
+    try:
+        logger.warning(
+            "[_decon_chunk] pid=%d gpu_queue type=%r, "
+            "view_a.store=%r, out.store=%r",
+            multiprocessing.current_process().pid,
+            type(gpu_queue).__name__,
+            getattr(view_a, "store", None),
+            getattr(out, "store", None),
+        )
+        gpu_id = gpu_queue.get()
+        logger.warning("[_decon_chunk] acquired gpu_id=%d", gpu_id)
+        # load data
+        a = view_a.oindex[chunk_props.read_window]
+        b = view_b.oindex[chunk_props.read_window]
+        # in many large volumes, there's large chunks of black-space
+        # (e.g. using the 'shear' or 'dispim' deskewing)
+        # so just do a quick check and see if we're in one of those, and if we
+        # are, return immediately (skip doing deconvolution)
+        if numpy.all(a == 0) and numpy.all(b == 0):
+            gpu_queue.put(gpu_id)
+            return 0
+        # pad the inputs according to the chunking properties
+        a = numpy.pad(a, chunk_props.paddings)
+        b = numpy.pad(b, chunk_props.paddings)
+        logger.warning(
+            "[_decon_chunk] gpu=%d padded_a=%s padded_b=%s, launching deconvolve...",
+            gpu_id, a.shape, b.shape,
+        )
+        with cupy.cuda.Device(gpu_id):
+            psf_a_cp = cupy.asarray(psf_a, dtype=cupy.float32)
+            psf_b_cp = cupy.asarray(psf_b, dtype=cupy.float32)
+            bp_a_cp = cupy.asarray(bp_a, dtype=cupy.float32)
+            bp_b_cp = cupy.asarray(bp_b, dtype=cupy.float32)
+            dec = deconvolve(
+                cupy.asarray(a, dtype=cupy.float32),
+                cupy.asarray(b, dtype=cupy.float32),
+                None,
+                psf_a_cp,
+                psf_b_cp,
+                bp_a_cp,
+                bp_b_cp,
+                decon_function,
+                num_iter,
+                epsilon,
+                True,
+                boundary_correction,
+                zero_padding,
+                boundary_sigma_a,
+                boundary_sigma_b,
+                verbose=False,
+            ).get()[chunk_props.out_window]
+        logger.warning("[_decon_chunk] gpu=%d deconvolve done, writing result...", gpu_id)
         gpu_queue.put(gpu_id)
-        return 0
-    # pad the inputs according to the chunking properties
-    a = numpy.pad(a, chunk_props.paddings)
-    b = numpy.pad(b, chunk_props.paddings)
-    with cupy.cuda.Device(gpu_id):
-        psf_a = cupy.asarray(psf_a, dtype=cupy.float32)
-        psf_b = cupy.asarray(psf_b, dtype=cupy.float32)
-        bp_a = cupy.asarray(bp_a, dtype=cupy.float32)
-        bp_b = cupy.asarray(bp_b, dtype=cupy.float32)
-        dec = deconvolve(
-            cupy.asarray(a, dtype=cupy.float32),
-            cupy.asarray(b, dtype=cupy.float32),
-            None,
-            psf_a,
-            psf_b,
-            bp_a,
-            bp_b,
-            decon_function,
-            num_iter,
-            epsilon,
-            True,
-            boundary_correction,
-            zero_padding,
-            boundary_sigma_a,
-            boundary_sigma_b,
-            verbose=False,
-        ).get()[chunk_props.out_window]
-    gpu_queue.put(gpu_id)
-    out.set_orthogonal_selection(chunk_props.data_window, dec)
-    return 1
+        out.set_orthogonal_selection(chunk_props.data_window, dec)
+        logger.warning("[_decon_chunk] gpu=%d done", gpu_id)
+        return 1
+    except Exception as e:
+        # Print full traceback to stderr so it survives process crash
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        # Try to return the GPU back to the pool
+        try:
+            if "gpu_id" in dir():
+                gpu_queue.put(gpu_id)
+        except Exception:
+            pass
+        raise

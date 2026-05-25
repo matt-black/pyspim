@@ -1993,6 +1993,14 @@ class RegistrationWidget(QWidget):
                 self.progress_bar.setVisible(False)
                 self.apply_button.setEnabled(True)
                 self.load_deskew_button.setEnabled(True)
+                # Emit registered signal with output paths for Deconvolution
+                time_range = self._apply_time_range if hasattr(self, '_apply_time_range') else (0, 0)
+                output_data = {
+                    "a_path": os.path.join(output_folder, f"a_t{time_range[0]}.zarr"),
+                    "b_path": os.path.join(output_folder, f"b_t{time_range[0]}.zarr"),
+                    "output_folder": output_folder,
+                }
+                self.registered.emit(output_data)
             else:
                 error_msg = response.get("error", "Unknown error")
                 self._on_apply_error(error_msg)
@@ -2298,6 +2306,10 @@ class RegistrationWidget(QWidget):
         else:
             output_folder = os.path.join(data_path, "dskreg")
 
+        # Store for later signal emission
+        self._apply_output_folder = output_folder
+        self._apply_time_range = (time_min, time_max)
+
         # Disable UI during processing
         self.apply_button.setEnabled(False)
         self.load_deskew_button.setEnabled(False)
@@ -2373,6 +2385,16 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setVisible(False)
         self.apply_button.setEnabled(True)
         self.load_deskew_button.setEnabled(True)
+        # Emit registered signal with output paths for Deconvolution
+        output_folder = self._apply_output_folder if hasattr(self, '_apply_output_folder') else None
+        if output_folder:
+            time_min = self.time_min_spin.value()
+            output_data = {
+                "a_path": os.path.join(output_folder, f"a_t{time_min}.zarr"),
+                "b_path": os.path.join(output_folder, f"b_t{time_min}.zarr"),
+                "output_folder": output_folder,
+            }
+            self.registered.emit(output_data)
 
     def _on_apply_error(self, error_msg: str):
         """Handle error from ApplyWorker."""

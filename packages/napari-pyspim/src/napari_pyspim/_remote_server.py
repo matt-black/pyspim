@@ -700,9 +700,311 @@ def handle_deconvolve(params: dict) -> dict:
 
     Mirrors ``DeconvolutionWorker.run()`` from ``_deconvolution.py``.
 
-    TODO: Implement in Phase 4.
+    Parameters
+    ----------
+    params : dict
+        a_path : str - Remote path to View A zarr
+        b_path : str - Remote path to View B zarr
+        save_path : str - Remote output path (directory for OME-TIFF, file for zarr)
+        output_format : str - "OME-TIFF" or "Zarr"
+        psf_type : str - "gaussian" or "custom"
+        psf_a_path : str | None (if custom)
+        psf_b_path : str | None (if custom)
+        fwhm_x : float
+        fwhm_y : float
+        fwhm_z : float
+        bp_type : str - "gaussian" or "custom" or "flipped_psf"
+        bp_a_path : str | None (if custom)
+        bp_b_path : str | None (if custom)
+        decon_function : str - "additive", "efficient", or "dispim"
+        num_iter : int
+        epsilon : float
+        req_both : bool
+        boundary_correction : bool
+        boundary_sigma : float
+        chunkwise : bool
+        chunk_size : list [z, y, x]
+        overlap : list [z, y, x]
+
+    Returns
+    -------
+    dict with keys: output_path, output_format
     """
-    raise NotImplementedError("deconvolve not yet implemented")
+    import os
+    import tempfile
+
+    import numpy as np
+    import tifffile
+    import zarr
+
+    request_id = params.get("_request_id")
+    stdout = sys.stdout
+
+    def _progress(msg, pct=None):
+        send_progress(stdout, request_id, msg, pct)
+
+    # Extract parameters
+    a_path = os.path.abspath(params["a_path"])
+    b_path = os.path.abspath(params["b_path"])
+    save_path = os.path.abspath(params["save_path"])
+    logger.info(
+        "[handle_deconvolve] a_path=%s, b_path=%s, save_path=%s",
+        a_path, b_path, save_path,
+    )
+    output_format = params.get("output_format", "OME-TIFF")
+    psf_type = params.get("psf_type", "gaussian").lower()
+    fwhm_x = params.get("fwhm_x", 1.0)
+    fwhm_y = params.get("fwhm_y", 1.0)
+    fwhm_z = params.get("fwhm_z", 3.0)
+    bp_type = params.get("bp_type", "flipped_psf")
+    decon_function = params.get("decon_function", "additive")
+    num_iter = params.get("num_iter", 20)
+    epsilon = params.get("epsilon", 0.001)
+    req_both = params.get("req_both", True)
+    boundary_correction = params.get("boundary_correction", False)
+    boundary_sigma = params.get("boundary_sigma", 3.0)
+    chunkwise = params.get("chunkwise", False)
+    chunk_size = tuple(params.get("chunk_size", [400, 400, 400]))
+    overlap = tuple(params.get("overlap", [100, 100, 100]))
+
+    _progress("Loading input volumes...", 5)
+
+    # Open input zarr arrays
+    zarr_a = zarr.open(a_path, mode="r")
+    zarr_b = zarr.open(b_path, mode="r")
+
+    _progress("Generating PSF...", 10)
+
+    # Generate or load PSF volumes
+    psf_size = (32, 32, 32)  # Default PSF size
+
+    if psf_type == "gaussian":
+        # Convert FWHM to sigma: sigma = FWHM / (2 * sqrt(2 * ln(2)))
+        import math
+        fwhm_to_sigma = 1.0 / (2 * math.sqrt(2 * math.log(2)))
+        sx = fwhm_x * fwhm_to_sigma
+        sy = fwhm_y * fwhm_to_sigma
+        sz = fwhm_z * fwhm_to_sigma
+
+        # Center of PSF
+        z0, y0, x0 = ((s - 1) / 2 for s in psf_size)
+        ampl, bkgrnd = 1.0, 0.0
+
+        from napari_pyspim._psf import generate_psf_im, normalize_psf_im
+
+        pars = [x0, y0, z0, sx, sy, sz, ampl, bkgrnd]
+        psf_a = normalize_psf_im(generate_psf_im(pars, psf_size, "spherical"))
+        psf_b = psf_a.copy()
+    else:
+        # Custom PSF: load from files
+        psf_a_path = params.get("psf_a_path")
+        psf_b_path = params.get("psf_b_path")
+        if psf_a_path and psf_b_path:
+            psf_a = _load_psf_file(psf_a_path)
+            psf_b = _load_psf_file(psf_b_path)
+        else:
+            raise ValueError("Custom PSF selected but paths not provided")
+
+    # Generate or load backprojectors
+    if bp_type == "flipped_psf":
+        # Backprojector is flipped PSF
+        bp_a = np.flip(psf_a).copy()
+        bp_b = np.flip(psf_b).copy()
+    elif bp_type == "gaussian":
+        # Use same PSF as backprojector
+        bp_a = psf_a.copy()
+        bp_b = psf_b.copy()
+    else:
+        # Custom backprojector: load from files
+        bp_a_path = params.get("bp_a_path")
+        bp_b_path = params.get("bp_b_path")
+        if bp_a_path and bp_b_path:
+            bp_a = _load_psf_file(bp_a_path)
+            bp_b = _load_psf_file(bp_b_path)
+        else:
+            raise ValueError("Custom backprojector selected but paths not provided")
+
+    _progress("Starting deconvolution...", 15)
+
+    # Import deconvolution functions
+    from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
+
+    if chunkwise:
+        _progress("Running chunkwise deconvolution...", 20)
+        # Use temporary zarr for chunkwise output
+        with tempfile.TemporaryDirectory(suffix=".zarr") as tmp_dir:
+            out = zarr.open_array(
+                tmp_dir, mode="w", shape=zarr_a.shape, dtype=np.float32, fill_value=0
+            )
+
+            # Compute overlap from PSF size
+            psf_overlap = max(s // 2 for s in psf_a.shape)
+
+            deconvolve_chunkwise(
+                zarr_a,
+                zarr_b,
+                out,
+                chunk_size,
+                psf_overlap,
+                psf_a,
+                psf_b,
+                bp_a,
+                bp_b,
+                decon_function,
+                num_iter,
+                epsilon,
+                boundary_correction,
+                None,  # zero_padding
+                boundary_sigma,
+                boundary_sigma,
+                verbose=True,
+            )
+
+            _progress("Saving output...", 90)
+            output_path = _save_decon_result(out, save_path, output_format, zarr_a.shape)
+    else:
+        _progress("Running full deconvolution...", 20)
+        import cupy
+
+        # Convert PSFs and backprojectors to cupy
+        psf_a_cp = cupy.asarray(psf_a, dtype=cupy.float32)
+        psf_b_cp = cupy.asarray(psf_b, dtype=cupy.float32)
+        bp_a_cp = cupy.asarray(bp_a, dtype=cupy.float32)
+        bp_b_cp = cupy.asarray(bp_b, dtype=cupy.float32)
+
+        # Load volumes into GPU memory
+        a_data = cupy.asarray(np.asarray(zarr_a[:]), dtype=cupy.float32)
+        b_data = cupy.asarray(np.asarray(zarr_b[:]), dtype=cupy.float32)
+
+        result_cp = deconvolve(
+            a_data,
+            b_data,
+            None,  # init
+            psf_a_cp,
+            psf_b_cp,
+            bp_a_cp,
+            bp_b_cp,
+            decon_function,
+            num_iter,
+            epsilon,
+            req_both,
+            boundary_correction,
+            None,  # zero_padding
+            boundary_sigma,
+            boundary_sigma,
+            verbose=True,
+        )
+
+        result = result_cp.get().astype(np.float32)
+
+        _progress("Saving output...", 90)
+        output_path = _save_decon_result_array(result, save_path, output_format, zarr_a.shape)
+
+    _progress("Deconvolution completed!", 100)
+
+    return {"output_path": output_path, "output_format": output_format}
+
+
+def _load_psf_file(path: str) -> "np.ndarray":
+    """Load a PSF volume from .npy or .tif file."""
+    import numpy as np
+    import tifffile
+
+    if path.endswith(".npy"):
+        return np.load(path)
+    elif path.endswith((".tif", ".tiff")):
+        return tifffile.imread(path)
+    else:
+        # Try numpy first, then tifffile
+        try:
+            return np.load(path)
+        except Exception:
+            return tifffile.imread(path)
+
+
+def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, shape: tuple) -> str:
+    """Save deconvolution result from a zarr array to the specified format."""
+    import os
+    import tifffile
+    import zarr
+
+    is_multichannel = len(shape) > 3
+    axes = "CZYX" if is_multichannel else "ZYX"
+
+    if output_format == "Zarr":
+        # Ensure path ends with .zarr
+        if not save_path.endswith(".zarr"):
+            save_path = save_path + ".zarr"
+        # Copy to final location
+        final_store = zarr.DirectoryStore(save_path)
+        final_zarr = zarr.open(final_store, mode="w", shape=shape, dtype=np.float32)
+        final_zarr[:] = out[:]
+        return save_path
+    else:
+        # OME-TIFF
+        if not save_path.endswith(".tif"):
+            if not save_path.endswith(".tiff"):
+                save_path = save_path + ".ome.tif"
+
+        tifffile.imwrite(
+            save_path,
+            bigtiff=True,
+            shape=out.shape,
+            dtype="float32",
+            photometric="minisblack",
+            resolution=(1 / 0.1625, 1 / 0.1625),
+            metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
+        )
+        # Write data from zarr to tiff zarr store
+        store = tifffile.imread(save_path, mode="r+", aszarr=True)
+        z = zarr.open(store, mode="r+")
+        if len(z.shape) == 3:
+            z[:] = out[0, ...]
+        else:
+            z[:] = out[:]
+        store.close()
+        return save_path
+
+
+def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format: str, shape: tuple) -> str:
+    """Save deconvolution result from a numpy array to the specified format."""
+    import os
+    import tifffile
+    import zarr
+
+    is_multichannel = len(shape) > 3
+    axes = "CZYX" if is_multichannel else "ZYX"
+
+    if output_format == "Zarr":
+        if not save_path.endswith(".zarr"):
+            save_path = save_path + ".zarr"
+        final_store = zarr.DirectoryStore(save_path)
+        final_zarr = zarr.open(final_store, mode="w", shape=shape, dtype=np.float32)
+        final_zarr[:] = result
+        return save_path
+    else:
+        # OME-TIFF
+        if not save_path.endswith(".tif"):
+            if not save_path.endswith(".tiff"):
+                save_path = save_path + ".ome.tif"
+
+        tifffile.imwrite(
+            save_path,
+            bigtiff=True,
+            shape=result.shape,
+            dtype="float32",
+            photometric="minisblack",
+            resolution=(1 / 0.1625, 1 / 0.1625),
+            metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
+        )
+        store = tifffile.imread(save_path, mode="r+", aszarr=True)
+        z = zarr.open(store, mode="r+")
+        if len(z.shape) == 3:
+            z[:] = result[0, ...]
+        else:
+            z[:] = result
+        store.close()
+        return save_path
 
 
 def handle_apply_registration(params: dict) -> dict:
