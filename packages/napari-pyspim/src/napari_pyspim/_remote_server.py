@@ -198,23 +198,29 @@ def _compute_projections(volume, proj_type):
         _HAS_CUPY = False
 
     if proj_type == "max":
-        yx_proj = np.max(volume, axis=0)  # shape: (Y, X)
-        zy_proj = np.max(volume, axis=2)  # shape: (Z, Y)
-        xz_proj = np.max(volume, axis=1)  # shape: (Z, X)
+        yx_proj = np.max(np.asarray(volume), axis=0)  # shape: (Y, X)
+        yx_proj = yx_proj.get() if _HAS_CUPY else yx_proj
+        zy_proj = np.max(np.asarray(volume), axis=2)  # shape: (Z, Y)
+        zy_proj = zy_proj.get() if _HAS_CUPY else zy_proj
+        xz_proj = np.max(np.asarray(volume), axis=1)  # shape: (Z, X)
+        xz_proj = xz_proj.get() if _HAS_CUPY else xz_proj
     elif proj_type == "sum":
         yx_proj = np.sum(volume, axis=0)
+        yx_proj = yx_proj.get() if _HAS_CUPY else yx_proj
         zy_proj = np.sum(volume, axis=2)
+        zy_proj = zy_proj.get() if _HAS_CUPY else zy_proj
         xz_proj = np.sum(volume, axis=1)
+        xz_proj = xz_proj.get() if _HAS_CUPY else xz_proj
     elif proj_type == "mean":
         yx_proj = np.mean(volume, axis=0)
+        yx_proj = yx_proj.get() if _HAS_CUPY else yx_proj
         zy_proj = np.mean(volume, axis=2)
+        zy_proj = zy_proj.get() if _HAS_CUPY else zy_proj
         xz_proj = np.mean(volume, axis=1)
+        xz_proj = xz_proj.get() if _HAS_CUPY else xz_proj
     else:
         raise ValueError(f"Unknown projection type: {proj_type}")
-    if _HAS_CUPY:
-        return yx_proj.get(), zy_proj.get(), xz_proj.get()
-    else:
-        return yx_proj, zy_proj, xz_proj
+    return yx_proj, zy_proj, xz_proj
 
 
 def handle_query_positions(params: dict) -> dict:
@@ -983,7 +989,7 @@ def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, sh
             photometric="minisblack",
             resolution=(1 / 0.1625, 1 / 0.1625),
             metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
-            tile=(256, 256),
+            tile=(1024, 1024),
         )
         return save_path
 
