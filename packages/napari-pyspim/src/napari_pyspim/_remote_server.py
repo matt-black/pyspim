@@ -191,18 +191,23 @@ def handle_compute_projections(params: dict) -> dict:
 def _compute_projections(volume, proj_type):
     """Compute YX, ZY, and XZ projections from a volume."""
     try:
-        import cupy as np
-        _HAS_CUPY = True
+        import cupy
+        if cupy.get_array_module(volume) == cupy:
+            np = cupy
+            _HAS_CUPY = True
+        else:
+            import numpy as np
+            _HAS_CUPY = False
     except:
         import numpy as np
         _HAS_CUPY = False
 
     if proj_type == "max":
-        yx_proj = np.max(np.asarray(volume), axis=0)  # shape: (Y, X)
+        yx_proj = np.max(volume, axis=0)  # shape: (Y, X)
         yx_proj = yx_proj.get() if _HAS_CUPY else yx_proj
-        zy_proj = np.max(np.asarray(volume), axis=2)  # shape: (Z, Y)
+        zy_proj = np.max(volume, axis=2)  # shape: (Z, Y)
         zy_proj = zy_proj.get() if _HAS_CUPY else zy_proj
-        xz_proj = np.max(np.asarray(volume), axis=1)  # shape: (Z, X)
+        xz_proj = np.max(volume, axis=1)  # shape: (Z, X)
         xz_proj = xz_proj.get() if _HAS_CUPY else xz_proj
     elif proj_type == "sum":
         yx_proj = np.sum(volume, axis=0)
