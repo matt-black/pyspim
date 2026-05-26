@@ -923,9 +923,14 @@ def _load_psf_file(path: str) -> "np.ndarray":
 
 
 def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, shape: tuple) -> str:
-    """Save deconvolution result from a zarr array to the specified format."""
-    import tifffile
-    import zarr
+    """Save deconvolution result from a zarr array to the specified format.
+
+    For Zarr output, copies the zarr folder to the destination.
+    For OME-TIFF output, uses dask.array for lazy loading and tifffile
+    for memory-efficient tiled writes.
+    """
+    import os
+    import shutil
 
     is_multichannel = len(shape) > 3
     axes = "CZYX" if is_multichannel else "ZYX"
@@ -934,40 +939,57 @@ def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, sh
         # Ensure path ends with .zarr
         if not save_path.endswith(".zarr"):
             save_path = save_path + ".zarr"
-        # Copy to final location
-        final_zarr = zarr.open(save_path, mode="w", shape=shape, dtype=np.float32)
-        final_zarr[:] = out[:]
+
+        # Copy the zarr directory to the final location.
+        # Use the store's root directory if available, otherwise fall back
+        # to copying chunk-by-chunk.
+        source_path = getattr(out.store, "root", None)
+        if source_path and os.path.isdir(source_path):
+            # FilesystemStore: copy the entire directory
+            if os.path.exists(save_path):
+                shutil.rmtree(save_path)
+            shutil.copytree(source_path, save_path)
+        else:
+            # Non-filesystem store: create target and copy chunk-by-chunk
+            import zarr
+
+            final_zarr = zarr.open(
+                save_path, mode="w",
+                shape=out.shape,
+                dtype=out.dtype,
+                chunks=out.chunks,
+                compressor=out.compressor,
+            )
+            final_zarr[:] = out[:]
+
         return save_path
     else:
-        # OME-TIFF
+        # OME-TIFF — use dask.array for lazy loading + tifffile for tiled write
         if not save_path.endswith(".tif"):
             if not save_path.endswith(".tiff"):
                 save_path = save_path + ".ome.tif"
 
+        import dask.array as da
+        import tifffile
+
+        # Open the zarr array lazily (does not load into RAM)
+        dask_data = da.from_zarr(out)
+
+        # Write to OME-TIFF using tiled/chunked approach
         tifffile.imwrite(
             save_path,
+            dask_data,
             bigtiff=True,
-            shape=out.shape,
-            dtype="float32",
             photometric="minisblack",
             resolution=(1 / 0.1625, 1 / 0.1625),
             metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
+            tile=(256, 256),
         )
-        # Write data from zarr to tiff zarr store
-        store = tifffile.imread(save_path, mode="r+", aszarr=True)
-        z = zarr.open(store, mode="r+")
-        if len(z.shape) == 3:
-            z[:] = out[0, ...]
-        else:
-            z[:] = out[:]
-        store.close()
         return save_path
 
 
 def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format: str, shape: tuple) -> str:
     """Save deconvolution result from a numpy array to the specified format."""
-    import tifffile
-    import numpy as np
     import zarr
 
     is_multichannel = len(shape) > 3
@@ -976,7 +998,11 @@ def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format
     if output_format == "Zarr":
         if not save_path.endswith(".zarr"):
             save_path = save_path + ".zarr"
-        final_zarr = zarr.open(save_path, mode="w", shape=shape, dtype=np.float32)
+        final_zarr = zarr.open(
+            save_path, mode="w",
+            shape=result.shape,
+            dtype=result.dtype,
+        )
         final_zarr[:] = result
         return save_path
     else:
@@ -985,22 +1011,16 @@ def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format
             if not save_path.endswith(".tiff"):
                 save_path = save_path + ".ome.tif"
 
+        import tifffile
+
         tifffile.imwrite(
             save_path,
+            result,
             bigtiff=True,
-            shape=result.shape,
-            dtype="float32",
             photometric="minisblack",
             resolution=(1 / 0.1625, 1 / 0.1625),
             metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
         )
-        store = tifffile.imread(save_path, mode="r+", aszarr=True)
-        z = zarr.open(store, mode="r+")
-        if len(z.shape) == 3:
-            z[:] = result[0, ...]
-        else:
-            z[:] = result
-        store.close()
         return save_path
 
 

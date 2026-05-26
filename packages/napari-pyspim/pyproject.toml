@@ -43,6 +43,7 @@ dependencies = [
     "scipy>=1.7.0",
     "tifffile>=2021.0.0",
     "zarr>=2.10.0",
+    "dask>=2025.7.0",
 ]
 
 [project.urls]
