@@ -277,7 +277,7 @@ def handle_load_deskew(params: dict) -> dict:
     -------
     dict with keys: session_id, yx_proj_a, zy_proj_a, xz_proj_a,
                     yx_proj_b, zy_proj_b, xz_proj_b,
-                    volume_shape_a, volume_shape_b, method, step_size_lat
+                    volume_shape_a, volume_shape_b, method, step_size
     """
     import math
     try:
@@ -327,9 +327,6 @@ def handle_load_deskew(params: dict) -> dict:
             volume_a = acq.get("a", channel, time, window=window)
             volume_b = acq.get("b", channel, time, window=window)
 
-    # --- Calculate lateral step size ---
-    step_size_lat = step_size / math.cos(theta)
-
     # --- Deskew View A (direction = 1) ---
     if method == "shear":
         deskew_kwargs_a = {
@@ -348,7 +345,7 @@ def handle_load_deskew(params: dict) -> dict:
         deskew_kwargs_a = {}
 
     a_dsk = dsk.deskew_stage_scan(
-        volume_a, pixel_size, step_size_lat, 1,
+        volume_a, pixel_size, step_size, 1,
         theta=theta, method=method, **deskew_kwargs_a,
     )
     yx_proj_a, zy_proj_a, xz_proj_a = _compute_projections(a_dsk, projection_type)
@@ -375,7 +372,7 @@ def handle_load_deskew(params: dict) -> dict:
         deskew_kwargs_b = {}
 
     b_dsk = dsk.deskew_stage_scan(
-        volume_b, pixel_size, step_size_lat, -1,
+        volume_b, pixel_size, step_size, -1,
         theta=theta, method=method, **deskew_kwargs_b,
     )
 
@@ -413,7 +410,7 @@ def handle_load_deskew(params: dict) -> dict:
         "volume_shape_a": a_dsk.shape,
         "volume_shape_b": b_dsk.shape,
         "method": method,
-        "step_size_lat": step_size_lat,
+        "step_size": step_size,
         "pixel_size": pixel_size,
         "theta": theta,
     }
@@ -429,7 +426,7 @@ def handle_load_deskew(params: dict) -> dict:
         "volume_shape_a": list(a_dsk.shape),
         "volume_shape_b": list(b_dsk.shape),
         "method": method,
-        "step_size_lat": step_size_lat,
+        "step_size": step_size,
     }
 
 
@@ -1110,7 +1107,6 @@ def handle_apply_registration(params: dict) -> dict:
         pre_reg["tx_um"] / pixel_size,
     ]
 
-    step_size_lat = step_size / math.cos(theta_rad)
     deskew_kwargs = _get_deskew_kwargs(method)
 
     # Load bbox
@@ -1162,7 +1158,7 @@ def handle_apply_registration(params: dict) -> dict:
                 vol_b = acq.get("b", first_chan, t, window=window)
 
         a_dsk = dsk.deskew_stage_scan(
-            vol_a, pixel_size, step_size_lat, 1,
+            vol_a, pixel_size, step_size, 1,
             theta=theta_rad, method=method, **deskew_kwargs,
         )
         try:
@@ -1171,7 +1167,7 @@ def handle_apply_registration(params: dict) -> dict:
             pass
 
         b_dsk = dsk.deskew_stage_scan(
-            vol_b, pixel_size, step_size_lat, -1,
+            vol_b, pixel_size, step_size, -1,
             theta=theta_rad, method=method, **deskew_kwargs,
         )
         try:
@@ -1241,7 +1237,7 @@ def handle_apply_registration(params: dict) -> dict:
                     vol_b = acq.get("b", chan_idx, t, window=window)
 
             a_dsk = dsk.deskew_stage_scan(
-                vol_a, pixel_size, step_size_lat, 1,
+                vol_a, pixel_size, step_size, 1,
                 theta=theta_rad, method=method, **deskew_kwargs,
             )
             try:
@@ -1250,7 +1246,7 @@ def handle_apply_registration(params: dict) -> dict:
                 pass
 
             b_dsk = dsk.deskew_stage_scan(
-                vol_b, pixel_size, step_size_lat, -1,
+                vol_b, pixel_size, step_size, -1,
                 theta=theta_rad, method=method, **deskew_kwargs,
             )
             try:

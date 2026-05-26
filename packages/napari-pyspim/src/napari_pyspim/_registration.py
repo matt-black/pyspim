@@ -134,14 +134,14 @@ class LoadDeskewWorker(QThread):
         try:
             from pyspim.data import dispim as data
             from pyspim import deskew as dsk
-
+            
             # Load bounding box if present
             window = self._load_bbox()
             print(window)
 
             # Load data
             self.progress_updated.emit("Loading data...")
-            with data.uManagerAcquisition(self.data_path, self.multi_pos, cp) as acq:
+            with data.uManagerAcquisition(self.data_path, self.multi_pos, np) as acq:
                 if self.multi_pos:
                     volume_a = acq.get(self.position, "a", self.channel, self.time, window=window)
                     volume_b = acq.get(self.position, "b", self.channel, self.time, window=window)
@@ -152,9 +152,6 @@ class LoadDeskewWorker(QThread):
             self.progress_updated.emit(
                 f"Data loaded - A: {volume_a.shape}, B: {volume_b.shape}"
             )
-
-            # Calculate lateral step size
-            step_size_lat = self.step_size / math.cos(self.theta)
 
             # Deskew View A (direction = 1)
             self.progress_updated.emit("Deskewing View A...")
@@ -174,7 +171,7 @@ class LoadDeskewWorker(QThread):
             else:
                 kwargs = {}
             a_dsk = dsk.deskew_stage_scan(
-                volume_a, self.pixel_size, step_size_lat, 1, 
+                volume_a, self.pixel_size, self.step_size, 1,
                 theta=(self.theta / (math.pi/180.0)),
                 method=self.method,
                 **kwargs,
@@ -185,7 +182,7 @@ class LoadDeskewWorker(QThread):
             if self.method == "shear":
                 kwargs["rotation_thetas"] = (0, math.pi/2, 0)
             b_dsk = dsk.deskew_stage_scan(
-                volume_b, self.pixel_size, step_size_lat, -1, 
+                volume_b, self.pixel_size, self.step_size, -1,
                 theta=(self.theta / (math.pi/180.0)),
                 method=self.method,
                 **kwargs,
@@ -237,7 +234,7 @@ class LoadDeskewWorker(QThread):
                 "volume_shape_a": a_dsk.shape,
                 "volume_shape_b": b_dsk.shape,
                 "method": self.method,
-                "step_size_lat": step_size_lat,
+                "step_size": self.step_size,
             }
 
             self.ready.emit(result)
@@ -571,9 +568,6 @@ class ApplyWorker(QThread):
                 pre_reg["tx_um"] / pixel_size,
             ]
 
-            # Calculate lateral step size
-            step_size_lat = step_size / math.cos(theta_rad)
-
             # Get deskew kwargs
             deskew_kwargs = self._get_deskew_kwargs(method)
 
@@ -617,7 +611,7 @@ class ApplyWorker(QThread):
                         vol_b = acq.get("b", first_chan, t, window=window)
 
                 a_dsk = dsk.deskew_stage_scan(
-                    vol_a, pixel_size, step_size_lat, 1,
+                    vol_a, pixel_size, step_size, 1,
                     theta=theta_rad, method=method, **deskew_kwargs
                 )
                 try:
@@ -626,7 +620,7 @@ class ApplyWorker(QThread):
                     pass
 
                 b_dsk = dsk.deskew_stage_scan(
-                    vol_b, pixel_size, step_size_lat, -1,
+                    vol_b, pixel_size, step_size, -1,
                     theta=theta_rad, method=method, **deskew_kwargs
                 )
                 try:
@@ -699,7 +693,7 @@ class ApplyWorker(QThread):
 
                     # Deskew View A
                     a_dsk = dsk.deskew_stage_scan(
-                        vol_a, pixel_size, step_size_lat, 1,
+                        vol_a, pixel_size, step_size, 1,
                         theta=theta_rad, method=method, **deskew_kwargs
                     )
                     try:
@@ -709,7 +703,7 @@ class ApplyWorker(QThread):
 
                     # Deskew View B
                     b_dsk = dsk.deskew_stage_scan(
-                        vol_b, pixel_size, step_size_lat, -1,
+                        vol_b, pixel_size, step_size, -1,
                         theta=theta_rad, method=method, **deskew_kwargs
                     )
                     try:
