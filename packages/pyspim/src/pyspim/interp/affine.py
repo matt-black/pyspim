@@ -81,7 +81,7 @@ def output_shape_for_transform(
     coord = numpy.vstack([coord, numpy.zeros_like(coord[0, :])])
     coordT = (t @ coord)[:-1, :]
     ptp = numpy.ceil(numpy.ptp(coordT, axis=1))
-    x, y, z = int(ptp[0]), int(ptp[1]), int(ptp[2])
+    z, y, x = int(ptp[0]), int(ptp[1]), int(ptp[2])
     return z, y, x
 
 
