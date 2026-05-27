@@ -1136,6 +1136,7 @@ def handle_apply_registration(params: dict) -> dict:
     import shutil
 
     import numpy as np
+    import tifffile
     import zarr
 
     try:
@@ -1150,6 +1151,7 @@ def handle_apply_registration(params: dict) -> dict:
     multi_pos = params.get("multi_pos", False)
     position = params.get("position", 0)
     ignore_bbox = params.get("ignore_bbox", False)
+    save_tiffs = params.get("save_tiffs", False)
     request_id = params.get("_request_id", 0)
 
     from pyspim.data import dispim as data
@@ -1303,6 +1305,22 @@ def handle_apply_registration(params: dict) -> dict:
             f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage,
         )
 
+        # Helper to save TIFF after all channels are written
+        def _save_tiff_if_needed(zarr_path, data_arr):
+            from dask.array import from_zarr
+            dask_data = from_zarr(data_arr)
+            if save_tiffs:
+                tiff_path = zarr_path.replace(".zarr", ".tiff")
+                tifffile.imwrite(
+                    tiff_path,
+                    dask_data,
+                    bigtiff=True,
+                    photometric="minisblack",
+                    resolution=(1 / pixel_size, 1 / pixel_size),
+                    metadata={"axes": "CZYX", "spacing": pixel_size, "units": "um"},
+                    tile=(1024,1024),
+                )
+
         # Process remaining channels
         for chan_idx in channels[1:]:
             c = chan_idx - chan_start
@@ -1372,6 +1390,10 @@ def handle_apply_registration(params: dict) -> dict:
                 sys.stdout, request_id,
                 f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage,
             )
+
+        # Save TIFF files after all channels for this timepoint are written
+        _save_tiff_if_needed(a_zarr_path, arr_a)
+        _save_tiff_if_needed(b_zarr_path, arr_b)
 
     return {"output_folder": output_folder, "files_created": files_created}
 

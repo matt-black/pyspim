@@ -435,6 +435,7 @@ class ApplyWorker(QThread):
         position: int,
         output_folder: str,
         ignore_bbox: bool,
+        save_tiffs: bool = False,
     ):
         super().__init__()
         self.data_path = data_path
@@ -445,6 +446,7 @@ class ApplyWorker(QThread):
         self.position = position
         self.output_folder = output_folder
         self.ignore_bbox = ignore_bbox
+        self.save_tiffs = save_tiffs
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists and not ignored."""
@@ -559,6 +561,7 @@ class ApplyWorker(QThread):
             import math
             import shutil
             import zarr
+            import tifffile
             from pyspim.data import dispim as data
             from pyspim import deskew as dsk
             from pyspim.interp import affine
@@ -705,6 +708,22 @@ class ApplyWorker(QThread):
                     f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage
                 )
 
+                # Helper to save TIFF after all channels are written
+                def _save_tiff_if_needed(zarr_path: str, data_arr: "zarr.Array"):
+                    from dask.array import from_zarr
+                    dask_data = from_zarr(data_arr)
+                    if self.save_tiffs:
+                        tiff_path = zarr_path.replace(".zarr", ".tiff")
+                        tifffile.imwrite(
+                            tiff_path,
+                            dask_data,
+                            bigtiff=True,
+                            photometric="minisblack",
+                            resolution=(1 / pixel_size, 1 / pixel_size),
+                            metadata={"axes": "CZYX", "spacing": pixel_size, "units": "um"},
+                            tile=(1024,1024),
+                        )
+
                 # Process remaining channels
                 for chan_idx in channels[1:]:
                     c = chan_idx - chan_start  # index within the range
@@ -780,6 +799,10 @@ class ApplyWorker(QThread):
                     self.progress_updated.emit(
                         f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage
                     )
+
+                # Save TIFF files after all channels for this timepoint are written
+                _save_tiff_if_needed(a_zarr_path, arr_a)
+                _save_tiff_if_needed(b_zarr_path, arr_b)
 
             self.progress_updated.emit("Apply completed!", 100)
             self.finished.emit()
@@ -1097,6 +1120,13 @@ class RegistrationWidget(QWidget):
         chan_row.addWidget(QLabel("-"))
         chan_row.addWidget(self.channel_max_spin)
         apply_layout.addLayout(chan_row)
+
+        # Save TIFFs checkbox
+        self.save_tiffs_checkbox = QCheckBox("Save TIFFs")
+        self.save_tiffs_checkbox.setToolTip(
+            "When enabled, saves deskewed volumes as TIFF files in addition to Zarr."
+        )
+        apply_layout.addWidget(self.save_tiffs_checkbox)
 
         # Apply button
         self.apply_button = QPushButton("Apply")
@@ -2325,6 +2355,7 @@ class RegistrationWidget(QWidget):
         multi_pos = self.multi_pos_checkbox.isChecked()
         position = self.position_spin.value()
         ignore_bbox = self.ignore_bbox_checkbox.isChecked()
+        save_tiffs = self.save_tiffs_checkbox.isChecked()
 
         # Determine output folder
         if multi_pos:
@@ -2350,6 +2381,7 @@ class RegistrationWidget(QWidget):
                 data_path, output_folder,
                 (time_min, time_max), (chan_min, chan_max),
                 multi_pos, position, ignore_bbox,
+                save_tiffs,
             )
         else:
             params_path = os.path.join(data_path, "deskew_registration_params.json")
@@ -2357,6 +2389,7 @@ class RegistrationWidget(QWidget):
                 data_path, params_path,
                 (time_min, time_max), (chan_min, chan_max),
                 multi_pos, position, output_folder, ignore_bbox,
+                save_tiffs,
             )
             self.apply_worker.finished.connect(self._on_apply_finished)
             self.apply_worker.error_occurred.connect(self._on_apply_error)
@@ -2372,6 +2405,7 @@ class RegistrationWidget(QWidget):
         multi_pos: bool,
         position: int,
         ignore_bbox: bool,
+        save_tiffs: bool,
     ):
         """Apply registration via remote server using signal-based pattern."""
         if not self.remote_client:
@@ -2386,6 +2420,7 @@ class RegistrationWidget(QWidget):
             "multi_pos": multi_pos,
             "position": position,
             "ignore_bbox": ignore_bbox,
+            "save_tiffs": save_tiffs,
         }
 
         self._pending_command_type = "apply_registration"
