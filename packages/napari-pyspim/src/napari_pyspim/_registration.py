@@ -57,7 +57,6 @@ class LoadDeskewWorker(QThread):
         projection_type: str,
         pixel_size: float,
         step_size: float,
-        theta: float,
         method: str = "orthogonal",
         ignore_bbox: bool = False,
         multi_pos: bool = False,
@@ -71,7 +70,7 @@ class LoadDeskewWorker(QThread):
         self.projection_type = projection_type
         self.pixel_size = pixel_size
         self.step_size = step_size
-        self.theta = theta
+        self.theta = math.pi / 4  # Hardcoded to 45 degrees
         self.method = method
         self.ignore_bbox = ignore_bbox
         self.multi_pos = multi_pos
@@ -158,7 +157,7 @@ class LoadDeskewWorker(QThread):
             if self.method == "shear":
                 kwargs = {
                     "rotation_thetas": (0, 0, 0),
-                    "interp_method": "linear",
+                    "interp_method": "cubspl",
                     "auto_crop": self.auto_crop,
                     "preserve_dtype": True,
                     "block_size": (8,8,8),
@@ -167,6 +166,12 @@ class LoadDeskewWorker(QThread):
                 kwargs = {
                     "preserve_dtype": True,
                     "stream": None,
+                }
+            elif self.method == "affine":
+                kwargs = {
+                    "preserve_dtype": True,
+                    "interp_method": "cubspl",
+                    "block_size": (8,8,8),
                 }
             else:
                 kwargs = {}
@@ -199,7 +204,7 @@ class LoadDeskewWorker(QThread):
                 b_dsk = affine_transform(
                     b_dsk, 
                     R,
-                    "linear",
+                    "cubspl",
                     True,
                     (b_dsk.shape[0], b_dsk.shape[1], b_dsk.shape[2]),
                     8, 8, 8
@@ -456,7 +461,7 @@ class ApplyWorker(QThread):
         if method == "shear":
             return {
                 "rotation_thetas": (0, 0, 0),
-                "interp_method": "linear",
+                "interp_method": "cubspl",
                 "auto_crop": False,
                 "preserve_dtype": True,
                 "block_size": (8, 8, 8),
@@ -465,6 +470,12 @@ class ApplyWorker(QThread):
             return {
                 "preserve_dtype": True,
                 "stream": None,
+            }
+        elif method == "affine":
+            return {
+                "preserve_dtype": True,
+                "interp_method": "cubspl",
+                "block_size": (8, 8, 8),
             }
         else:  # dispim
             return {"preserve_dtype": True}
@@ -552,8 +563,8 @@ class ApplyWorker(QThread):
             method = dp["method"]
             step_size = dp["step_size_um"]
             pixel_size = dp["pixel_size_um"]
-            theta_deg = dp["theta_degrees"]
-            theta_rad = theta_deg * math.pi / 180
+            theta_deg = 45.0  # Hardcoded to 45 degrees
+            theta_rad = math.pi / 4
             affine_matrix = np.array(params["affine_registration_matrix"])
 
             # Load registration parameters for crop_to_common logic
@@ -868,7 +879,7 @@ class RegistrationWidget(QWidget):
         deskew_layout = QFormLayout()
 
         self.method_combo = QComboBox()
-        self.method_combo.addItems(["orthogonal", "dispim", "shear"])
+        self.method_combo.addItems(["orthogonal", "dispim", "shear", "affine"])
         self.method_combo.setCurrentText("orthogonal")
 
         self.step_size_spin = QDoubleSpinBox()
@@ -883,16 +894,9 @@ class RegistrationWidget(QWidget):
         self.pixel_size_spin.setValue(0.1625)
         self.pixel_size_spin.setSuffix(" μm")
         
-        self.theta_spin = QDoubleSpinBox()
-        self.theta_spin.setRange(0, 90)
-        self.theta_spin.setValue(45)
-        self.theta_spin.setSuffix("°")
-        self.theta_spin.setDecimals(1)
-
         deskew_layout.addRow("Method:", self.method_combo)
         deskew_layout.addRow("Step Size:", self.step_size_spin)
         deskew_layout.addRow("Pixel Size:", self.pixel_size_spin)
-        deskew_layout.addRow("Theta (angle):", self.theta_spin)
 
         # Auto-Crop checkbox (only visible for shear method)
         self.auto_crop_checkbox = QCheckBox("Auto-Crop")
@@ -1279,8 +1283,8 @@ class RegistrationWidget(QWidget):
         # Get deskewing parameters
         pixel_size = self.pixel_size_spin.value()
         step_size = self.step_size_spin.value()
-        theta_deg = self.theta_spin.value()
-        theta_rad = theta_deg * math.pi / 180
+        theta_deg = 45.0  # Hardcoded to 45 degrees
+        theta_rad = math.pi / 4
         method = self.method_combo.currentText()
         auto_crop = self.auto_crop_checkbox.isChecked()
         ignore_bbox = self.ignore_bbox_checkbox.isChecked()
@@ -1289,7 +1293,7 @@ class RegistrationWidget(QWidget):
         if self._remote_mode and self.remote_client:
             self._load_deskew_remote(
                 data_path, channel, projection_type,
-                pixel_size, step_size, theta_rad,
+                pixel_size, step_size,
                 method, ignore_bbox,
                 multi_pos, time, position,
                 auto_crop,
@@ -1297,7 +1301,7 @@ class RegistrationWidget(QWidget):
         else:
             self._load_deskew_local(
                 data_path, channel, projection_type,
-                pixel_size, step_size, theta_rad,
+                pixel_size, step_size,
                 method, ignore_bbox,
                 multi_pos, time, position,
                 auto_crop,
@@ -1305,7 +1309,7 @@ class RegistrationWidget(QWidget):
 
     def _load_deskew_local(
         self, data_path, channel, projection_type,
-        pixel_size, step_size, theta_rad,
+        pixel_size, step_size,
         method, ignore_bbox,
         multi_pos, time, position,
         auto_crop,
@@ -1313,7 +1317,7 @@ class RegistrationWidget(QWidget):
         """Load deskew locally using LoadDeskewWorker."""
         self.load_worker = LoadDeskewWorker(
             data_path, channel, projection_type,
-            pixel_size, step_size, theta_rad,
+            pixel_size, step_size,
             method, ignore_bbox,
             multi_pos, time, position,
             auto_crop,
@@ -1325,7 +1329,7 @@ class RegistrationWidget(QWidget):
 
     def _load_deskew_remote(
         self, data_path, channel, projection_type,
-        pixel_size, step_size, theta_rad,
+        pixel_size, step_size,
         method, ignore_bbox,
         multi_pos, time, position,
         auto_crop,
@@ -1341,7 +1345,7 @@ class RegistrationWidget(QWidget):
             "projection_type": projection_type,
             "pixel_size": pixel_size,
             "step_size": step_size,
-            "theta": theta_rad,
+            "theta": math.pi / 4,  # Hardcoded to 45 degrees
             "method": method,
             "ignore_bbox": ignore_bbox,
             "multi_pos": multi_pos,
@@ -1610,11 +1614,6 @@ class RegistrationWidget(QWidget):
             if "pixel_size" in data_dict:
                 self.pixel_size_spin.setValue(data_dict["pixel_size"])
 
-            if "theta" in data_dict:
-                theta_rad = data_dict["theta"]
-                theta_deg = theta_rad * 180 / math.pi
-                self.theta_spin.setValue(theta_deg)
-
     def _compute_common_crops(self, a_shape, b_shape, t0):
         """Compute crop slices for both volumes to their common overlapping region.
 
@@ -1879,7 +1878,7 @@ class RegistrationWidget(QWidget):
                 "transform_type": result["transform_type"],
                 "step_size": self.step_size_spin.value(),
                 "pixel_size": _pixel_size,
-                "theta": self.theta_spin.value() * math.pi / 180,
+                "theta": math.pi / 4,  # Hardcoded to 45 degrees
             },
             scale=(_pixel_size, _pixel_size, _pixel_size),
             opacity=0.5,
@@ -1896,7 +1895,7 @@ class RegistrationWidget(QWidget):
                 "transform_type": result["transform_type"],
                 "step_size": self.step_size_spin.value(),
                 "pixel_size": self.pixel_size_spin.value(),
-                "theta": self.theta_spin.value() * math.pi / 180,
+                "theta": math.pi / 4,  # Hardcoded to 45 degrees
             },
             scale=(_pixel_size, _pixel_size, _pixel_size),
             opacity=0.5,
@@ -1930,7 +1929,7 @@ class RegistrationWidget(QWidget):
             "transform_type": result["transform_type"],
             "step_size": self.step_size_spin.value(),
             "pixel_size": self.pixel_size_spin.value(),
-            "theta": self.theta_spin.value() * math.pi / 180,
+            "theta": math.pi / 4,  # Hardcoded to 45 degrees
         }
         self.registered.emit(output_data)
 
@@ -2034,7 +2033,7 @@ class RegistrationWidget(QWidget):
             "transform_type": self.transform_combo.currentText(),
             "step_size": self.step_size_spin.value(),
             "pixel_size": self.pixel_size_spin.value(),
-            "theta": self.theta_spin.value() * math.pi / 180,
+            "theta": math.pi / 4,  # Hardcoded to 45 degrees
         }
         self.registered.emit(output_data)
 
@@ -2104,7 +2103,7 @@ class RegistrationWidget(QWidget):
                 "method": self.method_combo.currentText(),
                 "step_size_um": self.step_size_spin.value(),
                 "pixel_size_um": self.pixel_size_spin.value(),
-                "theta_degrees": self.theta_spin.value(),
+                "theta_degrees": 45.0,  # Hardcoded to 45 degrees
                 "auto_crop": self.auto_crop_checkbox.isChecked(),
             },
             "pre_reg_transform": {

@@ -356,7 +356,7 @@ class DeconvolutionWidget(QWidget):
         # Deskew Method dropdown
         deskew_layout = QFormLayout()
         self.deskew_method_combo = QComboBox()
-        self.deskew_method_combo.addItems(["Orthogonal", "Shear-Warp"])
+        self.deskew_method_combo.addItems(["Orthogonal", "Shear-Warp", "Affine"])
         deskew_layout.addRow("Deskew Method:", self.deskew_method_combo)
         input_layout.addLayout(deskew_layout)
 
@@ -1257,11 +1257,15 @@ class DeconvolutionWidget(QWidget):
         psf_type = self.psf_type_combo.currentText()
         psf_a_path = self.psf_a_path.text().strip()
         psf_b_path = self.psf_b_path.text().strip()
-        # Map per-view FWHM to server's fwhm_x/y/z parameters
-        # Use View A FWHM as representative (lateral → x/y, axial → z)
-        fwhm_x = self.psf_a_fwhm_lateral.value()
-        fwhm_y = self.psf_a_fwhm_lateral.value()
-        fwhm_z = self.psf_a_fwhm_axial.value()
+
+        # Collect deskew method for theta-based PSF rotation
+        deskew_method = self.deskew_method_combo.currentText()
+
+        # Collect per-view FWHM for PSF generation
+        fwhm_a_lat = self.psf_a_fwhm_lateral.value()
+        fwhm_a_ax = self.psf_a_fwhm_axial.value()
+        fwhm_b_lat = self.psf_b_fwhm_lateral.value()
+        fwhm_b_ax = self.psf_b_fwhm_axial.value()
 
         # Collect backprojector parameters
         # Derive bp_type from flipped_psf_check + psf_type_combo
@@ -1302,12 +1306,18 @@ class DeconvolutionWidget(QWidget):
             "psf_type": psf_type.lower(),  # Normalize to lowercase for server
             "psf_a_path": psf_a_path if psf_type == "Custom" else None,
             "psf_b_path": psf_b_path if psf_type == "Custom" else None,
-            "fwhm_x": fwhm_x,
-            "fwhm_y": fwhm_y,
-            "fwhm_z": fwhm_z,
+            "deskew_method": deskew_method,
+            "fwhm_a_lat": fwhm_a_lat,
+            "fwhm_a_ax": fwhm_a_ax,
+            "fwhm_b_lat": fwhm_b_lat,
+            "fwhm_b_ax": fwhm_b_ax,
             "bp_type": bp_type,
             "bp_a_path": bp_a_path if bp_type == "custom" else None,
             "bp_b_path": bp_b_path if bp_type == "custom" else None,
+            "bp_fwhm_a_lat": self.bp_a_fwhm_lateral.value(),
+            "bp_fwhm_a_ax": self.bp_a_fwhm_axial.value(),
+            "bp_fwhm_b_lat": self.bp_b_fwhm_lateral.value(),
+            "bp_fwhm_b_ax": self.bp_b_fwhm_axial.value(),
             "decon_function": decon_function,
             "num_iter": num_iter,
             "epsilon": epsilon,

@@ -291,7 +291,7 @@ def handle_load_deskew(params: dict) -> dict:
     projection_type = params["projection_type"]
     pixel_size = params["pixel_size"]
     step_size = params["step_size"]
-    theta = params["theta"]
+    theta = math.pi / 4  # Hardcoded to 45 degrees
     method = params["method"]
     ignore_bbox = params.get("ignore_bbox", False)
     multi_pos = params.get("multi_pos", False)
@@ -341,6 +341,12 @@ def handle_load_deskew(params: dict) -> dict:
             "preserve_dtype": True,
             "stream": None,
         }
+    elif method == "affine":
+        deskew_kwargs_a = {
+            "preserve_dtype": True,
+            "interp_method": "cubspl",
+            "block_size": (8,8,8),
+        }
     else:
         deskew_kwargs_a = {}
 
@@ -367,6 +373,12 @@ def handle_load_deskew(params: dict) -> dict:
         deskew_kwargs_b = {
             "preserve_dtype": True,
             "stream": None,
+        }
+    elif method == "affine":
+        deskew_kwargs_b = {
+            "preserve_dtype": True,
+            "interp_method": "cubspl",
+            "block_size": (8,8,8),
         }
     else:
         deskew_kwargs_b = {}
@@ -437,6 +449,7 @@ def _normalize_deskew_method(method: str) -> str:
         "ortho": "ortho",
         "dispim": "dispim",
         "shear": "shear",
+        "affine": "affine",
     }
     return method_map.get(method.lower(), method)
 
@@ -457,6 +470,12 @@ def _get_deskew_kwargs(method: str) -> dict:
         return {
             "preserve_dtype": True,
             "stream": None,
+        }
+    elif method == "affine":
+        return {
+            "preserve_dtype": True,
+            "interp_method": "cubspl",
+            "block_size": (8, 8, 8),
         }
     else:  # dispim
         return {"preserve_dtype": True}
@@ -718,12 +737,23 @@ def handle_deconvolve(params: dict) -> dict:
         psf_type : str - "gaussian" or "custom"
         psf_a_path : str | None (if custom)
         psf_b_path : str | None (if custom)
-        fwhm_x : float
-        fwhm_y : float
-        fwhm_z : float
+        deskew_method : str - "Orthogonal", "Shear-Warp", or "Affine"
+            Determines theta angles for PSF rotation (Shear-Warp: 0/90 deg,
+            others: 45/-45 deg).
+        fwhm_a_lat : float - View A lateral FWHM in pixels.
+        fwhm_a_ax : float - View A axial FWHM in pixels.
+        fwhm_b_lat : float - View B lateral FWHM in pixels.
+        fwhm_b_ax : float - View B axial FWHM in pixels.
+        fwhm_x : float (legacy, fallback when per-view params absent)
+        fwhm_y : float (legacy)
+        fwhm_z : float (legacy)
         bp_type : str - "gaussian" or "custom" or "flipped_psf"
         bp_a_path : str | None (if custom)
         bp_b_path : str | None (if custom)
+        bp_fwhm_a_lat : float - Backprojector A lateral FWHM.
+        bp_fwhm_a_ax : float - Backprojector A axial FWHM.
+        bp_fwhm_b_lat : float - Backprojector B lateral FWHM.
+        bp_fwhm_b_ax : float - Backprojector B axial FWHM.
         decon_function : str - "additive", "efficient", or "dispim"
         num_iter : int
         epsilon : float
@@ -761,9 +791,23 @@ def handle_deconvolve(params: dict) -> dict:
     )
     output_format = params.get("output_format", "OME-TIFF")
     psf_type = params.get("psf_type", "gaussian").lower()
-    fwhm_x = params.get("fwhm_x", 1.0)
-    fwhm_y = params.get("fwhm_y", 1.0)
-    fwhm_z = params.get("fwhm_z", 3.0)
+    deskew_method = params.get("deskew_method", "Orthogonal")
+    # Per-view FWHM parameters
+    fwhm_a_lat = params.get("fwhm_a_lat", 2.0)
+    fwhm_a_ax = params.get("fwhm_a_ax", 7.0)
+    fwhm_b_lat = params.get("fwhm_b_lat", 2.0)
+    fwhm_b_ax = params.get("fwhm_b_ax", 7.0)
+    # Backprojector FWHM parameters
+    bp_fwhm_a_lat = params.get("bp_fwhm_a_lat", fwhm_a_lat)
+    bp_fwhm_a_ax = params.get("bp_fwhm_a_ax", fwhm_a_ax)
+    bp_fwhm_b_lat = params.get("bp_fwhm_b_lat", fwhm_b_lat)
+    bp_fwhm_b_ax = params.get("bp_fwhm_b_ax", fwhm_b_ax)
+    # Legacy fallback: if per-view params not provided, use old fwhm_x/y/z
+    if "fwhm_a_lat" not in params and "fwhm_x" in params:
+        fwhm_a_lat = params.get("fwhm_x", 2.0)
+        fwhm_a_ax = params.get("fwhm_z", 7.0)
+        fwhm_b_lat = fwhm_a_lat
+        fwhm_b_ax = fwhm_a_ax
     bp_type = params.get("bp_type", "flipped_psf")
     decon_function = params.get("decon_function", "additive")
     num_iter = params.get("num_iter", 20)
@@ -783,26 +827,49 @@ def handle_deconvolve(params: dict) -> dict:
 
     _progress("Generating PSF...", 10)
 
-    # Generate or load PSF volumes
-    psf_size = (32, 32, 32)  # Default PSF size
+    # --- Compute theta angles from deskew method ---
+    # Matches the logic in DeconvolutionWidget._get_psf_and_backprojectors()
+    deskew_method_lower = deskew_method.lower().replace("-", "").replace(" ", "")
+    if deskew_method_lower == "shearwarp" or deskew_method_lower == "shear":
+        theta_a_deg = 0.0
+        theta_b_deg = 90.0
+    else:  # orthogonal, affine, dispim
+        theta_a_deg = 45.0
+        theta_b_deg = -45.0
 
-    if psf_type == "gaussian":
-        # Convert FWHM to sigma: sigma = FWHM / (2 * sqrt(2 * ln(2)))
+    # --- Helper: generate Gaussian PSF with theta rotation ---
+    def _make_gaussian_psf(fwhm_lat, fwhm_ax, theta_deg):
+        """Generate a Gaussian PSF volume with optional ZX-plane rotation."""
         import math
-        fwhm_to_sigma = 1.0 / (2 * math.sqrt(2 * math.log(2)))
-        sx = fwhm_x * fwhm_to_sigma
-        sy = fwhm_y * fwhm_to_sigma
-        sz = fwhm_z * fwhm_to_sigma
-
-        # Center of PSF
-        z0, y0, x0 = ((s - 1) / 2 for s in psf_size)
-        ampl, bkgrnd = 1.0, 0.0
-
+        from scipy import ndimage
         from napari_pyspim._psf import generate_psf_im, normalize_psf_im
 
-        pars = [x0, y0, z0, sx, sy, sz, ampl, bkgrnd]
-        psf_a = normalize_psf_im(generate_psf_im(pars, psf_size, "spherical"))
-        psf_b = psf_a.copy()
+        fwhm_to_sigma = 1.0 / (2 * math.sqrt(2 * math.log(2)))
+        sigma_lat = fwhm_lat * fwhm_to_sigma
+        sigma_ax = fwhm_ax * fwhm_to_sigma
+
+        # Calculate PSF size: FWHM * 3, rounded up to odd
+        size = math.ceil(max(fwhm_ax, fwhm_lat) * 3)
+        if size % 2 == 0:
+            size += 1
+
+        im_shape = (size, size, size)
+        # pars: [x0, y0, z0, sx, sy, sz, ampl, bkgrnd]
+        pars = [size / 2, size / 2, size / 2, sigma_lat, sigma_lat, sigma_ax, 1.0, 0.0]
+        psf_im = generate_psf_im(pars, im_shape, "spherical")
+
+        # Apply rotation in the ZX plane (axes 0 and 2) if theta is non-zero
+        if theta_deg != 0.0:
+            psf_im = ndimage.rotate(
+                psf_im, theta_deg, axes=(0, 2), reshape=True,
+                mode="constant", cval=0
+            )
+
+        return normalize_psf_im(psf_im)
+
+    if psf_type == "gaussian":
+        psf_a = _make_gaussian_psf(fwhm_a_lat, fwhm_a_ax, theta_a_deg)
+        psf_b = _make_gaussian_psf(fwhm_b_lat, fwhm_b_ax, theta_b_deg)
     else:
         # Custom PSF: load from files
         psf_a_path = params.get("psf_a_path")
@@ -813,15 +880,13 @@ def handle_deconvolve(params: dict) -> dict:
         else:
             raise ValueError("Custom PSF selected but paths not provided")
 
-    # Generate or load backprojectors
+    # --- Generate or load backprojectors ---
     if bp_type == "flipped_psf":
-        # Backprojector is flipped PSF
         bp_a = np.flip(psf_a).copy()
         bp_b = np.flip(psf_b).copy()
     elif bp_type == "gaussian":
-        # Use same PSF as backprojector
-        bp_a = psf_a.copy()
-        bp_b = psf_b.copy()
+        bp_a = _make_gaussian_psf(bp_fwhm_a_lat, bp_fwhm_a_ax, theta_a_deg)
+        bp_b = _make_gaussian_psf(bp_fwhm_b_lat, bp_fwhm_b_ax, theta_b_deg)
     else:
         # Custom backprojector: load from files
         bp_a_path = params.get("bp_a_path")
@@ -1093,8 +1158,8 @@ def handle_apply_registration(params: dict) -> dict:
     method = _normalize_deskew_method(dp["method"])
     step_size = dp["step_size_um"]
     pixel_size = dp["pixel_size_um"]
-    theta_deg = dp["theta_degrees"]
-    theta_rad = theta_deg * math.pi / 180
+    theta_deg = 45.0  # Hardcoded to 45 degrees
+    theta_rad = math.pi / 4
     affine_matrix = np.array(saved_params["affine_registration_matrix"])
 
     rp = saved_params["registration_parameters"]
