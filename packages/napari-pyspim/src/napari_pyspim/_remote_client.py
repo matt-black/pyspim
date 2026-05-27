@@ -1,558 +1,622 @@
-"""
-Remote client for napari-pyspim.
+"""Remote client for napari-pyspim.
 
-Manages SSH connection and MessagePack-based communication with the
-remote computation server.
+Manages the SSH connection and communication with the remote server process
+using length-prefixed MessagePack over SSH stdin/stdout.
 """
 
-import importlib.resources
-import json
+from __future__ import annotations
+
+import logging
 import os
 import queue
-import time
+import struct
 import threading
+import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 import msgpack
 import numpy as np
 import paramiko
-from qtpy.QtCore import QObject, Signal, Slot, QThread
+from qtpy.QtCore import QObject, Signal
 
+logger = logging.getLogger(__name__)
 
-def encode_array(obj):
-    """Encode numpy arrays for MessagePack serialization."""
+# ---------------------------------------------------------------------------
+# Serialization helpers  (mirror of _remote_server.py)
+# ---------------------------------------------------------------------------
+
+def _encode_array(obj: Any) -> dict:
+    """Encode a numpy array as a MessagePack-serializable dict."""
     if isinstance(obj, np.ndarray):
-        return msgpack.ExtType(0, msgpack.packb({
-            'dtype': str(obj.dtype),
-            'shape': obj.shape,
-            'data': obj.tobytes(),
-        }))
+        return {
+            "__numpy__": True,
+            "dtype": str(obj.dtype),
+            "shape": list(obj.shape),
+            "data": obj.tobytes(),
+        }
     raise TypeError(f"Cannot encode object of type {type(obj)}")
 
 
-def decode_array(code, data, header):
-    """Decode numpy arrays from MessagePack ext type."""
-    if code == 0:
-        meta = msgpack.unpackb(data, raw=False)
-        arr = np.frombuffer(meta['data'], dtype=np.dtype(meta['dtype']))
-        return arr.reshape(meta['shape'])
-    return msgpack.ExtType(code, data)
+def _decode_array(obj: dict) -> "np.ndarray | dict":
+    """Decode a dict produced by ``_encode_array`` back to a numpy array."""
+    if isinstance(obj, dict) and obj.get("__numpy__"):
+        return np.frombuffer(
+            obj["data"], dtype=np.dtype(obj["dtype"])
+        ).reshape(obj["shape"])
+    return obj
 
 
-def _read_exact(stream, n):
-    """Read exactly n bytes from a stream."""
-    data = b''
-    while len(data) < n:
-        chunk = stream.read(n - len(data))
-        if not chunk:
-            break
-        data += chunk
-    return data
-
-
-def _read_message(stdout):
-    """Read a single length-prefixed MessagePack message from stdout.
-
-    Returns the unpacked message dict, or None on EOF/connection error.
-    """
-    header = _read_exact(stdout, 8)
-    if len(header) < 8:
-        return None  # EOF
-    length = int.from_bytes(header, 'big')
-    data = _read_exact(stdout, length)
-    if len(data) < length:
-        return None  # EOF
-    return msgpack.unpackb(data, ext_hook=decode_array, raw=False)
-
-
-class _SenderThread(QThread):
-    """Thread for sending messages to the remote server."""
-
-    def __init__(self, stdin_stream):
-        super().__init__()
-        self._stdin = stdin_stream
-        self._send_queue = queue.Queue()
-        self._running = True
-
-    def send(self, message):
-        """Queue a message for sending."""
-        packed = msgpack.packb(message, default=encode_array)
-        length = len(packed)
-        self._send_queue.put((length.to_bytes(8, 'big'), packed))
-
-    def stop(self):
-        """Signal the thread to stop."""
-        self._running = False
-        self._send_queue.put(None)  # Sentinel
-
-    def run(self):
-        """Send messages from the queue."""
-        while self._running:
-            try:
-                item = self._send_queue.get(timeout=0.5)
-                if item is None:
-                    break
-                header, data = item
-                self._stdin.write(header)
-                self._stdin.write(data)
-                self._stdin.flush()
-            except queue.Empty:
-                continue
-            except (BrokenPipeError, OSError):
-                break
-
-
-class _ReceiverThread(QThread):
-    """Thread for receiving messages from the remote server."""
-
-    message_received = Signal(dict)
-
-    def __init__(self, stdout_stream):
-        super().__init__()
-        self._stdout = stdout_stream
-        self._running = True
-
-    def stop(self):
-        """Signal the thread to stop."""
-        self._running = False
-
-    def run(self):
-        """Read messages from stdout."""
-        while self._running:
-            try:
-                message = _read_message(self._stdout)
-                if message is None:
-                    break  # EOF
-                self.message_received.emit(message)
-            except (OSError, EOFError, msgpack.ExtraData):
-                break
-
+# ---------------------------------------------------------------------------
+# RemoteClient
+# ---------------------------------------------------------------------------
 
 class RemoteClient(QObject):
     """Manages SSH connection and communication with remote compute server.
 
-    Signals:
-        connected: Emitted when SSH connection is established.
-        disconnected: Emitted when SSH connection is closed.
-        error: Emitted when an error occurs (str message).
-        progress: Emitted with progress updates from remote server (str).
+    Signals
+    -------
+    connected
+        Emitted when the remote server is ready.
+    disconnected
+        Emitted when the connection is closed.
+    error : str
+        Emitted when an error occurs.
+    progress : str, int
+        Emitted for progress updates from the server (message, percentage).
+    command_response : dict
+        Emitted when a command response arrives from the server.
+        The dict contains keys: request_id, success, result, error.
     """
 
     connected = Signal()
     disconnected = Signal()
     error = Signal(str)
-    progress = Signal(str)
+    progress = Signal(str, int)
+    command_response = Signal(dict)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None):  # type: ignore[no-untyped-def]
         super().__init__(parent)
-        self._ssh = None  # paramiko.SSHClient
-        self._transport = None  # paramiko.Transport
-        self._sftp = None  # paramiko.SFTPClient
-        self._sender = None  # _SenderThread
-        self._receiver = None  # _ReceiverThread
-        self._pending_callbacks = {}  # request_id -> callback
-        self._request_id_counter = 0
+        self._ssh: paramiko.SSHClient | None = None
+        self._channel: paramiko.Channel | None = None
+        self._sftp: paramiko.SFTPClient | None = None
+        self._sender_thread: threading.Thread | None = None
+        self._receiver_thread: threading.Thread | None = None
+        self._message_queue: queue.Queue[dict | None] = queue.Queue()
+        self._pending_callbacks: dict[int, Callable] = {}
+        self._pending_progress: dict[int, Callable] = {}
+        self._request_id: int = 0
         self._lock = threading.Lock()
         self._connected = False
+        self._server_capabilities: dict = {}
+        # Connection params for potential reuse
+        self._host: str | None = None
+        self._port: int | None = None
+        self._username: str | None = None
+        self._key_path: str | None = None
+        self._remote_script_path: str | None = None
 
-        # Connection settings
-        self.host = None
-        self.port = 22
-        self.username = None
-        self.key_path = None
-        self.remote_venv = None
-
-        # Config file path
-        self._config_dir = Path.home() / '.pyspim'
-        self._config_path = self._config_dir / 'remote_config.json'
-
-    @property
-    def is_connected(self):
-        """Return True if SSH connection is active."""
-        return self._connected
-
-    @property
-    def sftp_client(self):
-        """Return the SFTP client for file operations."""
-        return self._sftp
-
-    # --- Connection Management ---
-
-    def load_config(self) -> dict:
-        """Load saved connection settings from config file."""
-        if self._config_path.exists():
-            try:
-                with open(self._config_path, 'r') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError):
-                pass
-        return {}
-
-    def save_config(self, config: dict):
-        """Save connection settings to config file (excludes password/passphrase)."""
-        self._config_dir.mkdir(parents=True, exist_ok=True)
-        # Never save password or passphrase
-        safe_config = {k: v for k, v in config.items()
-                       if k not in ('password', 'key_passphrase')}
-        with open(self._config_path, 'w') as f:
-            json.dump(safe_config, f, indent=2)
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
 
     def connect(
         self,
         host: str,
-        port: int = 22,
-        username: str = None,
-        auth_method: str = 'key',  # 'password' or 'key'
-        password: str = None,
-        key_path: str = None,
-        key_passphrase: str = None,
-        remote_venv: str = None,
+        port: int,
+        username: str,
+        auth_method: str,
+        password: str | None = None,
+        key_path: str | None = None,
+        key_passphrase: str | None = None,
+        remote_venv: str | None = None,
     ) -> bool:
         """Establish SSH connection and start remote Python session.
 
-        Returns True if connection was successful.
+        Parameters
+        ----------
+        host : str
+            Remote server hostname or IP.
+        port : int
+            SSH port (default 22).
+        username : str
+            SSH username.
+        auth_method : str
+            ``"password"`` or ``"key"``.
+        password : str, optional
+            SSH password (required when auth_method="password").
+        key_path : str, optional
+            Path to local SSH private key (required when auth_method="key").
+        key_passphrase : str, optional
+            Passphrase for encrypted private key.
+        remote_venv : str, optional
+            Path to the pyspim virtualenv on the remote server.
+
+        Returns
+        -------
+        bool
+            True if connection succeeded.
         """
         try:
-            self.host = host
-            self.port = port
-            self.username = username
-            self.key_path = key_path
-            self.remote_venv = remote_venv
+            self._host = host
+            self._port = port
+            self._username = username
+            self._key_path = key_path
 
-            self.progress.emit(f"Connecting to {host}:{port}...")
-
-            # Create SSH client
+            # --- SSH connection ---
             self._ssh = paramiko.SSHClient()
             self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-            # Connect
-            connect_kwargs = {
-                'hostname': host,
-                'port': port,
-                'username': username,
-                'look_for_keys': False,
-                'allow_agent': False,
+            connect_kwargs: dict[str, Any] = {
+                "hostname": host,
+                "port": port,
+                "username": username,
+                "allow_agent": True,
+                "look_for_keys": False,  # Only use explicitly provided key
+                "timeout": 30,
             }
-            if auth_method == 'password':
-                connect_kwargs['password'] = password
-            else:
-                if key_path:
-                    connect_kwargs['key_filename'] = key_path
+
+            if auth_method == "password":
+                connect_kwargs["password"] = password
+            elif auth_method == "key":
+                connect_kwargs["key_filename"] = key_path
                 if key_passphrase:
-                    connect_kwargs['passphrase'] = key_passphrase
+                    connect_kwargs["passphrase"] = key_passphrase
 
             self._ssh.connect(**connect_kwargs)
-            self._transport = self._ssh.get_transport()
 
-            # Start SFTP
-            self._sftp = paramiko.SFTPClient.from_transport(self._transport)
+            # --- SFTP ---
+            self._sftp = self._ssh.open_sftp()
 
-            # Upload and start remote server
-            self._start_remote_server()
+            # --- Upload server script ---
+            local_script = os.path.join(
+                os.path.dirname(__file__), "_remote_server.py"
+            )
+            self._remote_script_path = (
+                f"/tmp/pyspim_remote_server_{os.getpid()}.py"
+            )
+            self._sftp.put(local_script, self._remote_script_path)
 
-            if self._sender is not None and self._receiver is not None:
-                self._receiver.message_received.connect(self._on_message_received)
-                self._sender.start()
-                self._receiver.start()
+            # --- Start remote Python process ---
+            # Prefer the venv's python binary directly (more reliable than
+            # sourcing activate which can fail in non-interactive shells).
+            if remote_venv:
+                python_bin = os.path.join(remote_venv, "bin", "python")
+                # Derive log path: <pyspim_root>/logs/pyspim_server_<pid>.log
+                # (pyspim_root = parent of the venv directory)
+                pyspim_root = os.path.dirname(remote_venv)
+                log_dir = os.path.join(pyspim_root, "logs")
+                self._remote_log_path = os.path.join(
+                    log_dir, f"pyspim_server_{os.getpid()}.log"
+                )
+                # Ensure the logs directory exists on the remote host
+                try:
+                    self._sftp.mkdir(log_dir)
+                except IOError:
+                    pass  # Directory already exists
+                command = (
+                    f"PYSPIM_LOG_PATH={self._remote_log_path} "
+                    f"{python_bin} {self._remote_script_path} "
+                    f"2>{self._remote_log_path}"
+                )
+            else:
+                self._remote_log_path = None
+                command = f"python {self._remote_script_path}"
+
+            logger.info("[CONNECT] Remote command: %s", command)
+            self._channel = self._ssh.get_transport().open_session()
+            self._channel.exec_command(command)
+
+            # --- Start sender thread ---
+            self._sender_thread = threading.Thread(
+                target=self._sender_loop, daemon=True
+            )
+            self._sender_thread.start()
+
+            # --- Wait for ready message (before starting receiver loop) ---
+            # Deliberately start _receiver_loop AFTER receiving the ready
+            # message to avoid a race where two threads read from the same
+            # SSH channel concurrently.
+            ready = self._receive_blocking(timeout=30.0)
+            if ready.get("type") != "ready":
+                raise ConnectionError(
+                    f"Unexpected message from server: {ready}"
+                )
+            self._server_capabilities = ready.get("capabilities", {})
+
+            # --- Now start the receiver thread for ongoing messages ---
+            self._receiver_thread = threading.Thread(
+                target=self._receiver_loop, daemon=True
+            )
+            self._receiver_thread.start()
 
             self._connected = True
             self.connected.emit()
             return True
 
         except Exception as e:
+            logger.exception("Failed to connect to remote server")
+            self._cleanup()
             self.error.emit(f"Connection failed: {e}")
-            self.disconnect_ssh()
             return False
 
-    def _start_remote_server(self):
-        """Upload remote server script and start it on the remote server.
+    def disconnect_session(self):
+        """Terminate remote session and close SSH connection.
 
-        Reads the server's "ready" message to verify the process started
-        successfully before returning.  Raises RuntimeError if the server
-        fails to start or does not send a valid ready message.
+        Named ``disconnect_session`` to avoid conflict with QObject.disconnect().
         """
-        self.progress.emit("Uploading server script...")
+        if not self._connected:
+            return
 
-        # Get the remote server script content
+        # Send shutdown command (non-blocking best effort)
         try:
-            server_source = importlib.resources.files('napari_pyspim').joinpath('_remote_server.py').read_text()
-        except Exception:
-            # Fallback: read from package path
-            server_path = os.path.join(os.path.dirname(__file__), '_remote_server.py')
-            with open(server_path, 'r') as f:
-                server_source = f.read()
-
-        # Upload to temp location on remote server
-        remote_script_path = '/tmp/_pyspim_remote_server.py'
-        with self._sftp.open(remote_script_path, 'w') as remote_file:
-            remote_file.write(server_source)
-            remote_file.flush()
-
-        # Build command to activate venv and run server
-        if self.remote_venv:
-            python_bin = os.path.join(self.remote_venv, 'bin', 'python')
-            cmd = f'{python_bin} {remote_script_path}'
-        else:
-            cmd = f'python3 {remote_script_path}'
-
-        self.progress.emit("Starting remote server process...")
-
-        # Open session and get stdin/stdout
-        channel = self._transport.open_session()
-        channel.get_pty()
-        channel.exec_command(cmd)
-        self._stdin = channel.makefile('wb', 0)
-        self._stdout = channel.makefile('rb', 0)
-
-        # --- Health check: read the server's "ready" message ---
-        # The remote server sends a ready message immediately on startup.
-        # Read it synchronously to verify the process is alive before
-        # handing the streams over to the sender/receiver threads.
-        self.progress.emit("Waiting for server ready message...")
-
-        ready_message = None
-        deadline = time.monotonic() + 30.0
-
-        while time.monotonic() < deadline:
-            if channel.exit_status_ready():
-                # Process already exited -- try to collect any remaining output
-                # for diagnostics (PTY merges stdout and stderr).
-                exit_code = channel.recv_exit_status()
-                remaining_parts = []
-                _read_deadline = time.monotonic() + 3.0
-                while time.monotonic() < _read_deadline and channel.recv_ready():
-                    chunk = channel.recv(4096)
-                    if not chunk:
-                        break
-                    remaining_parts.append(chunk.decode(errors='replace'))
-                remaining_text = ''.join(remaining_parts).strip()
-                raise RuntimeError(
-                    f"Remote server process exited immediately (exit code {exit_code}). "
-                    f"Command: {cmd}"
-                    + (f"\nOutput: {remaining_text}" if remaining_text else "")
-                )
-            if channel.recv_ready():
-                ready_message = _read_message(self._stdout)
-                break
-            time.sleep(0.05)
-
-        if ready_message is None:
-            raise RuntimeError(
-                "Remote server did not send a ready message within 30 seconds. "
-                "The server process may have failed to start. "
-                f"Command used: {cmd}"
-            )
-
-        if not ready_message.get('success', False):
-            error_msg = ready_message.get('error', 'Unknown error')
-            raise RuntimeError(f"Remote server reported error on startup: {error_msg}")
-
-        self.progress.emit("Remote server ready.")
-
-        # Start sender/receiver threads
-        self._sender = _SenderThread(self._stdin)
-        self._receiver = _ReceiverThread(self._stdout)
-
-    @Slot(dict)
-    def _on_message_received(self, message):
-        """Handle incoming message from remote server."""
-        request_id = message.get('request_id')
-        success = message.get('success', False)
-        result = message.get('result')
-        error = message.get('error')
-        progress = message.get('progress')
-
-        if progress:
-            self.progress.emit(progress)
-
-        if request_id is not None:
-            with self._lock:
-                callback = self._pending_callbacks.pop(request_id, None)
-            if callback:
-                callback(success, result, error)
-        else:
-            # Unsolicited message (e.g., ready, progress)
-            if not success and error:
-                self.error.emit(error)
-
-    def disconnect_ssh(self):
-        """Terminate remote session and close SSH connection."""
-        self._connected = False
-
-        # Cancel all pending callbacks
-        with self._lock:
-            for callback in self._pending_callbacks.values():
-                callback(False, None, 'Connection disconnected')
-            self._pending_callbacks.clear()
-
-        # Stop threads
-        if self._sender:
-            self._sender.stop()
-            self._sender.wait(3000)
-        if self._receiver:
-            self._receiver.stop()
-            self._receiver.wait(3000)
-
-        # Clean up remote server script
-        try:
-            if self._sftp:
-                try:
-                    self._sftp.remove('/tmp/_pyspim_remote_server.py')
-                except IOError:
-                    pass
-                self._sftp.close()
+            self._send({"request_id": 0, "command": "shutdown", "params": {}})
+            time.sleep(0.5)  # Give server time to respond
         except Exception:
             pass
 
-        # Close SSH connection
+        self._cleanup()
+        self._connected = False
+        self.disconnected.emit()
+
+    def _cleanup(self):
+        """Close all connections and stop threads."""
+        # Stop threads by sending None sentinel
+        try:
+            self._message_queue.put_nowait(None)
+        except Exception:
+            pass
+
+        if self._sender_thread and self._sender_thread.is_alive():
+            self._sender_thread.join(timeout=5)
+        if self._receiver_thread and self._receiver_thread.is_alive():
+            self._receiver_thread.join(timeout=5)
+
+        # Clean up remote script
+        if self._sftp and self._remote_script_path:
+            try:
+                self._sftp.remove(self._remote_script_path)
+            except Exception:
+                pass
+
+        if self._sftp:
+            try:
+                self._sftp.close()
+            except Exception:
+                pass
+            self._sftp = None
+
+        if self._channel:
+            try:
+                self._channel.close()
+            except Exception:
+                pass
+            self._channel = None
+
         if self._ssh:
             try:
                 self._ssh.close()
             except Exception:
                 pass
+            self._ssh = None
 
-        self._ssh = None
-        self._transport = None
-        self._sftp = None
-        self._sender = None
-        self._receiver = None
+        self._pending_callbacks.clear()
+        self._pending_progress.clear()
 
-        self.disconnected.emit()
+    # ------------------------------------------------------------------
+    # Command execution
+    # ------------------------------------------------------------------
 
-    # --- Command Execution ---
-
-    def _next_request_id(self):
-        """Generate the next request ID."""
-        with self._lock:
-            rid = self._request_id_counter
-            self._request_id_counter += 1
-            return rid
-
-    def send_command(self, command: str, params: dict,
-                     callback: Callable[[bool, Optional[dict], Optional[str]], None]):
+    def send_command(
+        self,
+        command: str,
+        params: dict,
+        callback: Callable | None = None,
+        progress_callback: Callable | None = None,
+    ) -> int:
         """Send a command to the remote server.
 
-        Args:
-            command: Command name (e.g., 'ping', 'load_deskew').
-            params: Command parameters as a dict.
-            callback: Function called with (success, result, error) when response arrives.
+        Parameters
+        ----------
+        command : str
+            Command name (e.g. ``"ping"``, ``"load_deskew"``).
+        params : dict
+            Command-specific parameters.
+        callback : callable, optional
+            Called with the response dict when the command completes.
+        progress_callback : callable, optional
+            Called with ``(message, percentage)`` for progress updates.
+
+        Returns
+        -------
+        int
+            The request_id assigned to this command.
         """
         if not self._connected:
-            callback(False, None, 'Not connected to remote server')
-            return
+            raise RuntimeError("Not connected to remote server")
 
-        # Validate sender/receiver threads are still alive
-        if self._sender is None or not self._sender.isRunning():
-            callback(False, None, 'Sender thread is not running - connection may be broken')
-            return
-        if self._receiver is None or not self._receiver.isRunning():
-            callback(False, None, 'Receiver thread is not running - connection may be broken')
-            return
-
-        request_id = self._next_request_id()
         with self._lock:
+            self._request_id += 1
+            request_id = self._request_id
+
+        logger.info("[SEND_COMMAND] request_id=%s, command=%s, has_callback=%s",
+                     request_id, command, callback is not None)
+        if callback:
             self._pending_callbacks[request_id] = callback
+        if progress_callback:
+            self._pending_progress[request_id] = progress_callback
 
         message = {
-            'request_id': request_id,
-            'command': command,
-            'params': params,
+            "request_id": request_id,
+            "command": command,
+            "params": params,
         }
-        self.progress.emit(f"Sending '{command}' command (id={request_id})...")
-        self._sender.send(message)
+        self._send(message)
+        logger.info("[SEND_COMMAND] Message queued. Pending callbacks: %s",
+                     list(self._pending_callbacks.keys()))
+        return request_id
 
-    def send_command_blocking(self, command: str, params: dict,
-                              timeout: float = 300.0) -> dict:
-        """Send a command and wait for response.
+    def send_command_blocking(
+        self,
+        command: str,
+        params: dict,
+        timeout: float = 300.0,
+    ) -> dict:
+        """Send a command and block until the response arrives.
 
-        Args:
-            command: Command name.
-            params: Command parameters.
-            timeout: Maximum time to wait in seconds.
+        Parameters
+        ----------
+        command : str
+            Command name.
+        params : dict
+            Command-specific parameters.
+        timeout : float
+            Maximum seconds to wait for a response.
 
-        Returns:
-            Result dict from remote server.
+        Returns
+        -------
+        dict
+            The response dict from the server.
 
-        Raises:
-            RuntimeError: If command fails or times out.
+        Raises
+        ------
+        RuntimeError
+            If not connected or the command times out / fails.
         """
-        result_queue = queue.Queue()
+        if not self._connected:
+            raise RuntimeError("Not connected to remote server")
 
-        def callback(success, result, error):
-            result_queue.put((success, result, error))
+        result_queue: queue.Queue[dict] = queue.Queue()
 
-        self.send_command(command, params, callback)
-        self.progress.emit(f"Waiting for '{command}' response (timeout={timeout}s)...")
+        def _cb(response: dict):
+            result_queue.put(response)
+
+        request_id = self.send_command(command, params, callback=_cb)
 
         try:
-            success, result, error = result_queue.get(timeout=timeout)
+            response = result_queue.get(timeout=timeout)
         except queue.Empty:
-            # Diagnose: check if threads are still alive
-            sender_ok = self._sender is not None and self._sender.isRunning()
-            receiver_ok = self._receiver is not None and self._receiver.isRunning()
-            raise RuntimeError(
-                f"Command '{command}' timed out after {timeout}s. "
-                f"Sender thread alive: {sender_ok}, Receiver thread alive: {receiver_ok}"
+            raise TimeoutError(
+                f"Command '{command}' (request_id={request_id}) timed out "
+                f"after {timeout}s"
             )
 
-        if not success:
-            raise RuntimeError(f"Command '{command}' failed: {error}")
+        if not response.get("success", False):
+            raise RuntimeError(
+                f"Remote command '{command}' failed: {response.get('error')}"
+            )
 
-        return result
+        return response.get("result", {})
 
-    # --- SFTP Helpers ---
+    # ------------------------------------------------------------------
+    # SFTP operations
+    # ------------------------------------------------------------------
 
-    def list_directory(self, remote_path: str) -> list:
-        """List directory contents via remote server command."""
-        result = self.send_command_blocking('list_directory', {'path': remote_path})
-        return result.get('entries', [])
+    def list_directory(self, remote_path: str) -> list[dict]:
+        """List directory contents via SFTP.
 
-    def check_path(self, remote_path: str) -> dict:
-        """Check if a path exists on the remote server."""
-        return self.send_command_blocking('check_path', {'path': remote_path})
-
-    # --- Remote Zarr Helpers ---
-
-    def open_remote_zarr(self, zarr_path: str):
-        """Open a remote zarr file via fsspec for chunked reading.
-
-        Returns a zarr array that streams chunks over SSH on demand.
+        Returns
+        -------
+        list[dict]
+            Each dict has keys: ``name``, ``is_dir``, ``size``.
         """
-        import fsspec
-        import zarr
+        if not self._sftp:
+            raise RuntimeError("SFTP client not available")
 
-        # Create SSH filesystem
-        fs_kwargs = {
-            'host': self.host,
-            'port': self.port,
-            'username': self.username,
-            'known_hosts': None,
-        }
-        if self.key_path:
-            fs_kwargs['key_filename'] = self.key_path
+        import stat as _stat
 
-        fs = fsspec.filesystem('ssh', **fs_kwargs)
+        entries: list[dict] = []
+        for attr in self._sftp.listdir_attr(remote_path):
+            mode = attr.st_mode if attr.st_mode is not None else 0
+            entries.append({
+                "name": attr.filename,
+                "is_dir": _stat.S_ISDIR(mode),
+                "size": attr.st_size,
+            })
+        return entries
 
-        # Create zarr store from SSH filesystem
-        store = zarr.storage.FSStore(zarr_path, fs=fs)
-        return zarr.open(store, mode='r')
+    def get_sftp_client(self) -> paramiko.SFTPClient:
+        """Return the active SFTP client for file browser operations."""
+        if not self._sftp:
+            raise RuntimeError("Not connected")
+        return self._sftp
 
-    def save_zarr(self, temp_path: str, permanent_path: str):
-        """Move zarr archive from temp to permanent location on remote server."""
-        return self.send_command_blocking('save_zarr', {
-            'temp_path': temp_path,
-            'permanent_path': permanent_path,
-        })
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
 
-    def cleanup_zarr(self, temp_path: str):
-        """Remove a temp zarr directory on the remote server."""
-        return self.send_command_blocking('cleanup_zarr', {
-            'temp_path': temp_path,
-        })
+    @property
+    def is_connected(self) -> bool:
+        """Return True if SSH connection is active."""
+        return self._connected
 
-    # --- Ping / Health Check ---
+    @property
+    def server_capabilities(self) -> dict:
+        """Return capabilities reported by the server on startup."""
+        return self._server_capabilities
 
-    def ping(self) -> dict:
-        """Send a ping to check server health."""
-        return self.send_command_blocking('ping', {}, timeout=10.0)
+    # ------------------------------------------------------------------
+    # Internal: sender thread
+    # ------------------------------------------------------------------
+
+    def _send(self, message: dict):
+        """Enqueue a message for the sender thread."""
+        self._message_queue.put(message)
+
+    def _sender_loop(self):
+        """Background thread: read from queue and write to SSH channel."""
+        channel = self._channel
+        if channel is None:
+            logger.warning("[SENDER] Channel is None, exiting sender loop")
+            return
+        logger.info("[SENDER] Sender loop started")
+        try:
+            while True:
+                message = self._message_queue.get()
+                if message is None:
+                    logger.info("[SENDER] Received sentinel, stopping sender loop")
+                    break  # Sentinel to stop
+                logger.info("[SENDER] Sending message: request_id=%s, command=%s",
+                            message.get("request_id"), message.get("command"))
+                payload: bytes = msgpack.packb(message, default=_encode_array)  # type: ignore[assignment]
+                header = struct.pack(">Q", len(payload))
+                try:
+                    channel.send(header + payload)
+                    logger.info("[SENDER] Message sent successfully")
+                except Exception as e:
+                    logger.error("[SENDER] Send error: %s", e, exc_info=True)
+                    break
+        except Exception as e:
+            logger.error("[SENDER] Unexpected exception in sender loop: %s", e, exc_info=True)
+        finally:
+            logger.info("[SENDER] Sender loop exiting")
+
+    # ------------------------------------------------------------------
+    # Internal: receiver thread
+    # ------------------------------------------------------------------
+
+    def _receiver_loop(self):
+        """Background thread: read from SSH channel and dispatch responses."""
+        channel = self._channel
+        if channel is None:
+            logger.warning("[RECEIVER] Channel is None, exiting receiver loop")
+            return
+        logger.info("[RECEIVER] Receiver loop started")
+        try:
+            while True:
+                message = self._receive_message_channel(channel)
+                if message is None:
+                    logger.warning("[RECEIVER] Received None from channel, channel closed")
+                    break  # Channel closed
+
+                logger.info("[RECEIVER] Received message: %s", message)
+                msg_type = message.get("type")
+                if msg_type == "ready":
+                    logger.info("[RECEIVER] Ignoring duplicate ready message")
+                    continue  # Already handled in connect()
+
+                rid = message.get("request_id") or 0
+                logger.info("[RECEIVER] Processing response for request_id=%s", rid)
+
+                # Progress update
+                if "progress" in message:
+                    cb = self._pending_progress.get(rid)
+                    if cb:
+                        pct = message.get("percentage", -1)
+                        if isinstance(pct, int):
+                            cb(message["progress"], pct)
+                        else:
+                            cb(message["progress"], -1)
+                    # Also emit Qt signal for UI progress bars
+                    pct_val = message.get("percentage")
+                    if isinstance(pct_val, int):
+                        self.progress.emit(message["progress"], pct_val)
+                    else:
+                        self.progress.emit(message["progress"], 0)
+                    continue
+
+                # Final response
+                cb = self._pending_callbacks.pop(rid, None)
+                if cb:
+                    logger.info("[RECEIVER] Found callback for request_id=%s, invoking", rid)
+                    try:
+                        cb(message)
+                        logger.info("[RECEIVER] Callback completed for request_id=%s", rid)
+                    except Exception as e:
+                        logger.error("[RECEIVER] Callback exception for request_id=%s: %s", rid, e, exc_info=True)
+                else:
+                    logger.warning("[RECEIVER] No callback found for request_id=%s! Pending keys: %s",
+                                   rid, list(self._pending_callbacks.keys()))
+                # Also emit Qt signal for responses (thread-safe, marshaled to main thread)
+                self.command_response.emit(message)
+                self._pending_progress.pop(rid, None)
+
+        except (EOFError, ConnectionError, OSError) as e:
+            logger.warning("[RECEIVER] Receiver loop ended with expected exception: %s", e, exc_info=True)
+        except Exception as e:
+            logger.error("[RECEIVER] Receiver loop crashed with unexpected exception: %s", e, exc_info=True)
+        finally:
+            logger.info("[RECEIVER] Receiver loop exiting, was_connected=%s", self._connected)
+            # If we were connected, emit disconnected
+            if self._connected:
+                self._connected = False
+                self.disconnected.emit()
+
+    def _receive_message_channel(self, channel: paramiko.Channel) -> dict | None:
+        """Read a single length-prefixed MessagePack message from a channel."""
+        logger.debug("[RECEIVE_MSG] Reading header (8 bytes)...")
+        header = self._read_exact_channel(channel, 8)
+        if len(header) < 8:
+            logger.warning("[RECEIVE_MSG] Header too short (%d bytes), channel closed", len(header))
+            return None  # Channel closed
+        length = struct.unpack(">Q", header)[0]
+        logger.debug("[RECEIVE_MSG] Payload length=%d, reading data...", length)
+        data = self._read_exact_channel(channel, length)
+        if len(data) < length:
+            logger.warning("[RECEIVE_MSG] Data too short (%d < %d bytes)", len(data), length)
+            return None
+        try:
+            msg = msgpack.unpackb(data, strict_map_key=False, object_hook=_decode_array)
+            logger.debug("[RECEIVE_MSG] Successfully unpacked message")
+            return msg
+        except Exception as e:
+            logger.error("[RECEIVE_MSG] Failed to unpack MessagePack: %s (data length=%d)", e, len(data), exc_info=True)
+            raise
+
+    def _receive_blocking(self, timeout: float = 30.0) -> dict:
+        """Block until a message is received (used for ready message)."""
+        result: queue.Queue[dict] = queue.Queue()
+        channel = self._channel
+
+        def _reader():
+            if channel is None:
+                return
+            try:
+                msg = self._receive_message_channel(channel)
+                if msg:
+                    result.put(msg)
+            except Exception as e:
+                result.put({"type": "error", "error": str(e)})
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+        try:
+            return result.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError("Timed out waiting for server ready message")
+
+    @staticmethod
+    def _read_exact_channel(channel: paramiko.Channel, n: int) -> bytes:
+        """Read exactly *n* bytes from a paramiko Channel."""
+        data = b""
+        while len(data) < n:
+            try:
+                chunk = channel.recv(min(65536, n - len(data)))
+            except Exception as e:
+                logger.warning("[READ_EXACT] Exception reading %d bytes: %s", n - len(data), e)
+                break
+            if not chunk:
+                logger.warning("[READ_EXACT] Empty chunk received, total so far: %d / %d", len(data), n)
+                break
+            data += chunk
+        return data

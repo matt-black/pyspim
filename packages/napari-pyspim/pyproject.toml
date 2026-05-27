@@ -43,7 +43,18 @@ dependencies = [
     "scipy>=1.7.0",
     "tifffile>=2021.0.0",
     "zarr>=2.10.0",
+    "dask>=2025.7.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/matt-black/pyspim"
+BugTracker = "https://github.com/matt-black/pyspim/issues"
+Documentation = "https://github.com/matt-black/pyspim/wiki"
+SourceCode = "https://github.com/matt-black/pyspim"
+UserSupport = "https://github.com/matt-black/pyspim/issues"
+
+[project.scripts]
+pyspim-remote-server = "napari_pyspim._remote_server:main"
 
 [project.optional-dependencies]
 full = [

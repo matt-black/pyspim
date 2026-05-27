@@ -113,7 +113,13 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
         # open the tif file, determine if there are empty frames
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self._f = tifffile.imread(self._path, aszarr=True)
+            self._f = tifffile.imread(
+                self._path,
+                aszarr=True,
+                is_ome=False,
+                is_mmstack=True,
+                is_imagej=False,
+            )
             self._z = zarr.open(self._f, mode="r")
 
     def _get_single_chan(
@@ -132,7 +138,7 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
                 window = tuple(
                     [slice(chan, chan + 1)] + list(window)
                 ) # type: ignore
-                return self._xp.asarray(self._z[window]).squeeze()
+                return self._xp.asarray(self._z[*window]).squeeze()
         else:
             if window is None:
                 return self._xp.asarray(self._z[time, chan, ...])
@@ -140,7 +146,7 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
                 window = tuple(
                     [slice(time, time + 1), slice(chan, chan + 1)] + list(window)
                 ) # type: ignore
-                return self._xp.asarray(self._z[window]).squeeze()
+                return self._xp.asarray(self._z[*window]).squeeze()
 
     def get(
         self,
@@ -153,7 +159,8 @@ class uManagerAcquisitionOnePos(_uManagerAcquision):
             return self._get_single_chan(head, channels, time, window)
         else:
             return self._xp.stack(
-                [self._get_single_chan(head, c, time, window) for c in channels], axis=0
+                [self._get_single_chan(head, c, time, window) 
+                 for c in channels], axis=0
             )
 
 
@@ -210,7 +217,7 @@ class uManagerAcquisitionMultiPos(_uManagerAcquision):
                     [slice(position, position + 1), slice(chan, chan + 1)]
                     + list(window)
                 ) # type: ignore
-                return self._xp.asarray(self._z[window]).squeeze()
+                return self._xp.asarray(self._z[*window]).squeeze()
         elif len(self._z.shape) == 4:
             if window is None:
                 return self._xp.asarray(self._z[chan, ...])
@@ -218,7 +225,7 @@ class uManagerAcquisitionMultiPos(_uManagerAcquision):
                 window = tuple(
                     [slice(chan, chan + 1)] + list(window)
                 ) # type: ignore
-                return self._xp.asarray(self._z[window]).squeeze()
+                return self._xp.asarray(self._z[*window]).squeeze()
         else:
             raise NotImplementedError("multipos/multi-time is TODO")
 

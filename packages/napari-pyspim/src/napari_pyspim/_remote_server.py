@@ -1,192 +1,315 @@
-"""
-Remote computation server for napari-pyspim.
+"""Remote computation server for napari-pyspim.
 
 Reads MessagePack commands from stdin, executes pyspim operations,
 and writes MessagePack responses to stdout.
 
-This script is designed to run on a remote server, activated via SSH.
-It maintains state (temp directories, etc.) for the duration of the session.
+Can be run standalone via: pyspim-remote-server
+Or executed by the client after SFTP upload.
 """
 
 import json
-import math
-import os
+import logging
+import struct
 import sys
-import tempfile
-import traceback
-
+import time
 import msgpack
-import numpy as np
 
-# Track temporary zarr directories for cleanup on exit
-_temp_dirs = []
+# Configure logging to stderr so it doesn't interfere with stdout protocol
+logging.basicConfig(
+    level=logging.DEBUG,
+    stream=sys.stderr,
+    format="%(asctime)s [SERVER] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+START_TIME: float = time.time()
+
+# ---------------------------------------------------------------------------
+# Session storage for deskewed volumes
+# ---------------------------------------------------------------------------
+
+import uuid
+
+SESSIONS: dict[str, dict] = {}
 
 
-def encode_array(obj):
-    """Encode numpy arrays for MessagePack serialization."""
+# ---------------------------------------------------------------------------
+# Serialization helpers
+# ---------------------------------------------------------------------------
+
+def encode_array(obj) -> dict:
+    """Encode a numpy array as a MessagePack-serializable dict.
+
+    Uses a ``__numpy__`` marker so the decoder can reconstruct the array.
+    """
+    import numpy as np  # type: ignore
+
     if isinstance(obj, np.ndarray):
-        return msgpack.ExtType(0, msgpack.packb({
-            'dtype': str(obj.dtype),
-            'shape': obj.shape,
-            'data': obj.tobytes(),
-        }))
+        return {
+            "__numpy__": True,
+            "dtype": str(obj.dtype),
+            "shape": list(obj.shape),
+            "data": obj.tobytes(),
+        }
     raise TypeError(f"Cannot encode object of type {type(obj)}")
 
 
-def decode_array(code, data, header):
-    """Decode numpy arrays from MessagePack ext type."""
-    if code == 0:
-        meta = msgpack.unpackb(data, raw=False)
-        arr = np.frombuffer(meta['data'], dtype=np.dtype(meta['dtype']))
-        return arr.reshape(meta['shape'])
-    return msgpack.ExtType(code, data)
+def decode_array(obj: dict) -> "np.ndarray | dict":  # type: ignore[name-defined]
+    """Decode a dict produced by ``encode_array`` back to a numpy array."""
+    if isinstance(obj, dict) and obj.get("__numpy__"):
+        import numpy as np  # type: ignore
+
+        return np.frombuffer(
+            obj["data"], dtype=np.dtype(obj["dtype"])
+        ).reshape(obj["shape"])
+    return obj
 
 
-def send_response(request_id, result, error=None, progress=None):
-    """Serialize and send a response to stdout."""
+# ---------------------------------------------------------------------------
+# Message framing  (length-prefixed MessagePack)
+# ---------------------------------------------------------------------------
+
+def send_response(stdout, request_id, result, error=None):
+    """Serialize and write a response message to *stdout*."""
     msg = {
-        'request_id': request_id,
-        'success': error is None,
-        'result': result,
-        'error': error,
-        'progress': progress,
+        "request_id": request_id,
+        "success": error is None,
+        "result": result,
+        "error": error,
     }
-    try:
-        packed = msgpack.packb(msg, default=encode_array)
-        # Send length-prefixed message
-        length = len(packed)
-        sys.stdout.buffer.write(length.to_bytes(8, 'big'))
-        sys.stdout.buffer.write(packed)
-        sys.stdout.buffer.flush()
-    except Exception as e:
-        sys.stderr.write(f"Error sending response: {e}\n")
-        sys.stderr.flush()
+    payload = msgpack.packb(msg, default=encode_array)
+    header = struct.pack(">Q", len(payload))  # 8-byte big-endian uint64
+    stdout.buffer.write(header + payload)
+    stdout.buffer.flush()
 
 
-def receive_message():
-    """Read a length-prefixed MessagePack message from stdin."""
-    header = _read_exact(sys.stdin.buffer, 8)
+def send_progress(stdout, request_id, message, percentage=None):
+    """Serialize and write a progress update to *stdout*."""
+    msg = {
+        "request_id": request_id,
+        "progress": message,
+        "percentage": percentage,
+    }
+    payload = msgpack.packb(msg)
+    header = struct.pack(">Q", len(payload))
+    stdout.buffer.write(header + payload)
+    stdout.buffer.flush()
+
+
+def receive_message(stdin_buffer):
+    """Read a length-prefixed MessagePack message from *stdin_buffer*."""
+    header = _read_exact(stdin_buffer, 8)
     if len(header) < 8:
-        return None  # EOF
-    length = int.from_bytes(header, 'big')
-    data = _read_exact(sys.stdin.buffer, length)
-    return msgpack.unpackb(data, ext_hook=decode_array, raw=False)
+        raise EOFError("Channel closed by client")
+    length = struct.unpack(">Q", header)[0]
+    data = _read_exact(stdin_buffer, length)
+    return msgpack.unpackb(data, strict_map_key=False, object_hook=decode_array)
 
 
-def _read_exact(stream, n):
-    """Read exactly n bytes from a stream."""
-    data = b''
+def _read_exact(buffer, n: int) -> bytes:
+    """Read exactly *n* bytes from *buffer*, blocking if necessary."""
+    data = b""
     while len(data) < n:
-        chunk = stream.read(n - len(data))
+        chunk = buffer.read(n - len(data))
         if not chunk:
             break
         data += chunk
     return data
 
 
-def cleanup_temp_dirs():
-    """Remove all tracked temporary directories."""
-    import shutil
-    for d in _temp_dirs:
-        try:
-            if os.path.exists(d):
-                shutil.rmtree(d)
-        except Exception as e:
-            sys.stderr.write(f"Error cleaning up {d}: {e}\n")
-            sys.stderr.flush()
+# ---------------------------------------------------------------------------
+# Command handlers  (stubs -- implemented in later phases)
+# ---------------------------------------------------------------------------
+
+def handle_ping(params: dict) -> dict:
+    """Health-check handler."""
+    return {"status": "ok", "uptime": time.time() - START_TIME}
 
 
-# --- Command Handlers ---
+def handle_compute(params: dict) -> dict:
+    """Simple calculation test to verify connection health.
 
-def handle_ping(params, **kwargs):
-    """Health check."""
-    import pyspim
-    return {
-        'status': 'ok',
-        'pyspim_version': getattr(pyspim, '__version__', 'unknown'),
-        'numpy_version': np.__version__,
-    }
+    Evaluates the expression provided in params (defaulting to "2+2")
+    and returns the result.
+    """
+    expression = params.get("expression", "2+2")
+    result = eval(expression)  # noqa: S307  # Controlled test expression
+    return {"expression": expression, "result": result}
 
 
-def handle_compute_projections(params, request_id=None):
-    """Load data and compute projections for ROI detection."""
+def handle_compute_projections(params: dict) -> dict:
+    """Load data and compute 2D projections for ROI detection.
+
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+        channel : int  (0-indexed)
+        projection_type : str  ('max', 'sum', 'mean')
+        multi_pos : bool
+        time : int
+        position : int
+
+    Returns
+    -------
+    dict with keys: yx_proj_a, zy_proj_a, yx_proj_b, zy_proj_b,
+                    volume_shape_a, volume_shape_b
+    """
+    import numpy as np
+
+    data_path = params["data_path"]
+    channel = params["channel"]
+    projection_type = params["projection_type"]
+    multi_pos = params.get("multi_pos", False)
+    time = params.get("time", 0)
+    position = params.get("position", 0)
+
     from pyspim.data import dispim as data
-
-    data_path = params['data_path']
-    channel = params['channel']
-    projection_type = params['projection_type']
-    multi_pos = params.get('multi_pos', False)
-    time = params.get('time', 0)
-    position = params.get('position', 0)
-
-    send_response(request_id, None, progress="Server: loading data...")
 
     with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
         if multi_pos:
-            volume_a = acq.get(position, 'a', channel, time)
-            volume_b = acq.get(position, 'b', channel, time)
+            volume_a = acq.get(position, "a", channel, time)
+            volume_b = acq.get(position, "b", channel, time)
         else:
-            volume_a = acq.get('a', channel, time)
-            volume_b = acq.get('b', channel, time)
+            volume_a = acq.get("a", channel, time)
+            volume_b = acq.get("b", channel, time)
 
-    send_response(request_id, None, progress="Server: data loaded, computing projections...")
-
-    def compute_projs(vol, proj_type):
-        if proj_type == 'max':
-            yx = np.max(vol, axis=0)
-            zy = np.max(vol, axis=2)
-        elif proj_type == 'sum':
-            yx = np.sum(vol, axis=0)
-            zy = np.sum(vol, axis=2)
-        elif proj_type == 'mean':
-            yx = np.mean(vol, axis=0)
-            zy = np.mean(vol, axis=2)
-        else:
-            raise ValueError(f"Unknown projection type: {proj_type}")
-        return yx, zy
-
-    yx_proj_a, zy_proj_a = compute_projs(volume_a, projection_type)
-    yx_proj_b, zy_proj_b = compute_projs(volume_b, projection_type)
-
-    send_response(request_id, None, progress="Server: projections computed, sending result...")
+    # Compute projections (only YX and ZY needed for ROI detection)
+    yx_proj_a, zy_proj_a, _ = _compute_projections(volume_a, projection_type)
+    yx_proj_b, zy_proj_b, _ = _compute_projections(volume_b, projection_type)
 
     return {
-        'yx_proj_a': yx_proj_a,
-        'zy_proj_a': zy_proj_a,
-        'yx_proj_b': yx_proj_b,
-        'zy_proj_b': zy_proj_b,
-        'volume_shape_a': list(volume_a.shape),
-        'volume_shape_b': list(volume_b.shape),
-        'data_path': data_path,
+        "yx_proj_a": yx_proj_a,
+        "zy_proj_a": zy_proj_a,
+        "yx_proj_b": yx_proj_b,
+        "zy_proj_b": zy_proj_b,
+        "volume_shape_a": list(volume_a.shape),
+        "volume_shape_b": list(volume_b.shape),
     }
 
 
-def handle_load_deskew(params, **kwargs):
-    """Load data, deskew, compute projections, and save volumes as zarr."""
-    import zarr
+def _compute_projections(volume, proj_type):
+    """Compute YX, ZY, and XZ projections from a volume."""
+    try:
+        import cupy
+        if cupy.get_array_module(volume) == cupy:
+            np = cupy
+            _HAS_CUPY = True
+        else:
+            import numpy as np
+            _HAS_CUPY = False
+    except:
+        import numpy as np
+        _HAS_CUPY = False
+
+    if proj_type == "max":
+        yx_proj = np.max(volume, axis=0)  # shape: (Y, X)
+        yx_proj = yx_proj.get() if _HAS_CUPY else yx_proj
+        zy_proj = np.max(volume, axis=2)  # shape: (Z, Y)
+        zy_proj = zy_proj.get() if _HAS_CUPY else zy_proj
+        xz_proj = np.max(volume, axis=1)  # shape: (Z, X)
+        xz_proj = xz_proj.get() if _HAS_CUPY else xz_proj
+    elif proj_type == "sum":
+        yx_proj = np.sum(volume, axis=0)
+        yx_proj = yx_proj.get() if _HAS_CUPY else yx_proj
+        zy_proj = np.sum(volume, axis=2)
+        zy_proj = zy_proj.get() if _HAS_CUPY else zy_proj
+        xz_proj = np.sum(volume, axis=1)
+        xz_proj = xz_proj.get() if _HAS_CUPY else xz_proj
+    elif proj_type == "mean":
+        yx_proj = np.mean(volume, axis=0)
+        yx_proj = yx_proj.get() if _HAS_CUPY else yx_proj
+        zy_proj = np.mean(volume, axis=2)
+        zy_proj = zy_proj.get() if _HAS_CUPY else zy_proj
+        xz_proj = np.mean(volume, axis=1)
+        xz_proj = xz_proj.get() if _HAS_CUPY else xz_proj
+    else:
+        raise ValueError(f"Unknown projection type: {proj_type}")
+    return yx_proj, zy_proj, xz_proj
+
+
+def handle_query_positions(params: dict) -> dict:
+    """Query the number of positions in a multi-position acquisition.
+
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+
+    Returns
+    -------
+    dict with key: num_positions
+    """
+    import numpy as np
+
+    data_path = params["data_path"]
+
+    from pyspim.data import dispim as data
+
+    with data.uManagerAcquisition(data_path, True, np) as acq:
+        num_positions = acq.num_positions
+
+    return {"num_positions": num_positions}
+
+
+def handle_load_deskew(params: dict) -> dict:
+    """Load data, deskew, and compute projections.
+
+    Mirrors ``LoadDeskewWorker.run()`` from ``_registration.py``.
+
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+        channel : int  (0-indexed)
+        projection_type : str  ('max', 'sum', 'mean')
+        pixel_size : float
+        step_size : float
+        theta : float  (in radians)
+        method : str  ('orthogonal', 'dispim', 'shear')
+        ignore_bbox : bool
+        multi_pos : bool
+        time : int
+        position : int
+        auto_crop : bool
+
+    Returns
+    -------
+    dict with keys: session_id, yx_proj_a, zy_proj_a, xz_proj_a,
+                    yx_proj_b, zy_proj_b, xz_proj_b,
+                    volume_shape_a, volume_shape_b, method, step_size
+    """
+    import math
+    try:
+        import cupy as np
+    except:
+        import numpy as np
+    import os
+
+    data_path = params["data_path"]
+    channel = params["channel"]
+    projection_type = params["projection_type"]
+    pixel_size = params["pixel_size"]
+    step_size = params["step_size"]
+    theta = math.pi / 4  # Hardcoded to 45 degrees
+    method = params["method"]
+    ignore_bbox = params.get("ignore_bbox", False)
+    multi_pos = params.get("multi_pos", False)
+    time = params.get("time", 0)
+    position = params.get("position", 0)
+    auto_crop = params.get("auto_crop", True)
+    camera_offset = params.get("camera_offset", 0)
+
     from pyspim.data import dispim as data
     from pyspim import deskew as dsk
 
-    data_path = params['data_path']
-    channel = params['channel']
-    projection_type = params['projection_type']
-    pixel_size = params['pixel_size']
-    step_size = params['step_size']
-    theta = params['theta']
-    method = params['method']
-    ignore_bbox = params.get('ignore_bbox', False)
-    multi_pos = params.get('multi_pos', False)
-    time = params.get('time', 0)
-    position = params.get('position', 0)
-    auto_crop = params.get('auto_crop', True)
-
-    # Load bounding box if present
+    # --- Load bounding box if present ---
     window = None
     if not ignore_bbox:
-        bbox_path = os.path.join(data_path, 'bbox_raw.json')
+        bbox_path = os.path.join(data_path, "bbox_raw.json")
         if os.path.exists(bbox_path):
             try:
-                with open(bbox_path, 'r') as f:
+                with open(bbox_path, "r") as f:
                     bbox = json.load(f)
                 window = (
                     slice(bbox[0][0], bbox[0][1]),
@@ -196,452 +319,1231 @@ def handle_load_deskew(params, **kwargs):
             except (json.JSONDecodeError, IndexError, TypeError):
                 pass
 
-    # Load data
+    # --- Load data ---
     with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
         if multi_pos:
-            volume_a = acq.get(position, 'a', channel, time, window=window)
-            volume_b = acq.get(position, 'b', channel, time, window=window)
+            volume_a = acq.get(position, "a", channel, time, window=window)
+            volume_b = acq.get(position, "b", channel, time, window=window)
         else:
-            volume_a = acq.get('a', channel, time, window=window)
-            volume_b = acq.get('b', channel, time, window=window)
+            volume_a = acq.get("a", channel, time, window=window)
+            volume_b = acq.get("b", channel, time, window=window)
 
-    # Calculate lateral step size
-    step_size_lat = step_size / math.cos(theta)
+    # --- Subtract camera offset if non-zero ---
+    if camera_offset > 0:
+        from pyspim.data.dispim import subtract_constant_uint16arr
+        volume_a = subtract_constant_uint16arr(volume_a, camera_offset)
+        volume_b = subtract_constant_uint16arr(volume_b, camera_offset)
 
-    # Deskew kwargs
-    if method == 'shear':
+    # --- Deskew View A (direction = 1) ---
+    if method == "shear":
         deskew_kwargs_a = {
-            'rotation_thetas': (0, 0, 0),
-            'interp_method': 'linear',
-            'auto_crop': auto_crop,
-            'preserve_dtype': True,
-            'block_size': (8, 8, 8),
+            "rotation_thetas": (0, 0, 0),
+            "interp_method": "linear",
+            "auto_crop": auto_crop,
+            "preserve_dtype": True,
+            "block_size": (8, 8, 8),
         }
-        deskew_kwargs_b = dict(deskew_kwargs_a)
-        deskew_kwargs_b['rotation_thetas'] = (0, math.pi / 2, 0)
-    elif method == 'ortho':
-        deskew_kwargs_a = {'preserve_dtype': True, 'stream': None}
-        deskew_kwargs_b = dict(deskew_kwargs_a)
-    else:  # dispim
-        deskew_kwargs_a = {'preserve_dtype': True}
-        deskew_kwargs_b = {'preserve_dtype': True}
+    elif method == "ortho":
+        deskew_kwargs_a = {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+    elif method == "affine":
+        deskew_kwargs_a = {
+            "preserve_dtype": True,
+            "interp_method": "cubspl",
+            "block_size": (8,8,8),
+        }
+    else:
+        deskew_kwargs_a = {}
 
-    # Deskew View A
     a_dsk = dsk.deskew_stage_scan(
-        volume_a, pixel_size, step_size_lat, 1,
+        volume_a, pixel_size, step_size, 1,
         theta=theta, method=method, **deskew_kwargs_a,
     )
+    yx_proj_a, zy_proj_a, xz_proj_a = _compute_projections(a_dsk, projection_type)
     try:
         a_dsk = a_dsk.get()
-    except AttributeError:
+    except Exception:
         pass
+    
+    # --- Deskew View B (direction = -1) ---
+    if method == "shear":
+        deskew_kwargs_b = {
+            "rotation_thetas": (0, math.pi / 2, 0),
+            "interp_method": "linear",
+            "auto_crop": auto_crop,
+            "preserve_dtype": True,
+            "block_size": (8, 8, 8),
+        }
+    elif method == "ortho":
+        deskew_kwargs_b = {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+    elif method == "affine":
+        deskew_kwargs_b = {
+            "preserve_dtype": True,
+            "interp_method": "cubspl",
+            "block_size": (8,8,8),
+        }
+    else:
+        deskew_kwargs_b = {}
 
-    # Deskew View B
     b_dsk = dsk.deskew_stage_scan(
-        volume_b, pixel_size, step_size_lat, -1,
+        volume_b, pixel_size, step_size, -1,
         theta=theta, method=method, **deskew_kwargs_b,
     )
-    if method == 'dispim':
+
+    if method == "dispim":
+        # Rotate the volume in the XZ plane so that it is in the same
+        # coordinate system as that of view A
         from pyspim.interp.affine import transform as affine_transform
         from pyspim._matrix import rotation_about_point_matrix
+
         R = rotation_about_point_matrix(
             0, math.pi / 2, 0,
-            *[s / 2 for s in b_dsk.shape[::-1]]
+            *[s / 2 for s in b_dsk.shape[::-1]],
         )
         b_dsk = affine_transform(
-            b_dsk, R, 'linear', True,
+            b_dsk, R,
+            "linear", True,
             (b_dsk.shape[0], b_dsk.shape[1], b_dsk.shape[2]),
-            8, 8, 8
+            8, 8, 8,
         )
+
+    # --- Compute projections ---
+    yx_proj_b, zy_proj_b, xz_proj_b = _compute_projections(b_dsk, projection_type)
+
+    # --- Store deskewed volumes on server ---
+    session_id = str(uuid.uuid4())
+
     try:
         b_dsk = b_dsk.get()
-    except AttributeError:
+    except Exception:
         pass
 
-    # Compute projections
-    def compute_projs(vol, proj_type):
-        if proj_type == 'max':
-            yx = np.max(vol, axis=0)
-            zy = np.max(vol, axis=2)
-            xz = np.max(vol, axis=1)
-        elif proj_type == 'sum':
-            yx = np.sum(vol, axis=0)
-            zy = np.sum(vol, axis=2)
-            xz = np.sum(vol, axis=1)
-        elif proj_type == 'mean':
-            yx = np.mean(vol, axis=0)
-            zy = np.mean(vol, axis=2)
-            xz = np.mean(vol, axis=1)
-        else:
-            raise ValueError(f"Unknown projection type: {proj_type}")
-        return yx, zy, xz
-
-    yx_proj_a, zy_proj_a, xz_proj_a = compute_projs(a_dsk, projection_type)
-    yx_proj_b, zy_proj_b, xz_proj_b = compute_projs(b_dsk, projection_type)
-
-    # Save deskewed volumes as zarr in temp directory
-    temp_dir = tempfile.mkdtemp(prefix='pyspim_dsk_')
-    _temp_dirs.append(temp_dir)
-
-    a_zarr_path = os.path.join(temp_dir, 'a_deskewed.zarr')
-    b_zarr_path = os.path.join(temp_dir, 'b_deskewed.zarr')
-
-    zarr.open(a_zarr_path, mode='w', shape=a_dsk.shape,
-              dtype=a_dsk.dtype, chunks=(64, 256, 256))[:] = a_dsk
-    zarr.open(b_zarr_path, mode='w', shape=b_dsk.shape,
-              dtype=b_dsk.dtype, chunks=(64, 256, 256))[:] = b_dsk
+    SESSIONS[session_id] = {
+        "a_deskewed": a_dsk,
+        "b_deskewed": b_dsk,
+        "volume_shape_a": a_dsk.shape,
+        "volume_shape_b": b_dsk.shape,
+        "method": method,
+        "step_size": step_size,
+        "pixel_size": pixel_size,
+        "theta": theta,
+    }
 
     return {
-        'a_zarr_path': a_zarr_path,
-        'b_zarr_path': b_zarr_path,
-        'yx_proj_a': yx_proj_a,
-        'zy_proj_a': zy_proj_a,
-        'xz_proj_a': xz_proj_a,
-        'yx_proj_b': yx_proj_b,
-        'zy_proj_b': zy_proj_b,
-        'xz_proj_b': xz_proj_b,
-        'volume_shape_a': list(a_dsk.shape),
-        'volume_shape_b': list(b_dsk.shape),
-        'method': method,
-        'step_size_lat': step_size_lat,
-        'temp_dir': temp_dir,
+        "session_id": session_id,
+        "yx_proj_a": yx_proj_a,
+        "zy_proj_a": zy_proj_a,
+        "xz_proj_a": xz_proj_a,
+        "yx_proj_b": yx_proj_b,
+        "zy_proj_b": zy_proj_b,
+        "xz_proj_b": xz_proj_b,
+        "volume_shape_a": list(a_dsk.shape),
+        "volume_shape_b": list(b_dsk.shape),
+        "method": method,
+        "step_size": step_size,
     }
 
 
-def handle_register(params, **kwargs):
-    """Register two deskewed volumes."""
+def _normalize_deskew_method(method: str) -> str:
+    """Normalize deskew method name from UI display name to pyspim internal name."""
+    method_map = {
+        "orthogonal": "ortho",
+        "ortho": "ortho",
+        "dispim": "dispim",
+        "shear": "shear",
+        "affine": "affine",
+    }
+    return method_map.get(method.lower(), method)
+
+
+def _get_deskew_kwargs(method: str) -> dict:
+    """Get kwargs for deskew based on method, matching ApplyWorker logic."""
+    import math
+
+    if method == "shear":
+        return {
+            "rotation_thetas": (0, 0, 0),
+            "interp_method": "linear",
+            "auto_crop": False,
+            "preserve_dtype": True,
+            "block_size": (8, 8, 8),
+        }
+    elif method == "ortho":
+        return {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+    elif method == "affine":
+        return {
+            "preserve_dtype": True,
+            "interp_method": "cubspl",
+            "block_size": (8, 8, 8),
+        }
+    else:  # dispim
+        return {"preserve_dtype": True}
+
+
+def _compute_common_crops_server(a_shape, b_shape, t0):
+    """Compute crop slices for both volumes to their common overlapping region.
+
+    Server-side mirror of ``RegistrationWidget._compute_common_crops()``.
+
+    Args:
+        a_shape: Shape of View A deskewed volume (Z, Y, X).
+        b_shape: Shape of View B deskewed volume (Z, Y, X).
+        t0: Pre-reg translation in pixel units [tz, ty, tx].
+
+    Returns:
+        Tuple of (a_slices, b_slices, cropped_shape) or (None, None, None) if no overlap.
+    """
+    Za, Ya, Xa = a_shape
+    Zb, Yb, Xb = b_shape
+    tz, ty, tx = t0
+
+    z_start_a = max(0, tz)
+    z_end_a = min(Za, tz + Zb)
+    y_start_a = max(0, ty)
+    y_end_a = min(Ya, ty + Yb)
+    x_start_a = max(0, tx)
+    x_end_a = min(Xa, tx + Xb)
+
+    if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
+        return None, None, None
+
+    z_start_b = max(0, -tz)
+    z_end_b = min(Zb, Za - tz)
+    y_start_b = max(0, -ty)
+    y_end_b = min(Yb, Ya - ty)
+    x_start_b = max(0, -tx)
+    x_end_b = min(Xb, Xa - tx)
+
+    shape_a = (
+        int(z_end_a - z_start_a),
+        int(y_end_a - y_start_a),
+        int(x_end_a - x_start_a),
+    )
+    shape_b = (
+        int(z_end_b - z_start_b),
+        int(y_end_b - y_start_b),
+        int(x_end_b - x_start_b),
+    )
+
+    cropped_shape = tuple(min(a, b) for a, b in zip(shape_a, shape_b))
+
+    a_slices = (
+        slice(int(z_start_a), int(z_start_a) + cropped_shape[0]),
+        slice(int(y_start_a), int(y_start_a) + cropped_shape[1]),
+        slice(int(x_start_a), int(x_start_a) + cropped_shape[2]),
+    )
+
+    b_slices = (
+        slice(int(z_start_b), int(z_start_b) + cropped_shape[0]),
+        slice(int(y_start_b), int(y_start_b) + cropped_shape[1]),
+        slice(int(x_start_b), int(x_start_b) + cropped_shape[2]),
+    )
+
+    return a_slices, b_slices, cropped_shape
+
+
+def handle_register(params: dict) -> dict:
+    """Register two deskewed volumes stored in a session.
+
+    Mirrors ``RegistrationWorker.run()`` from ``_registration.py`` but
+    operates on volumes already stored in ``SESSIONS`` (from a prior
+    ``load_deskew`` call).  Returns only the transform matrix and
+    correlation ratio, not the registered volumes themselves.
+
+    Parameters
+    ----------
+    params : dict
+        session_id : str
+        transform_type : str  ('t', 't+r', 't+r+s', 't+sh', 't+ssh', 't+sh+s')
+        pre_reg_translation : list  [tz, ty, tx] in pixel units
+        crop_to_common : bool
+        metric : str  ('nip', 'cr', 'ncc')
+        interp_method : str  ('linear', 'cubspl')
+        use_piecewise : bool
+        bound_translation : float
+        bound_rot_shear : float
+        bound_scale : float
+
+    Returns
+    -------
+    dict with keys: transform_matrix (nested list), correlation_ratio (float)
+    """
+    import math
+    import numpy as np
     try:
         import cupy as cp
     except ImportError:
-        import numpy as cp
-    import zarr
-    from pyspim.interp import affine
-    from pyspim.reg import powell
-    from pyspim.util import launch_params_for_volume, pad_to_same_size
+        cp = np  # fallback to CPU
 
-    # Read input volumes from remote zarr paths
-    a_zarr_path = params['a_zarr_path']
-    b_zarr_path = params['b_zarr_path']
-    a_dsk = np.asarray(zarr.open(a_zarr_path, mode='r')[:])
-    b_dsk = np.asarray(zarr.open(b_zarr_path, mode='r')[:])
+    session_id = params["session_id"]
+    transform_type = params["transform_type"]
+    pre_reg_translation = params["pre_reg_translation"]  # [tz, ty, tx] in pixels
+    crop_to_common = params.get("crop_to_common", False)
+    metric = params.get("metric", "cr")
+    interp_method = params.get("interp_method", "cubspl")
+    use_piecewise = params.get("use_piecewise", True)
+    bound_translation = params.get("bound_translation", 20.0)
+    bound_rot_shear = params.get("bound_rot_shear", 5.0)
+    bound_scale = params.get("bound_scale", 0.05)
 
-    transform_type = params['transform_type']
-    initial_translation = params.get('initial_translation', [0, 0, 0])
-    metric = params.get('metric', 'ncc')
-    interp_method = params.get('interp_method', 'cubspl')
-    use_piecewise = params.get('use_piecewise', True)
-    bound_translation = params.get('bound_translation', 20.0)
-    bound_rot_shear = params.get('bound_rot_shear', 5.0)
-    bound_scale = params.get('bound_scale', 0.05)
+    # --- Retrieve deskewed volumes from session ---
+    if session_id not in SESSIONS:
+        raise KeyError(f"Session '{session_id}' not found on server")
 
+    session = SESSIONS[session_id]
+    a_dsk = session["a_deskewed"]
+    b_dsk = session["b_deskewed"]
+
+    # --- Apply crop_to_common if requested ---
+    t0 = pre_reg_translation
+    if crop_to_common:
+        a_slices, b_slices, cropped_shape = _compute_common_crops_server(
+            a_dsk.shape, b_dsk.shape, t0
+        )
+        if a_slices is not None:
+            a_dsk = a_dsk[a_slices]
+            b_dsk = b_dsk[b_slices]
+            t0 = [0, 0, 0]  # Pre-reg translation accounted for by crop
+
+    # --- Pad volumes to same size if needed ---
+    from pyspim.util import pad_to_same_size
     shp_a = a_dsk.shape
     shp_b = b_dsk.shape
-
-    # Pad volumes to same size if needed
     if shp_a[0] != shp_b[0] or shp_a[1] != shp_b[1] or shp_a[2] != shp_b[2]:
         a_dsk, b_dsk = pad_to_same_size(a_dsk, b_dsk)
 
-    # Set up initial parameters and bounds
-    t0 = initial_translation
+    # --- Set up initial parameters and bounds ---
     bt = bound_translation
     br = bound_rot_shear
     bs = bound_scale
 
-    if transform_type == 't':
-        par0 = t0
+    if transform_type == "t":
+        par0 = list(t0)
         bounds = [(t - bt, t + bt) for t in t0]
-    elif transform_type == 't+r':
-        par0 = np.concatenate([t0, np.asarray([0, 0, 0])])
+    elif transform_type == "t+r":
+        par0 = list(t0) + [0, 0, 0]
         bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3
-    elif transform_type == 't+r+s':
-        par0 = np.concatenate([t0, np.asarray([0, 0, 0]), np.asarray([1, 1, 1])])
-        bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3 + [(1 - bs, 1 + bs)] * 3
-    elif transform_type == 't+sh':
-        par0 = np.concatenate([t0, np.asarray([0, 0, 0, 0, 0, 0])])
+    elif transform_type == "t+r+s":
+        par0 = list(t0) + [0, 0, 0] + [1, 1, 1]
+        bounds = (
+            [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3 + [(1 - bs, 1 + bs)] * 3
+        )
+    elif transform_type == "t+sh":
+        par0 = list(t0) + [0, 0, 0, 0, 0, 0]
         bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 6
-    elif transform_type == 't+ssh':
-        par0 = np.concatenate([t0, np.asarray([0, 0, 0])])
+    elif transform_type == "t+ssh":
+        par0 = list(t0) + [0, 0, 0]
         bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 3
-    elif transform_type == 't+sh+s':
-        par0 = np.concatenate([t0, np.asarray([0, 0, 0, 0, 0, 0]), np.asarray([1, 1, 1])])
-        bounds = [(t - bt, t + bt) for t in t0] + [(-br, br)] * 6 + [(1 - bs, 1 + bs)] * 3
+    elif transform_type == "t+sh+s":
+        par0 = list(t0) + [0, 0, 0, 0, 0, 0] + [1, 1, 1]
+        bounds = (
+            [(t - bt, t + bt) for t in t0] + [(-br, br)] * 6 + [(1 - bs, 1 + bs)] * 3
+        )
+    else:
+        raise ValueError(f"Unknown transform type: {transform_type}")
 
-    # Launch parameters for GPU
+    par0 = np.array(par0, dtype=np.float64)
+
+    # --- Perform optimization ---
+    from pyspim.reg import powell
+    from pyspim.util import launch_params_for_volume
+
     launch_par = launch_params_for_volume(a_dsk.shape, 8, 8, 8)
 
-    # Perform optimization
+    a_gpu = cp.asarray(a_dsk)
+    b_gpu = cp.asarray(b_dsk)
+
     if use_piecewise:
         T, res = powell.optimize_affine_piecewise(
-            cp.asarray(a_dsk), cp.asarray(b_dsk),
-            metric=metric, transform=transform_type,
-            interp_method=interp_method, par0=par0,
-            bounds=bounds, kernel_launch_params=launch_par,
+            a_gpu,
+            b_gpu,
+            metric=metric,
+            transform=transform_type,
+            interp_method=interp_method,
+            par0=par0,
+            bounds=bounds,
+            kernel_launch_params=launch_par,
             verbose=False,
         )
     else:
         T, res = powell.optimize_affine(
-            cp.asarray(a_dsk), cp.asarray(b_dsk),
-            metric=metric, transform=transform_type,
-            interp_method=interp_method, par0=par0,
-            bounds=bounds, kernel_launch_params=launch_par,
+            a_gpu,
+            b_gpu,
+            metric=metric,
+            transform=transform_type,
+            interp_method=interp_method,
+            par0=par0,
+            bounds=bounds,
+            kernel_launch_params=launch_par,
             verbose=False,
         )
 
-    # Apply transformation
-    b_reg = affine.transform(
-        cp.asarray(b_dsk), T,
-        interp_method=interp_method, preserve_dtype=True,
-        out_shp=None, block_size_z=8, block_size_y=8, block_size_x=8,
-    ).get()
+    # --- Extract results ---
+    if hasattr(T, "get"):
+        T = T.get()
+    if hasattr(T, "tolist"):
+        T_list = T.tolist()
+    else:
+        T_list = T
 
-    # Crop to smallest size
-    min_sze = [min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape)]
-    a_final = a_dsk[:min_sze[0], :min_sze[1], :min_sze[2]]
-    b_final = b_reg[:min_sze[0], :min_sze[1], :min_sze[2]]
-
-    # Calculate correlation ratio
     cr = 1 - res.fun
 
-    # Save registered volumes as zarr in temp directory
-    temp_dir = tempfile.mkdtemp(prefix='pyspim_reg_')
-    _temp_dirs.append(temp_dir)
-
-    a_zarr_path = os.path.join(temp_dir, 'a_registered.zarr')
-    b_zarr_path = os.path.join(temp_dir, 'b_registered.zarr')
-
-    zarr.open(a_zarr_path, mode='w', shape=a_final.shape,
-              dtype=a_final.dtype, chunks=(64, 256, 256))[:] = a_final
-    zarr.open(b_zarr_path, mode='w', shape=b_final.shape,
-              dtype=b_final.dtype, chunks=(64, 256, 256))[:] = b_final
-
     return {
-        'a_zarr_path': a_zarr_path,
-        'b_zarr_path': b_zarr_path,
-        'transform_matrix': T,
-        'correlation_ratio': cr,
-        'transform_type': transform_type,
-        'shape': list(a_final.shape),
-        'dtype': str(a_final.dtype),
-        'temp_dir': temp_dir,
+        "transform_matrix": T_list,
+        "correlation_ratio": cr,
     }
 
 
-def handle_deconvolve(params, **kwargs):
-    """Perform dual-view deconvolution."""
-    try:
-        import cupy
-    except ImportError:
-        cupy = None
+def handle_save_params(params: dict) -> dict:
+    """Save registration parameters to a JSON file on the remote server.
+
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+            Remote path to the data folder.
+        params_dict : dict
+            The parameters dictionary to serialize as JSON.
+
+    Returns
+    -------
+    dict with key: output_path (str)
+    """
+    import os
+
+    data_path = params["data_path"]
+    params_dict = params["params_dict"]
+
+    output_path = os.path.join(data_path, "deskew_registration_params.json")
+    with open(output_path, "w") as f:
+        json.dump(params_dict, f, indent=2)
+
+    return {"output_path": output_path}
+
+
+def handle_deconvolve(params: dict) -> dict:
+    """Dual-view Richardson-Lucy deconvolution.
+
+    Mirrors ``DeconvolutionWorker.run()`` from ``_deconvolution.py``.
+
+    Parameters
+    ----------
+    params : dict
+        a_path : str - Remote path to View A zarr
+        b_path : str - Remote path to View B zarr
+        save_path : str - Remote output path (directory for OME-TIFF, file for zarr)
+        output_format : str - "OME-TIFF" or "Zarr"
+        psf_type : str - "gaussian" or "custom"
+        psf_a_path : str | None (if custom)
+        psf_b_path : str | None (if custom)
+        deskew_method : str - "Orthogonal", "Shear-Warp", or "Affine"
+            Determines theta angles for PSF rotation (Shear-Warp: 0/90 deg,
+            others: 45/-45 deg).
+        fwhm_a_lat : float - View A lateral FWHM in pixels.
+        fwhm_a_ax : float - View A axial FWHM in pixels.
+        fwhm_b_lat : float - View B lateral FWHM in pixels.
+        fwhm_b_ax : float - View B axial FWHM in pixels.
+        fwhm_x : float (legacy, fallback when per-view params absent)
+        fwhm_y : float (legacy)
+        fwhm_z : float (legacy)
+        bp_type : str - "gaussian" or "custom" or "flipped_psf"
+        bp_a_path : str | None (if custom)
+        bp_b_path : str | None (if custom)
+        bp_fwhm_a_lat : float - Backprojector A lateral FWHM.
+        bp_fwhm_a_ax : float - Backprojector A axial FWHM.
+        bp_fwhm_b_lat : float - Backprojector B lateral FWHM.
+        bp_fwhm_b_ax : float - Backprojector B axial FWHM.
+        decon_function : str - "additive", "efficient", or "dispim"
+        num_iter : int
+        epsilon : float
+        req_both : bool
+        boundary_correction : bool
+        boundary_sigma : float
+        chunkwise : bool
+        chunk_size : list [z, y, x]
+        overlap : list [z, y, x]
+
+    Returns
+    -------
+    dict with keys: output_path, output_format
+    """
+    import os
+    import tempfile
+
+    import numpy as np
+    import tifffile
     import zarr
+
+    request_id = params.get("_request_id")
+    stdout = sys.stdout
+
+    def _progress(msg, pct=None):
+        send_progress(stdout, request_id, msg, pct)
+
+    # Extract parameters
+    a_path = os.path.abspath(params["a_path"])
+    b_path = os.path.abspath(params["b_path"])
+    save_path = os.path.abspath(params["save_path"])
+    logger.info(
+        "[handle_deconvolve] a_path=%s, b_path=%s, save_path=%s",
+        a_path, b_path, save_path,
+    )
+    output_format = params.get("output_format", "OME-TIFF")
+    psf_type = params.get("psf_type", "gaussian").lower()
+    deskew_method = params.get("deskew_method", "Orthogonal")
+    # Per-view FWHM parameters
+    fwhm_a_lat = params.get("fwhm_a_lat", 2.0)
+    fwhm_a_ax = params.get("fwhm_a_ax", 7.0)
+    fwhm_b_lat = params.get("fwhm_b_lat", 2.0)
+    fwhm_b_ax = params.get("fwhm_b_ax", 7.0)
+    # Backprojector FWHM parameters
+    bp_fwhm_a_lat = params.get("bp_fwhm_a_lat", fwhm_a_lat)
+    bp_fwhm_a_ax = params.get("bp_fwhm_a_ax", fwhm_a_ax)
+    bp_fwhm_b_lat = params.get("bp_fwhm_b_lat", fwhm_b_lat)
+    bp_fwhm_b_ax = params.get("bp_fwhm_b_ax", fwhm_b_ax)
+    # Legacy fallback: if per-view params not provided, use old fwhm_x/y/z
+    if "fwhm_a_lat" not in params and "fwhm_x" in params:
+        fwhm_a_lat = params.get("fwhm_x", 2.0)
+        fwhm_a_ax = params.get("fwhm_z", 7.0)
+        fwhm_b_lat = fwhm_a_lat
+        fwhm_b_ax = fwhm_a_ax
+    bp_type = params.get("bp_type", "flipped_psf")
+    decon_function = params.get("decon_function", "additive")
+    num_iter = params.get("num_iter", 20)
+    epsilon = params.get("epsilon", 0.001)
+    req_both = params.get("req_both", True)
+    boundary_correction = params.get("boundary_correction", False)
+    boundary_sigma = params.get("boundary_sigma", 3.0)
+    chunkwise = params.get("chunkwise", False)
+    chunk_size = tuple(params.get("chunk_size", [400, 400, 400]))
+    overlap = tuple(params.get("overlap", [100, 100, 100]))
+
+    _progress("Loading input volumes...", 5)
+
+    # Open input zarr arrays
+    zarr_a = zarr.open(a_path, mode="r")
+    zarr_b = zarr.open(b_path, mode="r")
+
+    _progress("Generating PSF...", 10)
+
+    # --- Compute theta angles from deskew method ---
+    # Matches the logic in DeconvolutionWidget._get_psf_and_backprojectors()
+    deskew_method_lower = deskew_method.lower().replace("-", "").replace(" ", "")
+    if deskew_method_lower == "shearwarp" or deskew_method_lower == "shear":
+        theta_a_deg = 0.0
+        theta_b_deg = 90.0
+    else:  # orthogonal, affine, dispim
+        theta_a_deg = 45.0
+        theta_b_deg = -45.0
+
+    # --- Helper: generate Gaussian PSF with theta rotation ---
+    def _make_gaussian_psf(fwhm_lat, fwhm_ax, theta_deg):
+        """Generate a Gaussian PSF volume with optional ZX-plane rotation."""
+        import math
+        from scipy import ndimage
+        from napari_pyspim._psf import generate_psf_im, normalize_psf_im
+
+        fwhm_to_sigma = 1.0 / (2 * math.sqrt(2 * math.log(2)))
+        sigma_lat = fwhm_lat * fwhm_to_sigma
+        sigma_ax = fwhm_ax * fwhm_to_sigma
+
+        # Calculate PSF size: FWHM * 3, rounded up to odd
+        size = math.ceil(max(fwhm_ax, fwhm_lat) * 3)
+        if size % 2 == 0:
+            size += 1
+
+        im_shape = (size, size, size)
+        # pars: [x0, y0, z0, sx, sy, sz, ampl, bkgrnd]
+        pars = [size / 2, size / 2, size / 2, sigma_lat, sigma_lat, sigma_ax, 1.0, 0.0]
+        psf_im = generate_psf_im(pars, im_shape, "spherical")
+
+        # Apply rotation in the ZX plane (axes 0 and 2) if theta is non-zero
+        if theta_deg != 0.0:
+            psf_im = ndimage.rotate(
+                psf_im, theta_deg, axes=(0, 2), reshape=True,
+                mode="constant", cval=0
+            )
+
+        return normalize_psf_im(psf_im)
+
+    if psf_type == "gaussian":
+        psf_a = _make_gaussian_psf(fwhm_a_lat, fwhm_a_ax, theta_a_deg)
+        psf_b = _make_gaussian_psf(fwhm_b_lat, fwhm_b_ax, theta_b_deg)
+    else:
+        # Custom PSF: load from files
+        psf_a_path = params.get("psf_a_path")
+        psf_b_path = params.get("psf_b_path")
+        if psf_a_path and psf_b_path:
+            psf_a = _load_psf_file(psf_a_path)
+            psf_b = _load_psf_file(psf_b_path)
+        else:
+            raise ValueError("Custom PSF selected but paths not provided")
+
+    # --- Generate or load backprojectors ---
+    if bp_type == "flipped_psf":
+        bp_a = np.flip(psf_a).copy()
+        bp_b = np.flip(psf_b).copy()
+    elif bp_type == "gaussian":
+        bp_a = _make_gaussian_psf(bp_fwhm_a_lat, bp_fwhm_a_ax, theta_a_deg)
+        bp_b = _make_gaussian_psf(bp_fwhm_b_lat, bp_fwhm_b_ax, theta_b_deg)
+    else:
+        # Custom backprojector: load from files
+        bp_a_path = params.get("bp_a_path")
+        bp_b_path = params.get("bp_b_path")
+        if bp_a_path and bp_b_path:
+            bp_a = _load_psf_file(bp_a_path)
+            bp_b = _load_psf_file(bp_b_path)
+        else:
+            raise ValueError("Custom backprojector selected but paths not provided")
+
+    _progress("Starting deconvolution...", 15)
+
+    # Import deconvolution functions
     from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
 
-    # Get input views - either from zarr paths or from arrays
-    if 'view_a_zarr_path' in params:
-        view_a = np.asarray(zarr.open(params['view_a_zarr_path'], mode='r')[:])
-        view_b = np.asarray(zarr.open(params['view_b_zarr_path'], mode='r')[:])
-    else:
-        view_a = params['view_a']
-        view_b = params['view_b']
-
-    psf_a = params['psf_a']
-    psf_b = params['psf_b']
-    backproj_a = params['backproj_a']
-    backproj_b = params['backproj_b']
-    decon_function = params['decon_function']
-    num_iter = params['num_iter']
-    epsilon = params['epsilon']
-    req_both = params.get('req_both', True)
-    boundary_correction = params.get('boundary_correction', False)
-    boundary_sigma = params.get('boundary_sigma', 0.01)
-    chunkwise = params.get('chunkwise', False)
-    chunk_size = tuple(params.get('chunk_size', (64, 128, 128)))
-    overlap = tuple(params.get('overlap', (40, 40, 40)))
-
     if chunkwise:
-        with tempfile.TemporaryDirectory(suffix='.zarr') as tmp_dir:
-            shape = view_a.shape
-            dtype = np.float32
+        _progress("Running chunkwise deconvolution...", 20)
+        # Use temporary zarr for chunkwise output
+        with tempfile.TemporaryDirectory(suffix=".zarr") as tmp_dir:
+            out = zarr.open_array(
+                tmp_dir, mode="w", shape=zarr_a.shape, dtype=np.float32, fill_value=0
+            )
 
-            tmp_a = os.path.join(tmp_dir, 'view_a.zarr')
-            tmp_b = os.path.join(tmp_dir, 'view_b.zarr')
-            tmp_out = os.path.join(tmp_dir, 'output.zarr')
-
-            zarr_a = zarr.open(tmp_a, mode='w', shape=shape, dtype=dtype)
-            zarr_b = zarr.open(tmp_b, mode='w', shape=shape, dtype=dtype)
-            zarr_out = zarr.open(tmp_out, mode='w', shape=shape, dtype=dtype, fill_value=0)
-
-            zarr_a[:] = view_a
-            zarr_b[:] = view_b
+            # Compute overlap from PSF size
+            psf_overlap = max(s // 2 for s in psf_a.shape)
 
             deconvolve_chunkwise(
-                view_a=zarr_a, view_b=zarr_b, out=zarr_out,
-                chunk_size=chunk_size, overlap=overlap,
-                psf_a=np.asarray(psf_a, dtype=np.float32),
-                psf_b=np.asarray(psf_b, dtype=np.float32),
-                bp_a=np.asarray(backproj_a, dtype=np.float32),
-                bp_b=np.asarray(backproj_b, dtype=np.float32),
-                decon_function=decon_function,
-                num_iter=num_iter, epsilon=epsilon,
-                boundary_correction=boundary_correction,
-                zero_padding=None,
-                boundary_sigma_a=boundary_sigma,
-                boundary_sigma_b=boundary_sigma,
+                zarr_a,
+                zarr_b,
+                out,
+                chunk_size,
+                psf_overlap,
+                psf_a,
+                psf_b,
+                bp_a,
+                bp_b,
+                decon_function,
+                num_iter,
+                epsilon,
+                boundary_correction,
+                None,  # zero_padding
+                boundary_sigma,
+                boundary_sigma,
                 verbose=True,
             )
 
-            result = np.asarray(zarr_out[:]).astype(np.float32)
+            _progress("Saving output...", 90)
+            output_path = _save_decon_result(out, save_path, output_format, zarr_a.shape)
     else:
-        view_a_gpu = cupy.asarray(view_a, dtype=cupy.float32)
-        view_b_gpu = cupy.asarray(view_b, dtype=cupy.float32)
-        psf_a_gpu = cupy.asarray(psf_a, dtype=cupy.float32)
-        psf_b_gpu = cupy.asarray(psf_b, dtype=cupy.float32)
-        backproj_a_gpu = cupy.asarray(backproj_a, dtype=cupy.float32)
-        backproj_b_gpu = cupy.asarray(backproj_b, dtype=cupy.float32)
+        _progress("Running full deconvolution...", 20)
+        import cupy
 
-        result_gpu = deconvolve(
-            view_a=view_a_gpu, view_b=view_b_gpu, est_i=None,
-            psf_a=psf_a_gpu, psf_b=psf_b_gpu,
-            backproj_a=backproj_a_gpu, backproj_b=backproj_b_gpu,
-            decon_function=decon_function,
-            num_iter=num_iter, epsilon=epsilon,
-            req_both=req_both,
-            boundary_correction=boundary_correction,
-            zero_padding=None,
-            boundary_sigma_a=boundary_sigma,
-            boundary_sigma_b=boundary_sigma,
-            verbose=False,
+        # Convert PSFs and backprojectors to cupy
+        psf_a_cp = cupy.asarray(psf_a, dtype=cupy.float32)
+        psf_b_cp = cupy.asarray(psf_b, dtype=cupy.float32)
+        bp_a_cp = cupy.asarray(bp_a, dtype=cupy.float32)
+        bp_b_cp = cupy.asarray(bp_b, dtype=cupy.float32)
+
+        # Load volumes into GPU memory
+        a_data = cupy.asarray(np.asarray(zarr_a[:]), dtype=cupy.float32)
+        b_data = cupy.asarray(np.asarray(zarr_b[:]), dtype=cupy.float32)
+
+        result_cp = deconvolve(
+            a_data,
+            b_data,
+            None,  # init
+            psf_a_cp,
+            psf_b_cp,
+            bp_a_cp,
+            bp_b_cp,
+            decon_function,
+            num_iter,
+            epsilon,
+            req_both,
+            boundary_correction,
+            None,  # zero_padding
+            boundary_sigma,
+            boundary_sigma,
+            verbose=True,
         )
-        result = result_gpu.get().astype(np.float32)
 
-    # Save result as zarr in temp directory
-    temp_dir = tempfile.mkdtemp(prefix='pyspim_decon_')
-    _temp_dirs.append(temp_dir)
+        result = result_cp.get().astype(np.float32)
 
-    result_zarr_path = os.path.join(temp_dir, 'deconvolved.zarr')
-    zarr.open(result_zarr_path, mode='w', shape=result.shape,
-              dtype=result.dtype, chunks=(64, 256, 256))[:] = result
+        _progress("Saving output...", 90)
+        output_path = _save_decon_result_array(result, save_path, output_format, zarr_a.shape)
 
-    return {
-        'result_zarr_path': result_zarr_path,
-        'shape': list(result.shape),
-        'dtype': str(result.dtype),
-        'temp_dir': temp_dir,
-    }
+    _progress("Deconvolution completed!", 100)
+
+    return {"output_path": output_path, "output_format": output_format}
 
 
-def handle_save_zarr(params, **kwargs):
-    """Move zarr archive from temp to permanent location."""
+def _load_psf_file(path: str) -> "np.ndarray":
+    """Load a PSF volume from .npy or .tif file."""
+    import numpy as np
+    import tifffile
+
+    if path.endswith(".npy"):
+        return np.load(path)
+    elif path.endswith((".tif", ".tiff")):
+        return tifffile.imread(path)
+    else:
+        # Try numpy first, then tifffile
+        try:
+            return np.load(path)
+        except Exception:
+            return tifffile.imread(path)
+
+
+def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, shape: tuple) -> str:
+    """Save deconvolution result from a zarr array to the specified format.
+
+    For Zarr output, copies the zarr folder to the destination.
+    For OME-TIFF output, uses dask.array for lazy loading and tifffile
+    for memory-efficient tiled writes.
+    """
+    import os
     import shutil
-    temp_path = params['temp_path']
-    permanent_path = params['permanent_path']
 
-    # Ensure parent directory exists
-    parent = os.path.dirname(permanent_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    is_multichannel = len(shape) > 3
+    axes = "CZYX" if is_multichannel else "ZYX"
 
-    shutil.move(temp_path, permanent_path)
+    if output_format == "Zarr":
+        # Ensure path ends with .zarr
+        if not save_path.endswith(".zarr"):
+            save_path = save_path + ".zarr"
 
-    # Remove from tracking if present
-    if temp_path in _temp_dirs:
-        _temp_dirs.remove(temp_path)
+        # Copy the zarr directory to the final location.
+        # Use the store's root directory if available, otherwise fall back
+        # to copying chunk-by-chunk.
+        source_path = getattr(out.store, "root", None)
+        if source_path and os.path.isdir(source_path):
+            # FilesystemStore: copy the entire directory
+            if os.path.exists(save_path):
+                shutil.rmtree(save_path)
+            shutil.copytree(source_path, save_path)
+        else:
+            # Non-filesystem store: create target and copy chunk-by-chunk
+            import zarr
 
-    return {'success': True, 'permanent_path': permanent_path}
+            final_zarr = zarr.open(
+                save_path, mode="w",
+                shape=out.shape,
+                dtype=out.dtype,
+                chunks=out.chunks,
+                compressor=out.compressor,
+            )
+            final_zarr[:] = out[:]
+
+        return save_path
+    else:
+        # OME-TIFF — use dask.array for lazy loading + tifffile for tiled write
+        if not save_path.endswith(".tif"):
+            if not save_path.endswith(".tiff"):
+                save_path = save_path + ".ome.tif"
+
+        import dask.array as da
+        import tifffile
+
+        # Open the zarr array lazily (does not load into RAM)
+        dask_data = da.from_zarr(out)
+
+        # Write to OME-TIFF using tiled/chunked approach
+        tifffile.imwrite(
+            save_path,
+            dask_data,
+            bigtiff=True,
+            photometric="minisblack",
+            resolution=(1 / 0.1625, 1 / 0.1625),
+            metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
+            tile=(1024, 1024),
+        )
+        return save_path
 
 
-def handle_cleanup_zarr(params, **kwargs):
-    """Remove a temp zarr directory."""
+def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format: str, shape: tuple) -> str:
+    """Save deconvolution result from a numpy array to the specified format."""
+    import zarr
+
+    is_multichannel = len(shape) > 3
+    axes = "CZYX" if is_multichannel else "ZYX"
+
+    if output_format == "Zarr":
+        if not save_path.endswith(".zarr"):
+            save_path = save_path + ".zarr"
+        final_zarr = zarr.open(
+            save_path, mode="w",
+            shape=result.shape,
+            dtype=result.dtype,
+        )
+        final_zarr[:] = result
+        return save_path
+    else:
+        # OME-TIFF
+        if not save_path.endswith(".tif"):
+            if not save_path.endswith(".tiff"):
+                save_path = save_path + ".ome.tif"
+
+        import tifffile
+
+        tifffile.imwrite(
+            save_path,
+            result,
+            bigtiff=True,
+            photometric="minisblack",
+            resolution=(1 / 0.1625, 1 / 0.1625),
+            metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
+        )
+        return save_path
+
+
+def handle_apply_registration(params: dict) -> dict:
+    """Batch-apply deskew + registration across time/channel dimensions.
+
+    Mirrors ApplyWorker.run() from _registration.py.
+
+    Parameters
+    ----------
+    params : dict
+        data_path : str
+            Path to the μManager acquisition folder on the remote server.
+        output_folder : str
+            Path where output zarr files will be saved.
+        time_range : tuple
+            (time_min, time_max) inclusive range of timepoints.
+        channel_range : tuple
+            (chan_min, chan_max) 1-indexed inclusive range of channels.
+        multi_pos : bool
+            Whether this is a multi-position acquisition.
+        position : int
+            Position index for multi-position acquisitions.
+        ignore_bbox : bool
+            If True, ignore bbox_raw.json and load full dataset.
+
+    Returns
+    -------
+    dict with keys: output_folder, files_created (list of paths)
+    """
+    import math
+    import os
     import shutil
-    temp_path = params.get('temp_path')
-    if temp_path and os.path.exists(temp_path):
-        shutil.rmtree(temp_path)
-        if temp_path in _temp_dirs:
-            _temp_dirs.remove(temp_path)
-    return {'success': True}
 
+    import numpy as np
+    import tifffile
+    import zarr
 
-def handle_list_directory(params, **kwargs):
-    """List directory contents via os.listdir."""
-    remote_path = params['path']
     try:
-        entries = []
-        for name in os.listdir(remote_path):
-            full_path = os.path.join(remote_path, name)
-            entries.append({
-                'name': name,
-                'is_dir': os.path.isdir(full_path),
-                'size': os.path.getsize(full_path) if os.path.isfile(full_path) else 0,
-            })
-        return {'entries': entries, 'path': remote_path}
-    except Exception as e:
-        return {'entries': [], 'path': remote_path, 'error': str(e)}
+        import cupy as cp
+    except ImportError:
+        cp = np
+
+    data_path = params["data_path"]
+    output_folder = params["output_folder"]
+    time_range = params["time_range"]
+    channel_range = params["channel_range"]
+    multi_pos = params.get("multi_pos", False)
+    position = params.get("position", 0)
+    ignore_bbox = params.get("ignore_bbox", False)
+    save_tiffs = params.get("save_tiffs", False)
+    request_id = params.get("_request_id", 0)
+
+    from pyspim.data import dispim as data
+    from pyspim import deskew as dsk
+    from pyspim.interp import affine
+
+    # Load parameters from saved JSON file
+    params_path = os.path.join(data_path, "deskew_registration_params.json")
+    with open(params_path, "r") as f:
+        saved_params = json.load(f)
+
+    dp = saved_params["deskewing_parameters"]
+    method = _normalize_deskew_method(dp["method"])
+    step_size = dp["step_size_um"]
+    pixel_size = dp["pixel_size_um"]
+    camera_offset = dp.get("camera_offset", 0)
+    theta_deg = 45.0  # Hardcoded to 45 degrees
+    theta_rad = math.pi / 4
+    affine_matrix = np.array(saved_params["affine_registration_matrix"])
+
+    rp = saved_params["registration_parameters"]
+    crop_to_common = rp.get("crop_to_common", False)
+    interp_method = rp.get("interp_method", "cubspl")
+    pre_reg = saved_params["pre_reg_transform"]
+    pre_reg_t = [
+        pre_reg["tz_um"] / pixel_size,
+        pre_reg["ty_um"] / pixel_size,
+        pre_reg["tx_um"] / pixel_size,
+    ]
+
+    deskew_kwargs = _get_deskew_kwargs(method)
+
+    # Load bbox
+    window = None
+    if not ignore_bbox:
+        bbox_path = os.path.join(data_path, "bbox_raw.json")
+        if os.path.exists(bbox_path):
+            try:
+                with open(bbox_path, "r") as f:
+                    bbox = json.load(f)
+                window = (
+                    slice(bbox[0][0], bbox[0][1]),
+                    slice(bbox[1][0], bbox[1][1]),
+                    slice(bbox[2][0], bbox[2][1]),
+                )
+            except (json.JSONDecodeError, IndexError, TypeError):
+                pass
+
+    # Prepare output folder
+    if os.path.exists(output_folder):
+        shutil.rmtree(output_folder)
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Determine channel indices (0-indexed)
+    chan_start = channel_range[0] - 1
+    chan_end = channel_range[1] - 1
+    channels = list(range(chan_start, chan_end + 1))
+    n_channels = len(channels)
+
+    time_start, time_end = time_range
+    total_items = (time_end - time_start + 1) * len(channels)
+    current_item = 0
+    files_created = []
+
+    for t in range(time_start, time_end + 1):
+        # Process first channel to determine output shape
+        first_chan = channels[0]
+        send_progress(
+            sys.stdout, request_id,
+            f"Processing Time {t}, Channel {first_chan + 1} (determining shape)...", 0,
+        )
+
+        with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+            if multi_pos:
+                vol_a = acq.get(position, "a", first_chan, t, window=window)
+                vol_b = acq.get(position, "b", first_chan, t, window=window)
+            else:
+                vol_a = acq.get("a", first_chan, t, window=window)
+                vol_b = acq.get("b", first_chan, t, window=window)
+
+        # Subtract camera offset if non-zero
+        if camera_offset > 0:
+            from pyspim.data.dispim import subtract_constant_uint16arr
+            vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+            vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
+
+        a_dsk = dsk.deskew_stage_scan(
+            vol_a, pixel_size, step_size, 1,
+            theta=theta_rad, method=method, **deskew_kwargs,
+        )
+        try:
+            a_dsk = a_dsk.get()
+        except Exception:
+            pass
+
+        b_dsk = dsk.deskew_stage_scan(
+            vol_b, pixel_size, step_size, -1,
+            theta=theta_rad, method=method, **deskew_kwargs,
+        )
+        try:
+            b_dsk = b_dsk.get()
+        except Exception:
+            pass
+
+        if crop_to_common:
+            a_slices, b_slices, cropped_shape = _compute_common_crops_server(
+                a_dsk.shape, b_dsk.shape, pre_reg_t,
+            )
+            if a_slices is not None:
+                a_dsk = a_dsk[a_slices]
+                b_dsk = b_dsk[b_slices]
+
+        b_cupy = cp.asarray(b_dsk)
+        b_reg = affine.transform(
+            b_cupy,
+            cp.asarray(affine_matrix),
+            interp_method=interp_method,
+            preserve_dtype=True,
+            out_shp=None,
+            block_size_z=8,
+            block_size_y=8,
+            block_size_x=8,
+        ).get()
+
+        min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
+        out_shape = (n_channels, *min_shape)
+
+        a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
+        b_zarr_path = os.path.join(output_folder, f"b_t{t}.zarr")
+
+        arr_a = zarr.open(
+            a_zarr_path, mode="w", shape=out_shape,
+            dtype=np.uint16, chunks=(1, 64, 256, 256),
+        )
+        arr_b = zarr.open(
+            b_zarr_path, mode="w", shape=out_shape,
+            dtype=np.uint16, chunks=(1, 64, 256, 256),
+        )
+
+        a_final = a_dsk[: min_shape[0], : min_shape[1], : min_shape[2]]
+        b_final = b_reg[: min_shape[0], : min_shape[1], : min_shape[2]]
+        arr_a[0, ...] = a_final.astype(np.uint16)
+        arr_b[0, ...] = b_final.astype(np.uint16)
+
+        files_created.extend([a_zarr_path, b_zarr_path])
+
+        current_item += 1
+        percentage = int((current_item / total_items) * 100)
+        send_progress(
+            sys.stdout, request_id,
+            f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage,
+        )
+
+        # Helper to save TIFF after all channels are written
+        def _save_tiff_if_needed(zarr_path, data_arr):
+            from dask.array import from_zarr
+            dask_data = from_zarr(data_arr)
+            if save_tiffs:
+                tiff_path = zarr_path.replace(".zarr", ".tiff")
+                tifffile.imwrite(
+                    tiff_path,
+                    dask_data,
+                    bigtiff=True,
+                    photometric="minisblack",
+                    resolution=(1 / pixel_size, 1 / pixel_size),
+                    metadata={"axes": "CZYX", "spacing": pixel_size, "units": "um"},
+                    tile=(1024,1024),
+                )
+
+        # Process remaining channels
+        for chan_idx in channels[1:]:
+            c = chan_idx - chan_start
+
+            with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+                if multi_pos:
+                    vol_a = acq.get(position, "a", chan_idx, t, window=window)
+                    vol_b = acq.get(position, "b", chan_idx, t, window=window)
+                else:
+                    vol_a = acq.get("a", chan_idx, t, window=window)
+                    vol_b = acq.get("b", chan_idx, t, window=window)
+
+            # Subtract camera offset if non-zero
+            if camera_offset > 0:
+                from pyspim.data.dispim import subtract_constant_uint16arr
+                vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+                vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
+
+            a_dsk = dsk.deskew_stage_scan(
+                vol_a, pixel_size, step_size, 1,
+                theta=theta_rad, method=method, **deskew_kwargs,
+            )
+            try:
+                a_dsk = a_dsk.get()
+            except Exception:
+                pass
+
+            b_dsk = dsk.deskew_stage_scan(
+                vol_b, pixel_size, step_size, -1,
+                theta=theta_rad, method=method, **deskew_kwargs,
+            )
+            try:
+                b_dsk = b_dsk.get()
+            except Exception:
+                pass
+
+            if crop_to_common:
+                a_slices, b_slices, cropped_shape = _compute_common_crops_server(
+                    a_dsk.shape, b_dsk.shape, pre_reg_t,
+                )
+                if a_slices is not None:
+                    a_dsk = a_dsk[a_slices]
+                    b_dsk = b_dsk[b_slices]
+
+            b_cupy = cp.asarray(b_dsk)
+            b_reg = affine.transform(
+                b_cupy,
+                cp.asarray(affine_matrix),
+                interp_method=interp_method,
+                preserve_dtype=True,
+                out_shp=None,
+                block_size_z=8,
+                block_size_y=8,
+                block_size_x=8,
+            )
+            b_reg = b_reg.get()
+
+            a_final = a_dsk[: min_shape[0], : min_shape[1], : min_shape[2]]
+            b_final = b_reg[: min_shape[0], : min_shape[1], : min_shape[2]]
+
+            arr_a[c, ...] = a_final.astype(np.uint16)
+            arr_b[c, ...] = b_final.astype(np.uint16)
+
+            current_item += 1
+            percentage = int((current_item / total_items) * 100)
+            send_progress(
+                sys.stdout, request_id,
+                f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage,
+            )
+
+        # Save TIFF files after all channels for this timepoint are written
+        _save_tiff_if_needed(a_zarr_path, arr_a)
+        _save_tiff_if_needed(b_zarr_path, arr_b)
+
+    return {"output_folder": output_folder, "files_created": files_created}
 
 
-def handle_check_path(params, **kwargs):
-    """Check if a path exists and is a directory."""
-    path = params['path']
-    return {
-        'exists': os.path.exists(path),
-        'is_dir': os.path.isdir(path),
-        'is_file': os.path.isfile(path),
-    }
+def handle_save_zarr(params: dict) -> dict:
+    """Move a zarr archive from a temp path to a permanent location.
+
+    TODO: Implement in Phase 4.
+    """
+    raise NotImplementedError("save_zarr not yet implemented")
 
 
-# --- Command Dispatcher ---
+def handle_cleanup_zarr(params: dict) -> dict:
+    """Remove a temporary zarr directory.
+
+    TODO: Implement in Phase 4.
+    """
+    raise NotImplementedError("cleanup_zarr not yet implemented")
+
 
 COMMAND_HANDLERS = {
-    'ping': handle_ping,
-    'compute_projections': handle_compute_projections,
-    'load_deskew': handle_load_deskew,
-    'register': handle_register,
-    'deconvolve': handle_deconvolve,
-    'save_zarr': handle_save_zarr,
-    'cleanup_zarr': handle_cleanup_zarr,
-    'list_directory': handle_list_directory,
-    'check_path': handle_check_path,
+    "ping": handle_ping,
+    "compute": handle_compute,
+    "compute_projections": handle_compute_projections,
+    "query_positions": handle_query_positions,
+    "load_deskew": handle_load_deskew,
+    "register": handle_register,
+    "save_params": handle_save_params,
+    "deconvolve": handle_deconvolve,
+    "apply_registration": handle_apply_registration,
+    "save_zarr": handle_save_zarr,
+    "cleanup_zarr": handle_cleanup_zarr,
 }
 
 
+# ---------------------------------------------------------------------------
+# Capability detection helpers
+# ---------------------------------------------------------------------------
+
+def _check_cuda() -> bool:
+    """Return True if a CUDA device is available via cupy."""
+    try:
+        import cupy  # type: ignore
+        return cupy.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        return False
+
+
+def _get_pyspim_version() -> str:
+    """Return the installed pyspim version string, or 'unknown'."""
+    try:
+        from importlib.metadata import version
+        # import pyspim  # type: ignore
+        return version('pyspim')
+    except Exception:
+        return "not installed"
+
+
+# ---------------------------------------------------------------------------
+# Main server loop
+# ---------------------------------------------------------------------------
+
 def main():
-    """Main entry point for the remote server."""
-    # Register cleanup on exit
-    import atexit
-    atexit.register(cleanup_temp_dirs)
+    """Entry point for the remote server.
+
+    Sends a ``ready`` message, then enters the command dispatch loop.
+    Exits cleanly on ``shutdown`` command or when stdin is closed.
+    """
+    stdout = sys.stdout
+    stdin_buffer = sys.stdin.buffer
+
+    logger.info("Server starting up...")
 
     # Send ready message
-    send_response(None, {'status': 'ready'})
+    try:
+        logger.info("Checking CUDA availability...")
+        has_cuda = _check_cuda()
+        logger.info("CUDA available: %s", has_cuda)
+    except Exception as e:
+        logger.error("CUDA check failed: %s", e, exc_info=True)
+        has_cuda = False
 
-    # Main loop
+    try:
+        logger.info("Checking pyspim version...")
+        pyspim_version = _get_pyspim_version()
+        logger.info("pyspim version: %s", pyspim_version)
+    except Exception as e:
+        logger.error("pyspim version check failed: %s", e, exc_info=True)
+        pyspim_version = "error"
+
+    ready = {
+        "type": "ready",
+        "version": "0.1.0",
+        "capabilities": {
+            "has_cuda": has_cuda,
+            "pyspim_version": pyspim_version,
+        },
+    }
+    logger.info("Sending ready message: %s", ready)
+    payload = msgpack.packb(ready, default=encode_array)
+    header = struct.pack(">Q", len(payload))
+    stdout.buffer.write(header + payload)
+    stdout.buffer.flush()
+    logger.info("Ready message sent, entering command loop")
+
+    # Main command loop
     while True:
         try:
-            message = receive_message()
-            if message is None:
-                break  # EOF
-
-            request_id = message.get('request_id')
-            command = message.get('command')
-            params = message.get('params', {})
-
-            handler = COMMAND_HANDLERS.get(command)
-            if handler is None:
-                send_response(request_id, None, error=f"Unknown command: {command}")
-                continue
-
-            send_response(request_id, None, progress=f"Server: received '{command}' command")
-
-            try:
-                result = handler(params, request_id=request_id)
-                send_response(request_id, result)
-            except Exception as e:
-                traceback.print_exc(file=sys.stderr)
-                sys.stderr.flush()
-                send_response(request_id, None, error=f"{type(e).__name__}: {e}")
-
+            logger.info("Waiting for incoming message...")
+            message = receive_message(stdin_buffer)
+            logger.info("Received message: request_id=%s, command=%s",
+                        message.get("request_id"), message.get("command"))
+        except (EOFError, ConnectionError) as e:
+            logger.info("Client disconnected (EOF/ConnectionError): %s", e)
+            break  # Client disconnected
         except Exception as e:
-            traceback.print_exc(file=sys.stderr)
-            sys.stderr.flush()
+            logger.error("Unexpected error receiving message: %s", e, exc_info=True)
             break
 
+        request_id = message.get("request_id")
+        command = message.get("command")
+        params = message.get("params", {})
 
-if __name__ == '__main__':
+        if command == "shutdown":
+            logger.info("Shutdown command received, responding and exiting")
+            send_response(stdout, request_id, {"status": "shutting down"})
+            break
+
+        handler = COMMAND_HANDLERS.get(command)
+        if handler is None:
+            logger.warning("Unknown command: %s", command)
+            send_response(stdout, request_id, None,
+                          error=f"Unknown command: {command}")
+            continue
+
+        try:
+            logger.info("Executing handler for command: %s", command)
+            # Inject request_id into params so handlers can emit progress updates
+            params_with_id = dict(params)
+            params_with_id["_request_id"] = request_id
+            result = handler(params_with_id)
+            logger.info("Handler completed, sending response for request_id=%s", request_id)
+            send_response(stdout, request_id, result)
+        except Exception as e:
+            logger.error("Handler exception for command %s: %s", command, e, exc_info=True)
+            import traceback
+            traceback.print_exc()
+            send_response(stdout, request_id, None,
+                          error=f"{type(e).__name__}: {e}")
+
+
+if __name__ == "__main__":
     main()

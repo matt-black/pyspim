@@ -3,6 +3,7 @@ import math
 import cupy
 from cupyx.scipy.ndimage import zoom
 
+from .affine import deskew_stage_scan as deskew_stage_scan_affine
 from .dispim import deskew_stage_scan as deskew_stage_scan_dispim
 from .ortho import deskew_stage_scan as deskew_stage_scan_orthogonal
 from .shear import deskew_stage_scan as deskew_stage_scan_shear
@@ -31,6 +32,14 @@ def deskew_stage_scan(
         return zoom(dsk, (step_size / pixel_size, 1, 1), **kwargs)
     elif method == "shear":
         shr = deskew_stage_scan_shear(
+            cupy.asarray(im), pixel_size, step_size, direction, **kwargs
+        )
+        if gpu_in:
+            return shr
+        else:
+            return shr.get()
+    elif method == "affine":
+        shr = deskew_stage_scan_affine(
             cupy.asarray(im), pixel_size, step_size, direction, **kwargs
         )
         if gpu_in:

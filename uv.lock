@@ -3,17 +3,13 @@ revision = 2
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
-    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.14' and sys_platform == 'darwin'",
     "python_full_version >= '3.14' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and sys_platform == 'linux'",
-    "python_full_version < '3.13' and sys_platform == 'linux'",
+    "python_full_version < '3.14' and sys_platform == 'linux'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 
 [manifest]
@@ -98,7 +94,7 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0e/89/ce5af8a7d472a67cc819d5d998aa8c82c5d860608c4db9f46f1162d7dab9/argon2_cffi-25.1.0.tar.gz", hash = "sha256:694ae5cc8a42f4c4e2bf2ca0e64e51e23a040c6a517a85074683d3959e1346c1", size = 45706, upload_time = "2025-06-03T06:55:32.073Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/d3/a8b22fa575b297cd6e3e3b0155c7e25db170edf1c74783d6a31a2490b8d9/argon2_cffi-25.1.0-py3-none-any.whl", hash = "sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741", size = 14657, upload_time = "2025-06-03T06:55:30.804Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/d3/a8b22fa575b297cd6e3e3b0155c7e25db170edf1c74783d6a31a2490b8d9/argon2_cffi-25.1.0-py3-none-any.whl", hash = "sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741", size = 14657 },
 ]
 
 [[package]]
@@ -698,23 +694,22 @@ wheels = [
 ]
 
 [[package]]
-name = "cupy-cuda12x"
-version = "14.0.1"
+name = "cupy-cuda13x"
+version = "14.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cuda-pathfinder" },
     { name = "numpy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/ca/b93ef9fca1471a65f136a73e10819634c0b83427362fc08fc9f29f935bf0/cupy_cuda12x-14.0.1-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:f244bc14fad6f1ef0c74abd98afa4b82d2534aecdba911197810ec0047f0d1f3", size = 145578614, upload_time = "2026-02-20T10:22:49.108Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/a6/944406223a190815d9df156a1d66f3b0352bd8827dc4a8c752196d616dbc/cupy_cuda12x-14.0.1-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:9f0c81c3509f77be3ae8444759d5b314201b2dfcbbf2ae0d0b5fb7a61f20893c", size = 134613763, upload_time = "2026-02-20T10:22:56.792Z" },
-    { url = "https://files.pythonhosted.org/packages/11/fd/62e6e3f3c0c9f785b2dbdc2bff01bc375f5c6669d52e5e151f7aeb577801/cupy_cuda12x-14.0.1-cp312-cp312-win_amd64.whl", hash = "sha256:63dc8a3a88d2ffd0386796b915d27acc7f2332c2291efd1ff4f0021b96f02051", size = 96267167, upload_time = "2026-02-20T10:23:02.263Z" },
-    { url = "https://files.pythonhosted.org/packages/99/67/f967c5aff77bd6ae6765faf20580db80bb8a7e2574e999166de1d4e50146/cupy_cuda12x-14.0.1-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:9d9b1bdcf9fa777593017867e8733192c071b94639a1b3e8b2ee99eb3f3ea760", size = 145128055, upload_time = "2026-02-20T10:23:08.765Z" },
-    { url = "https://files.pythonhosted.org/packages/80/53/037c931731151c504cfc00069eb295c903927c92145115623f13bd2ea076/cupy_cuda12x-14.0.1-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:21fcb4e917e43237edcc5e3a1a1241e2a2946ba9e577ce36fd580bd9856f91e8", size = 134227269, upload_time = "2026-02-20T10:23:16.147Z" },
-    { url = "https://files.pythonhosted.org/packages/a3/70/ce8344426effda22152bf30cfb8f9b6477645d0f41df784674369af8f422/cupy_cuda12x-14.0.1-cp313-cp313-win_amd64.whl", hash = "sha256:b7399e7fe4e2be3b5c3974fc892a661e10082836a4c78d0152b39cb483608a89", size = 96250134, upload_time = "2026-02-20T10:23:22.631Z" },
-    { url = "https://files.pythonhosted.org/packages/5d/cb/ba61bcd602856aeabf362280cb3c17ed5fe03ae23e84578eb99f5245546c/cupy_cuda12x-14.0.1-cp314-cp314-manylinux2014_aarch64.whl", hash = "sha256:3be87da86d808d9fec23b0a1df001f15f8f145698bc4bebc6d6938fa7e11519f", size = 144976386, upload_time = "2026-02-20T10:23:29.877Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/73/34e5f334f6b1e5c5dff80af8109979fb0e8461b27e4454517e0e47486455/cupy_cuda12x-14.0.1-cp314-cp314-manylinux2014_x86_64.whl", hash = "sha256:fa356384760e01498d010af2d96de536ef3dad19db1d3a1ad0764e4323fb919f", size = 133521354, upload_time = "2026-02-20T10:23:37.063Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/a3/80ff83dcad1ac61741714d97fce5a3ef42c201bb40005ec5cc413e34d75f/cupy_cuda12x-14.0.1-cp314-cp314-win_amd64.whl", hash = "sha256:cafe62131caef63b5e90b71b617bb4bf47d7bd9e11cccabea8104db1e01db02e", size = 96822848, upload_time = "2026-02-20T10:23:42.684Z" },
+    { url = "https://files.pythonhosted.org/packages/04/8a/31c58ffa8e1780c8f15492018997d5fb3548427f5fa0e6327becf26f00c6/cupy_cuda13x-14.1.0-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:42f85f692a589b92a86627113e1072c534cc9d9047433b4291b8bd7b49fb238a", size = 72812202 },
+    { url = "https://files.pythonhosted.org/packages/98/41/be34e911811a0369e3e66b1b618dfccdea1f84ad6a2cc17f146ce9095e99/cupy_cuda13x-14.1.0-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:eef76f0647af5a9bfe3d0bac641f201deb5f15a644f4b13a2e68c0c62e6808fe", size = 69094718 },
+    { url = "https://files.pythonhosted.org/packages/0a/c1/c92b4c9c2c561c1298dfad2e3dbb75e527ac1a15d567d8fb868fc277c80e/cupy_cuda13x-14.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:18338008d428bf04dcd73ab2489c6f90c39b7ff439ab2b609115b9bb0e16e0ec", size = 35171775 },
+    { url = "https://files.pythonhosted.org/packages/24/b4/8963aced61d836417ca681d7cd1b6b27916ed877a01f3adf7c902bd8f392/cupy_cuda13x-14.1.0-cp314-cp314-manylinux2014_aarch64.whl", hash = "sha256:fa77dc442a166e784e28e5c7dd4e1bb4b2ac54a2ec55c59c1af3c0ed27e14f69", size = 72680065 },
+    { url = "https://files.pythonhosted.org/packages/8b/a8/2ae8d8235a236564e65a73812ee0bf4c1afe96b7104f754f100832f015e9/cupy_cuda13x-14.1.0-cp314-cp314-manylinux2014_x86_64.whl", hash = "sha256:7824fc7757bac2d91d6c810c4f5376359c1eeaf5d37c2625c4a670705f3d9f36", size = 68432300 },
+    { url = "https://files.pythonhosted.org/packages/ee/12/8e1d2b9efda12e8ad5c648f1fc289454b7c6210c2f4d9e99d7663178d8e1/cupy_cuda13x-14.1.0-cp314-cp314-win_amd64.whl", hash = "sha256:f3c9f5e61fefc7920bcd3da9818679ea8f9319cca080dd88118f463a2ca08e41", size = 35323531 },
+    { url = "https://files.pythonhosted.org/packages/f6/bc/6cceec523fd467fc6259c4c394d87a9e7e3b8f011685da028d9862bf8497/cupy_cuda13x-14.1.0-cp314-cp314t-manylinux2014_aarch64.whl", hash = "sha256:e5b2a0dcaa5fb27faf034f5e3d271eaa13c4a5351e2c6dec925a866c210f3605", size = 72984031 },
+    { url = "https://files.pythonhosted.org/packages/d3/43/180777ccc0f85ce4469f3e6e615c471968f482fed85827410090adf40523/cupy_cuda13x-14.1.0-cp314-cp314t-manylinux2014_x86_64.whl", hash = "sha256:69b314f0085d7ad46a671338e62b3f35270c144c31df8c443c0341b97a905980", size = 68662879 },
 ]
 
 [[package]]
@@ -2213,6 +2208,7 @@ name = "napari-pyspim"
 version = "0.0.1"
 source = { editable = "packages/napari-pyspim" }
 dependencies = [
+    { name = "dask" },
     { name = "fsspec" },
     { name = "matplotlib" },
     { name = "msgpack" },
@@ -2245,6 +2241,7 @@ testing = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dask", specifier = ">=2025.7.0" },
     { name = "fsspec", specifier = ">=2025.7.0" },
     { name = "matplotlib", specifier = ">=3.5.0" },
     { name = "msgpack", specifier = ">=1.1.1" },
@@ -2258,7 +2255,6 @@ requires-dist = [
     { name = "pyqt5-qt5", marker = "sys_platform == 'darwin'", specifier = ">=5.15.19" },
     { name = "pyqt5-qt5", marker = "sys_platform == 'linux'", specifier = ">=5.15.19" },
     { name = "pyqt5-qt5", marker = "sys_platform == 'win32'", specifier = "==5.15.12" },
-    { name = "pyspim", marker = "extra == 'full'", editable = "packages/pyspim" },
     { name = "pytest", marker = "extra == 'testing'" },
     { name = "pytest-cov", marker = "extra == 'testing'" },
     { name = "pytest-mock", marker = "extra == 'testing'" },
@@ -3154,8 +3150,9 @@ name = "pyqt5"
 version = "5.15.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "pyqt5-qt5", version = "5.15.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'" },
     { name = "pyqt5-qt5", version = "5.15.12", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'win32'" },
-    { name = "pyqt5-qt5", version = "5.15.19", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
+    { name = "pyqt5-qt5", version = "5.15.19", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pyqt5-sip" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0e/07/c9ed0bd428df6f87183fca565a79fee19fa7c88c7f00a7f011ab4379e77a/PyQt5-5.15.11.tar.gz", hash = "sha256:fda45743ebb4a27b4b1a51c6d8ef455c4c1b5d610c90d2934c7802b5c1557c52", size = 3216775, upload_time = "2024-07-19T08:39:57.756Z" }
@@ -3172,9 +3169,17 @@ name = "pyqt5-qt5"
 version = "5.15.12"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+]
+
+[[package]]
+name = "pyqt5-qt5"
+version = "5.15.12"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.14' and sys_platform == 'win32'",
 ]
 
 [[package]]
@@ -3183,19 +3188,14 @@ version = "5.15.19"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
-    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.14' and sys_platform == 'darwin'",
     "python_full_version >= '3.14' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and sys_platform == 'linux'",
-    "python_full_version < '3.13' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.14' and sys_platform == 'linux'",
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/af/c0e00d353cad261ee9ccd5f6039b7ef4e09a1cb9a22c6a4b233854f6fa30/pyqt5_qt5-5.15.19-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:cac6b78e4805848c25979a0622660251070781b6b4f810688a960cb44d1ae5a2", size = 39777655, upload_time = "2026-05-21T09:12:43.94Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/d0/fd4876b90bbadaa92444ff452ab78d9ba839014a6d303e77d29c0c591631/pyqt5_qt5-5.15.19-py3-none-macosx_11_0_arm64.whl", hash = "sha256:66fa299dcdea1f430edbd6f6ca3dcb20430f19c508d13e3aa851d19034b7be7e", size = 36838788, upload_time = "2026-05-21T09:12:59.334Z" },
-    { url = "https://files.pythonhosted.org/packages/de/a0/dd9889ed9bf100d6d8b9d608b2689dc2a7f871f9489a0c563a8cf78c329f/pyqt5_qt5-5.15.19-py3-none-manylinux2014_x86_64.whl", hash = "sha256:31421d9c31fb29a8faee4b8b3c32658fb51a9e8c4c708075121162fa44faf80e", size = 60933242, upload_time = "2026-05-21T09:13:16.308Z" },
+    { url = "https://files.pythonhosted.org/packages/06/af/c0e00d353cad261ee9ccd5f6039b7ef4e09a1cb9a22c6a4b233854f6fa30/pyqt5_qt5-5.15.19-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:cac6b78e4805848c25979a0622660251070781b6b4f810688a960cb44d1ae5a2", size = 39777655 },
+    { url = "https://files.pythonhosted.org/packages/1c/d0/fd4876b90bbadaa92444ff452ab78d9ba839014a6d303e77d29c0c591631/pyqt5_qt5-5.15.19-py3-none-macosx_11_0_arm64.whl", hash = "sha256:66fa299dcdea1f430edbd6f6ca3dcb20430f19c508d13e3aa851d19034b7be7e", size = 36838788 },
+    { url = "https://files.pythonhosted.org/packages/de/a0/dd9889ed9bf100d6d8b9d608b2689dc2a7f871f9489a0c563a8cf78c329f/pyqt5_qt5-5.15.19-py3-none-manylinux2014_x86_64.whl", hash = "sha256:31421d9c31fb29a8faee4b8b3c32658fb51a9e8c4c708075121162fa44faf80e", size = 60933242 },
 ]
 
 [[package]]
@@ -3238,9 +3238,10 @@ name = "pyspim"
 version = "0.1.0"
 source = { editable = "packages/pyspim" }
 dependencies = [
-    { name = "cupy-cuda12x" },
+    { name = "cupy-cuda13x" },
     { name = "dask" },
     { name = "h5py" },
+    { name = "numba" },
     { name = "numpy" },
     { name = "scikit-image" },
     { name = "scipy" },
@@ -3273,7 +3274,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cupy-cuda12x", specifier = ">=10.0.0" },
+    { name = "cupy-cuda13x", specifier = ">=10.0.0" },
     { name = "dask", specifier = ">=2021.0.0" },
     { name = "h5py", specifier = ">=3.0.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.4.0" },
@@ -3282,6 +3283,7 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=8.0.0" },
     { name = "mkdocs-section-index", marker = "extra == 'docs'", specifier = ">=0.3.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.20.0" },
+    { name = "numba", specifier = ">=0.61.2" },
     { name = "numpy", specifier = ">=1.20.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },

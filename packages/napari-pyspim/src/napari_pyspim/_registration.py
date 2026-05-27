@@ -35,6 +35,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from ._remote_client import RemoteClient
 from ._sftp_browser import SftpBrowserDialog
 
 # Lazy imports to avoid CUDA compilation at module level
@@ -56,15 +57,13 @@ class LoadDeskewWorker(QThread):
         projection_type: str,
         pixel_size: float,
         step_size: float,
-        theta: float,
         method: str = "orthogonal",
         ignore_bbox: bool = False,
         multi_pos: bool = False,
         time: int = 0,
         position: int = 0,
         auto_crop: bool = True,
-        use_remote: bool = False,
-        remote_client = None,
+        camera_offset: int = 0,
     ):
         super().__init__()
         self.data_path = data_path
@@ -72,15 +71,14 @@ class LoadDeskewWorker(QThread):
         self.projection_type = projection_type
         self.pixel_size = pixel_size
         self.step_size = step_size
-        self.theta = theta
+        self.theta = math.pi / 4  # Hardcoded to 45 degrees
         self.method = method
         self.ignore_bbox = ignore_bbox
         self.multi_pos = multi_pos
         self.time = time
         self.position = position
         self.auto_crop = auto_crop
-        self.use_remote = use_remote
-        self.remote_client = remote_client
+        self.camera_offset = camera_offset
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists."""
@@ -111,19 +109,25 @@ class LoadDeskewWorker(QThread):
     def _compute_projections(self, volume, proj_type):
         """Compute YX, ZY, and XZ projections from a volume."""
         if proj_type == "max":
-            yx_proj = np.max(volume, axis=0)  # shape: (Y, X)
-            zy_proj = np.max(volume, axis=2)  # shape: (Z, Y)
-            xz_proj = np.max(volume, axis=1)  # shape: (Z, X)
+            yx_proj = cp.max(volume, axis=0)  # shape: (Y, X)
+            zy_proj = cp.max(volume, axis=2)  # shape: (Z, Y)
+            xz_proj = cp.max(volume, axis=1)  # shape: (Z, X)
         elif proj_type == "sum":
-            yx_proj = np.sum(volume, axis=0)
-            zy_proj = np.sum(volume, axis=2)
-            xz_proj = np.sum(volume, axis=1)
+            yx_proj = cp.sum(volume, axis=0)
+            zy_proj = cp.sum(volume, axis=2)
+            xz_proj = cp.sum(volume, axis=1)
         elif proj_type == "mean":
-            yx_proj = np.mean(volume, axis=0)
-            zy_proj = np.mean(volume, axis=2)
-            xz_proj = np.mean(volume, axis=1)
+            yx_proj = cp.mean(volume, axis=0)
+            zy_proj = cp.mean(volume, axis=2)
+            xz_proj = cp.mean(volume, axis=1)
         else:
             raise ValueError(f"Unknown projection type: {proj_type}")
+        try:
+            yx_proj = yx_proj.get()
+            zy_proj = zy_proj.get()
+            xz_proj = xz_proj.get()
+        except:
+            pass
         return yx_proj, zy_proj, xz_proj
 
     def run(self):
@@ -138,7 +142,7 @@ class LoadDeskewWorker(QThread):
         try:
             from pyspim.data import dispim as data
             from pyspim import deskew as dsk
-
+            
             # Load bounding box if present
             window = self._load_bbox()
             print(window)
@@ -153,19 +157,23 @@ class LoadDeskewWorker(QThread):
                     volume_a = acq.get("a", self.channel, self.time, window=window)
                     volume_b = acq.get("b", self.channel, self.time, window=window)
 
+            # Subtract camera offset if non-zero
+            if self.camera_offset > 0:
+                self.progress_updated.emit(f"Subtracting camera offset: {self.camera_offset}...")
+                from pyspim.data.dispim import subtract_constant_uint16arr
+                volume_a = subtract_constant_uint16arr(volume_a, self.camera_offset)
+                volume_b = subtract_constant_uint16arr(volume_b, self.camera_offset)
+
             self.progress_updated.emit(
                 f"Data loaded - A: {volume_a.shape}, B: {volume_b.shape}"
             )
-
-            # Calculate lateral step size
-            step_size_lat = self.step_size / math.cos(self.theta)
 
             # Deskew View A (direction = 1)
             self.progress_updated.emit("Deskewing View A...")
             if self.method == "shear":
                 kwargs = {
                     "rotation_thetas": (0, 0, 0),
-                    "interp_method": "linear",
+                    "interp_method": "cubspl",
                     "auto_crop": self.auto_crop,
                     "preserve_dtype": True,
                     "block_size": (8,8,8),
@@ -175,24 +183,27 @@ class LoadDeskewWorker(QThread):
                     "preserve_dtype": True,
                     "stream": None,
                 }
+            elif self.method == "affine":
+                kwargs = {
+                    "preserve_dtype": True,
+                    "interp_method": "cubspl",
+                    "block_size": (8,8,8),
+                }
             else:
                 kwargs = {}
             a_dsk = dsk.deskew_stage_scan(
-                volume_a, self.pixel_size, step_size_lat, 1, 
+                volume_a, self.pixel_size, self.step_size, 1,
                 theta=(self.theta / (math.pi/180.0)),
                 method=self.method,
                 **kwargs,
             )
-            try:
-                a_dsk = a_dsk.get()
-            except:
-                pass
+            
             # Deskew View B (direction = -1)
             self.progress_updated.emit("Deskewing View B...")
             if self.method == "shear":
                 kwargs["rotation_thetas"] = (0, math.pi/2, 0)
             b_dsk = dsk.deskew_stage_scan(
-                volume_b, self.pixel_size, step_size_lat, -1, 
+                volume_b, self.pixel_size, self.step_size, -1,
                 theta=(self.theta / (math.pi/180.0)),
                 method=self.method,
                 **kwargs,
@@ -209,18 +220,12 @@ class LoadDeskewWorker(QThread):
                 b_dsk = affine_transform(
                     b_dsk, 
                     R,
-                    "linear",
+                    "cubspl",
                     True,
                     (b_dsk.shape[0], b_dsk.shape[1], b_dsk.shape[2]),
                     8, 8, 8
                 )
-            try:
-                b_dsk = b_dsk.get()
-            except:
-                pass
-            # a_dsk = a_dsk.astype(np.float32)
-            # b_dsk = b_dsk.astype(np.float32)
-
+            
             self.progress_updated.emit(f"Deskewing completed")
 
             # Compute projections
@@ -228,6 +233,16 @@ class LoadDeskewWorker(QThread):
             yx_proj_a, zy_proj_a, xz_proj_a = self._compute_projections(a_dsk, self.projection_type)
             yx_proj_b, zy_proj_b, xz_proj_b = self._compute_projections(b_dsk, self.projection_type)
 
+            # move deskewed volumes to cpu, if necessary
+            try:
+                a_dsk = a_dsk.get()
+            except:
+                pass
+
+            try:
+                b_dsk = b_dsk.get()
+            except:
+                pass
             result = {
                 "a_deskewed": a_dsk,
                 "b_deskewed": b_dsk,
@@ -240,7 +255,7 @@ class LoadDeskewWorker(QThread):
                 "volume_shape_a": a_dsk.shape,
                 "volume_shape_b": b_dsk.shape,
                 "method": self.method,
-                "step_size_lat": step_size_lat,
+                "step_size": self.step_size,
             }
 
             self.ready.emit(result)
@@ -335,7 +350,8 @@ class RegistrationWorker(QThread):
                 self.progress_updated.emit("Padding volumes to same size...")
                 # Pad volumes to same size
                 a_dsk, b_dsk = pad_to_same_size(self.a_deskewed, self.b_deskewed)
-
+            else:
+                a_dsk, b_dsk = self.a_deskewed, self.b_deskewed
             # Set up initial parameters and bounds
             self.progress_updated.emit("Setting up optimization parameters...")
 
@@ -509,6 +525,7 @@ class ApplyWorker(QThread):
         position: int,
         output_folder: str,
         ignore_bbox: bool,
+        save_tiffs: bool = False,
     ):
         super().__init__()
         self.data_path = data_path
@@ -519,6 +536,7 @@ class ApplyWorker(QThread):
         self.position = position
         self.output_folder = output_folder
         self.ignore_bbox = ignore_bbox
+        self.save_tiffs = save_tiffs
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists and not ignored."""
@@ -544,15 +562,21 @@ class ApplyWorker(QThread):
         if method == "shear":
             return {
                 "rotation_thetas": (0, 0, 0),
-                "interp_method": "linear",
+                "interp_method": "cubspl",
                 "auto_crop": False,
                 "preserve_dtype": True,
                 "block_size": (8, 8, 8),
             }
-        elif method == "ortho":
+        elif method.startswith("ortho"):
             return {
                 "preserve_dtype": True,
                 "stream": None,
+            }
+        elif method == "affine":
+            return {
+                "preserve_dtype": True,
+                "interp_method": "cubspl",
+                "block_size": (8, 8, 8),
             }
         else:  # dispim
             return {"preserve_dtype": True}
@@ -627,11 +651,13 @@ class ApplyWorker(QThread):
             import math
             import shutil
             import zarr
+            import tifffile
             from pyspim.data import dispim as data
             from pyspim import deskew as dsk
             from pyspim.interp import affine
 
             # Load parameters
+            print(f"[ApplyWorker] Loading params from: {self.params_path}")
             with open(self.params_path, "r") as f:
                 params = json.load(f)
 
@@ -639,8 +665,9 @@ class ApplyWorker(QThread):
             method = dp["method"]
             step_size = dp["step_size_um"]
             pixel_size = dp["pixel_size_um"]
-            theta_deg = dp["theta_degrees"]
-            theta_rad = theta_deg * math.pi / 180
+            camera_offset = dp.get("camera_offset", 0)
+            theta_deg = 45.0  # Hardcoded to 45 degrees
+            theta_rad = math.pi / 4
             affine_matrix = np.array(params["affine_registration_matrix"])
 
             # Load registration parameters for crop_to_common logic
@@ -655,9 +682,6 @@ class ApplyWorker(QThread):
                 pre_reg["tx_um"] / pixel_size,
             ]
 
-            # Calculate lateral step size
-            step_size_lat = step_size / math.cos(theta_rad)
-
             # Get deskew kwargs
             deskew_kwargs = self._get_deskew_kwargs(method)
 
@@ -668,6 +692,7 @@ class ApplyWorker(QThread):
             if os.path.exists(self.output_folder):
                 shutil.rmtree(self.output_folder)
             os.makedirs(self.output_folder, exist_ok=True)
+            print(f"[ApplyWorker] Output folder created: {self.output_folder}")
 
             # Determine channel indices (0-indexed)
             chan_start = self.channel_range[0] - 1
@@ -678,6 +703,10 @@ class ApplyWorker(QThread):
             time_start, time_end = self.time_range
             total_items = (time_end - time_start + 1) * len(channels)
             current_item = 0
+
+            self.progress_updated.emit(
+                f"Starting apply: {time_end - time_start + 1} timepoints x {n_channels} channels", 0
+            )
 
             for t in range(time_start, time_end + 1):
                 # Process first channel to determine output shape
@@ -695,8 +724,14 @@ class ApplyWorker(QThread):
                         vol_a = acq.get("a", first_chan, t, window=window)
                         vol_b = acq.get("b", first_chan, t, window=window)
 
+                # Subtract camera offset if non-zero
+                if camera_offset > 0:
+                    from pyspim.data.dispim import subtract_constant_uint16arr
+                    vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+                    vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
+
                 a_dsk = dsk.deskew_stage_scan(
-                    vol_a, pixel_size, step_size_lat, 1,
+                    vol_a, pixel_size, step_size, 1,
                     theta=theta_rad, method=method, **deskew_kwargs
                 )
                 try:
@@ -705,7 +740,7 @@ class ApplyWorker(QThread):
                     pass
 
                 b_dsk = dsk.deskew_stage_scan(
-                    vol_b, pixel_size, step_size_lat, -1,
+                    vol_b, pixel_size, step_size, -1,
                     theta=theta_rad, method=method, **deskew_kwargs
                 )
                 try:
@@ -733,9 +768,7 @@ class ApplyWorker(QThread):
                     block_size_z=8,
                     block_size_y=8,
                     block_size_x=8,
-                )
-                b_reg = b_reg.get()
-
+                ).get()
                 # Crop to smallest size
                 min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
                 out_shape = (n_channels, *min_shape)
@@ -765,6 +798,22 @@ class ApplyWorker(QThread):
                     f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage
                 )
 
+                # Helper to save TIFF after all channels are written
+                def _save_tiff_if_needed(zarr_path: str, data_arr: "zarr.Array"):
+                    from dask.array import from_zarr
+                    dask_data = from_zarr(data_arr)
+                    if self.save_tiffs:
+                        tiff_path = zarr_path.replace(".zarr", ".tiff")
+                        tifffile.imwrite(
+                            tiff_path,
+                            dask_data,
+                            bigtiff=True,
+                            photometric="minisblack",
+                            resolution=(1 / pixel_size, 1 / pixel_size),
+                            metadata={"axes": "CZYX", "spacing": pixel_size, "units": "um"},
+                            tile=(1024,1024),
+                        )
+
                 # Process remaining channels
                 for chan_idx in channels[1:]:
                     c = chan_idx - chan_start  # index within the range
@@ -778,9 +827,15 @@ class ApplyWorker(QThread):
                             vol_a = acq.get("a", chan_idx, t, window=window)
                             vol_b = acq.get("b", chan_idx, t, window=window)
 
+                    # Subtract camera offset if non-zero
+                    if camera_offset > 0:
+                        from pyspim.data.dispim import subtract_constant_uint16arr
+                        vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+                        vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
+
                     # Deskew View A
                     a_dsk = dsk.deskew_stage_scan(
-                        vol_a, pixel_size, step_size_lat, 1,
+                        vol_a, pixel_size, step_size, 1,
                         theta=theta_rad, method=method, **deskew_kwargs
                     )
                     try:
@@ -790,7 +845,7 @@ class ApplyWorker(QThread):
 
                     # Deskew View B
                     b_dsk = dsk.deskew_stage_scan(
-                        vol_b, pixel_size, step_size_lat, -1,
+                        vol_b, pixel_size, step_size, -1,
                         theta=theta_rad, method=method, **deskew_kwargs
                     )
                     try:
@@ -835,6 +890,10 @@ class ApplyWorker(QThread):
                         f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage
                     )
 
+                # Save TIFF files after all channels for this timepoint are written
+                _save_tiff_if_needed(a_zarr_path, arr_a)
+                _save_tiff_if_needed(b_zarr_path, arr_b)
+
             self.progress_updated.emit("Apply completed!", 100)
             self.finished.emit()
 
@@ -853,11 +912,10 @@ class RegistrationWidget(QWidget):
 
     registered = Signal(dict)
 
-    def __init__(self, viewer, remote_client=None, has_pyspim=True):
+    def __init__(self, viewer, remote_client: RemoteClient | None = None):
         super().__init__()
         self.viewer = viewer
         self.remote_client = remote_client
-        self.has_pyspim = has_pyspim
         self.load_worker = None
         self.reg_worker = None
         self.apply_worker = None
@@ -881,7 +939,17 @@ class RegistrationWidget(QWidget):
         # Store registration results for saving
         self.registration_matrix = None
         self.correlation_ratio = None
+        # Remote mode state
+        self._remote_mode = False
+        self._pending_command_type = None  # 'load_deskew' or 'query_positions'
+        self._pending_data_path = None
+        self._session_id = None  # Server-side session ID for deskewed volumes
+        self._remote_params_saved = False  # Track if params file exists on remote
         self.setup_ui()
+        # Connect to remote client signals if available
+        if remote_client is not None:
+            remote_client.command_response.connect(self._on_remote_command_response)
+            remote_client.progress.connect(self._on_remote_progress)
 
     def setup_ui(self):
         """Set up the user interface."""
@@ -939,6 +1007,14 @@ class RegistrationWidget(QWidget):
         self.ignore_bbox_checkbox.setToolTip("If checked, load all data for deskewing instead of using bbox_raw.json")
         path_layout.addRow(self.ignore_bbox_checkbox)
 
+        self.camera_offset_spin = QSpinBox()
+        self.camera_offset_spin.setRange(0, 65535)
+        self.camera_offset_spin.setValue(100)
+        self.camera_offset_spin.setToolTip(
+            "Subtract this constant value from raw pixel intensities after loading."
+        )
+        path_layout.addRow("Camera Offset:", self.camera_offset_spin)
+
         path_group.setLayout(path_layout)
 
         # Deskewing parameters
@@ -946,7 +1022,7 @@ class RegistrationWidget(QWidget):
         deskew_layout = QFormLayout()
 
         self.method_combo = QComboBox()
-        self.method_combo.addItems(["orthogonal", "dispim", "shear"])
+        self.method_combo.addItems(["orthogonal", "dispim", "shear", "affine"])
         self.method_combo.setCurrentText("orthogonal")
 
         self.step_size_spin = QDoubleSpinBox()
@@ -961,16 +1037,9 @@ class RegistrationWidget(QWidget):
         self.pixel_size_spin.setValue(0.1625)
         self.pixel_size_spin.setSuffix(" μm")
         
-        self.theta_spin = QDoubleSpinBox()
-        self.theta_spin.setRange(0, 90)
-        self.theta_spin.setValue(45)
-        self.theta_spin.setSuffix("°")
-        self.theta_spin.setDecimals(1)
-
         deskew_layout.addRow("Method:", self.method_combo)
         deskew_layout.addRow("Step Size:", self.step_size_spin)
         deskew_layout.addRow("Pixel Size:", self.pixel_size_spin)
-        deskew_layout.addRow("Theta (angle):", self.theta_spin)
 
         # Auto-Crop checkbox (only visible for shear method)
         self.auto_crop_checkbox = QCheckBox("Auto-Crop")
@@ -1142,6 +1211,13 @@ class RegistrationWidget(QWidget):
         chan_row.addWidget(self.channel_max_spin)
         apply_layout.addLayout(chan_row)
 
+        # Save TIFFs checkbox
+        self.save_tiffs_checkbox = QCheckBox("Save TIFFs")
+        self.save_tiffs_checkbox.setToolTip(
+            "When enabled, saves deskewed volumes as TIFF files in addition to Zarr."
+        )
+        apply_layout.addWidget(self.save_tiffs_checkbox)
+
         # Apply button
         self.apply_button = QPushButton("Apply")
         self.apply_button.clicked.connect(self.apply_registration)
@@ -1175,32 +1251,57 @@ class RegistrationWidget(QWidget):
 
     def browse_data_path(self):
         """Open file dialog to select data path.
-        
-        Uses SFTP browser when connected to a remote server, otherwise local dialog.
+
+        Uses SFTP browser when remote connection is active, otherwise local dialog.
         """
-        if self.remote_client is not None and self.remote_client.is_connected:
-            path = SftpBrowserDialog.browse(
-                self.remote_client, parent=self
-            )
+        if self._is_remote_connected():
+            self._browse_remote()
         else:
-            path = QFileDialog.getExistingDirectory(
-                self, "Select μManager Acquisition Folder"
-            )
+            self._browse_local()
+
+    def _browse_local(self):
+        """Open local file dialog to select data path."""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select μManager Acquisition Folder"
+        )
         if path:
+            self._remote_mode = False
             self.path_edit.setText(path)
+
+    def _browse_remote(self):
+        """Open SFTP browser dialog to select remote data path."""
+        if not self.remote_client:
+            return
+        try:
+            sftp = self.remote_client.get_sftp_client()
+            # Determine home directory as initial path
+            try:
+                home = sftp.normalize(".")
+            except Exception:
+                home = "/"
+            dialog = SftpBrowserDialog(
+                sftp,
+                parent=self,
+                initial_path=home,
+                title="Select Remote μManager Acquisition Folder",
+            )
+            if dialog.exec_() and dialog.selected_path:  # type: ignore[attr-defined]
+                self._remote_mode = True
+                self.path_edit.setText(dialog.selected_path)
+        except Exception as e:
+            QMessageBox.critical(self, "SFTP Error", f"Failed to browse remote:\n{e}")
 
     def validate_path(self):
         """Validate the selected data path."""
         path = self.path_edit.text()
-        if not path:
-            self.load_deskew_button.setEnabled(False)
-            return
-        # Accept any non-empty path when in remote mode (SFTP browser is trusted)
-        use_remote = self.remote_client is not None and self.remote_client.is_connected
-        if use_remote:
-            self.load_deskew_button.setEnabled(True)
+        if self._remote_mode:
+            # For remote paths, just check non-empty
+            self.load_deskew_button.setEnabled(bool(path))
         else:
-            self.load_deskew_button.setEnabled(os.path.exists(path))
+            if path and os.path.exists(path):
+                self.load_deskew_button.setEnabled(True)
+            else:
+                self.load_deskew_button.setEnabled(False)
 
     def _on_multi_pos_toggled(self, checked: bool):
         """Handle Multi-Position checkbox toggled."""
@@ -1208,9 +1309,12 @@ class RegistrationWidget(QWidget):
         if checked:
             # Try to auto-detect number of positions from the data
             path = self.path_edit.text()
-            # Skip auto-detection in remote mode (requires local data access)
-            use_remote = self.remote_client is not None and self.remote_client.is_connected
-            if path and (not use_remote) and os.path.exists(path):
+            if not path:
+                return
+            if self._remote_mode and self.remote_client:
+                # Query position count on the remote server
+                self._query_positions_remote(path)
+            elif os.path.exists(path):
                 try:
                     from pyspim.data import dispim as data
                     with data.uManagerAcquisition(path, True, np) as acq:
@@ -1219,6 +1323,24 @@ class RegistrationWidget(QWidget):
                 except Exception:
                     # If auto-detection fails, keep default range
                     pass
+
+    def _query_positions_remote(self, data_path: str):
+        """Query number of positions from remote server via signal-based pattern."""
+        if not self.remote_client:
+            return
+        self._pending_command_type = "query_positions"
+        try:
+            self.remote_client.send_command(
+                command="query_positions",
+                params={"data_path": data_path},
+                callback=None,  # Use command_response signal instead
+            )
+        except Exception:
+            self._pending_command_type = None
+
+    def _is_remote_connected(self):
+        """Check if remote connection is active."""
+        return self.remote_client is not None and self.remote_client.is_connected
 
     def _on_method_changed(self, method: str = ""):
         """Handle Method combo box changed - show/hide Auto-Crop checkbox."""
@@ -1263,18 +1385,30 @@ class RegistrationWidget(QWidget):
         self._pixel_size = None
         self.reset_transform_button.setEnabled(False)
         self._update_pre_reg_label()
+        # Reset remote session
+        self._session_id = None
         # Disable apply section when loading new data
         self._set_apply_enabled(False)
 
     def load_and_deskew(self):
-        """Load data, deskew, and display projections."""
+        """Load data, deskew, and display projections.
+
+        Uses remote server when connection is active and path is remote,
+        otherwise falls back to local execution.
+        """
         data_path = self.path_edit.text()
         channel = self.channel_spin.value() - 1  # Convert to 0-indexed
         projection_type = self.projection_combo.currentText()
+        multi_pos = self.multi_pos_checkbox.isChecked()
+        time = self.time_spin.value()
+        position = self.position_spin.value()
 
-        # Check if local computation is possible
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
-        if not data_path or (not use_remote and not os.path.exists(data_path)):
+        if not data_path:
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        # For local mode, validate path exists
+        if not self._remote_mode and not os.path.exists(data_path):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
         if not self.has_pyspim and not use_remote:
@@ -1308,30 +1442,93 @@ class RegistrationWidget(QWidget):
         # Get deskewing parameters
         pixel_size = self.pixel_size_spin.value()
         step_size = self.step_size_spin.value()
-        theta_deg = self.theta_spin.value()
-        theta_rad = theta_deg * math.pi / 180
+        theta_deg = 45.0  # Hardcoded to 45 degrees
+        theta_rad = math.pi / 4
         method = self.method_combo.currentText()
         auto_crop = self.auto_crop_checkbox.isChecked()
-
-        # Create and start worker
         ignore_bbox = self.ignore_bbox_checkbox.isChecked()
-        multi_pos = self.multi_pos_checkbox.isChecked()
-        time = self.time_spin.value()
-        position = self.position_spin.value()
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        camera_offset = self.camera_offset_spin.value()
+
+        # Branch to local or remote execution
+        if self._remote_mode and self.remote_client:
+            self._load_deskew_remote(
+                data_path, channel, projection_type,
+                pixel_size, step_size,
+                method, ignore_bbox,
+                multi_pos, time, position,
+                auto_crop, camera_offset,
+            )
+        else:
+            self._load_deskew_local(
+                data_path, channel, projection_type,
+                pixel_size, step_size,
+                method, ignore_bbox,
+                multi_pos, time, position,
+                auto_crop, camera_offset,
+            )
+
+    def _load_deskew_local(
+        self, data_path, channel, projection_type,
+        pixel_size, step_size,
+        method, ignore_bbox,
+        multi_pos, time, position,
+        auto_crop, camera_offset,
+    ):
+        """Load deskew locally using LoadDeskewWorker."""
         self.load_worker = LoadDeskewWorker(
             data_path, channel, projection_type,
-            pixel_size, step_size, theta_rad,
+            pixel_size, step_size,
             method, ignore_bbox,
             multi_pos, time, position,
-            auto_crop,
-            use_remote=use_remote,
-            remote_client=self.remote_client,
+            auto_crop, camera_offset,
         )
         self.load_worker.ready.connect(self.on_load_deskew_ready)
         self.load_worker.error_occurred.connect(self.on_error)
         self.load_worker.progress_updated.connect(self.update_progress)
         self.load_worker.start()
+
+    def _load_deskew_remote(
+        self, data_path, channel, projection_type,
+        pixel_size, step_size,
+        method, ignore_bbox,
+        multi_pos, time, position,
+        auto_crop, camera_offset,
+    ):
+        """Load deskew via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self.on_error("Remote client not available")
+            return
+
+        params = {
+            "data_path": data_path,
+            "channel": channel,
+            "projection_type": projection_type,
+            "pixel_size": pixel_size,
+            "step_size": step_size,
+            "theta": math.pi / 4,  # Hardcoded to 45 degrees
+            "method": method,
+            "ignore_bbox": ignore_bbox,
+            "multi_pos": multi_pos,
+            "time": time,
+            "position": position,
+            "auto_crop": auto_crop,
+            "camera_offset": camera_offset,
+        }
+
+        # Store context for signal handler
+        self._pending_command_type = "load_deskew"
+        self._pending_data_path = data_path
+
+        try:
+            # Use callback=None — rely on command_response signal (marshaled to main thread)
+            self.remote_client.send_command(
+                command="load_deskew",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self.on_error(f"Failed to send command: {e}")
 
     def on_load_deskew_ready(self, result):
         """Handle successful load and deskew - schedule layer creation on main thread."""
@@ -1341,8 +1538,8 @@ class RegistrationWidget(QWidget):
         """Add projection layers on main thread."""
         try:
             # Store deskewed data for registration
-            self.a_deskewed = result["a_deskewed"]
-            self.b_deskewed = result["b_deskewed"]
+            self.a_deskewed = result.get("a_deskewed")
+            self.b_deskewed = result.get("b_deskewed")
 
             # Get projections
             yx_proj_a = result["yx_proj_a"]  # original shape (Y, X)
@@ -1578,11 +1775,6 @@ class RegistrationWidget(QWidget):
             if "pixel_size" in data_dict:
                 self.pixel_size_spin.setValue(data_dict["pixel_size"])
 
-            if "theta" in data_dict:
-                theta_rad = data_dict["theta"]
-                theta_deg = theta_rad * 180 / math.pi
-                self.theta_spin.setValue(theta_deg)
-
     def _compute_common_crops(self, a_shape, b_shape, t0):
         """Compute crop slices for both volumes to their common overlapping region.
 
@@ -1656,32 +1848,41 @@ class RegistrationWidget(QWidget):
         return a_slices, b_slices, cropped_shape
 
     def register_data(self):
-        """Register the deskewed data using background worker."""
-        if self.a_deskewed is None or self.b_deskewed is None:
-            QMessageBox.warning(
-                self, "Error", "Please load and deskew data first"
-            )
-            return
+        """Register the deskewed data.
 
-        # Check if local computation is possible
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
-        if not self.has_pyspim and not use_remote:
-            QMessageBox.warning(
-                self, "pyspim Not Available",
-                "Local computation requires pyspim, which is not installed.\n\n"
-                "Either:\n"
-                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
-                "2. Install pyspim: pip install napari-pyspim[full]"
-            )
-            return
-
-        transform_type = self.transform_combo.currentText()
+        Uses remote server when connection is active and path is remote,
+        otherwise falls back to local execution using RegistrationWorker.
+        """
+        # In remote mode, we only need a valid session ID (volumes are on server)
+        # In local mode, we need the deskewed volumes locally
+        if self._remote_mode:
+            if not self._session_id:
+                QMessageBox.warning(
+                    self, "Error", "No active session. Please load and deskew data first."
+                )
+                return
+        else:
+            if self.a_deskewed is None or self.b_deskewed is None:
+                QMessageBox.warning(
+                    self, "Error", "Please load and deskew data first"
+                )
+                return
 
         self.register_button.setEnabled(False)
         self.load_deskew_button.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         self.status_label.setText("Starting registration...")
+
+        # Branch to local or remote execution
+        if self._remote_mode and self.remote_client:
+            self._register_remote()
+        else:
+            self._register_local()
+
+    def _register_local(self):
+        """Register locally using RegistrationWorker."""
+        transform_type = self.transform_combo.currentText()
 
         # Convert pre-reg transform from micrometers to pixel units
         pixel_size = self.pixel_size_spin.value()
@@ -1758,6 +1959,57 @@ class RegistrationWidget(QWidget):
         self.reg_worker.progress_updated.connect(self.update_progress)
         self.reg_worker.start()
 
+    def _register_remote(self):
+        """Register via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self.on_error("Remote client not available")
+            return
+
+        # Convert pre-reg transform from micrometers to pixel units
+        pixel_size = self.pixel_size_spin.value()
+        pre_reg_translation = [t / pixel_size for t in self._pre_reg_transform]
+
+        # Map metric display name to internal string
+        metric_map = {
+            "Norm. Inner Prod.": "nip",
+            "Corr. Ratio": "cr",
+            "Norm. XCorr": "ncc",
+        }
+        metric = metric_map.get(self.metric_combo.currentText(), "cr")
+
+        # Map interpolation method display name to internal string
+        interp_method_map = {
+            "Linear": "linear",
+            "Cubic Spline": "cubspl",
+        }
+        interp_method = interp_method_map.get(self.interp_method_combo.currentText(), "cubspl")
+
+        params = {
+            "session_id": self._session_id,
+            "transform_type": self.transform_combo.currentText(),
+            "pre_reg_translation": pre_reg_translation,
+            "crop_to_common": self.crop_to_common_checkbox.isChecked(),
+            "metric": metric,
+            "interp_method": interp_method,
+            "use_piecewise": self.piecewise_checkbox.isChecked(),
+            "bound_translation": self.bound_translation_spin.value(),
+            "bound_rot_shear": self.bound_rot_shear_spin.value(),
+            "bound_scale": self.bound_scale_spin.value(),
+        }
+
+        # Store context for signal handler
+        self._pending_command_type = "register"
+
+        try:
+            self.remote_client.send_command(
+                command="register",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self.on_error(f"Failed to send command: {e}")
+
     def on_registered(self, result):
         """Handle successful registration."""
         a_registered = result["a_registered"]
@@ -1790,7 +2042,7 @@ class RegistrationWidget(QWidget):
                 "transform_type": result["transform_type"],
                 "step_size": self.step_size_spin.value(),
                 "pixel_size": _pixel_size,
-                "theta": self.theta_spin.value() * math.pi / 180,
+                "theta": math.pi / 4,  # Hardcoded to 45 degrees
             },
             scale=(_pixel_size, _pixel_size, _pixel_size),
             opacity=0.5,
@@ -1807,7 +2059,7 @@ class RegistrationWidget(QWidget):
                 "transform_type": result["transform_type"],
                 "step_size": self.step_size_spin.value(),
                 "pixel_size": self.pixel_size_spin.value(),
-                "theta": self.theta_spin.value() * math.pi / 180,
+                "theta": math.pi / 4,  # Hardcoded to 45 degrees
             },
             scale=(_pixel_size, _pixel_size, _pixel_size),
             opacity=0.5,
@@ -1841,9 +2093,120 @@ class RegistrationWidget(QWidget):
             "transform_type": result["transform_type"],
             "step_size": self.step_size_spin.value(),
             "pixel_size": self.pixel_size_spin.value(),
-            "theta": self.theta_spin.value() * math.pi / 180,
+            "theta": math.pi / 4,  # Hardcoded to 45 degrees
         }
         self.registered.emit(output_data)
+
+    def _on_remote_command_response(self, response: dict):
+        """Handle command_response signal from RemoteClient (runs on main thread).
+
+        Only handles responses for commands we sent (load_deskew, query_positions).
+        """
+        if self._pending_command_type == "load_deskew":
+            self._pending_command_type = None
+            if response.get("success"):
+                result = response.get("result", {})
+                # Convert volume_shape lists back to tuples for consistency
+                if "volume_shape_a" in result and isinstance(result["volume_shape_a"], list):
+                    result["volume_shape_a"] = tuple(result["volume_shape_a"])
+                if "volume_shape_b" in result and isinstance(result["volume_shape_b"], list):
+                    result["volume_shape_b"] = tuple(result["volume_shape_b"])
+                # Store session ID for later registration
+                self._session_id = result.get("session_id")
+                self._pending_data_path = None
+                self.on_load_deskew_ready(result)
+            else:
+                error_msg = response.get("error", "Unknown error")
+                self._pending_data_path = None
+                self.on_error(error_msg)
+        elif self._pending_command_type == "query_positions":
+            self._pending_command_type = None
+            if response.get("success"):
+                num_pos = response.get("result", {}).get("num_positions", 1)
+                self.position_spin.setRange(0, max(0, num_pos - 1))
+        elif self._pending_command_type == "register":
+            self._pending_command_type = None
+            if response.get("success"):
+                result = response.get("result", {})
+                self._on_register_ready_main(result)
+            else:
+                error_msg = response.get("error", "Unknown error")
+                self.on_error(error_msg)
+        elif self._pending_command_type == "save_params":
+            self._pending_command_type = None
+            if response.get("success"):
+                self._remote_params_saved = True
+                self.status_label.setText("Registration parameters saved on remote server!")
+                self._update_apply_section()
+            else:
+                error_msg = response.get("error", "Unknown error")
+                QMessageBox.critical(self, "Error", f"Failed to save parameters: {error_msg}")
+        elif self._pending_command_type == "apply_registration":
+            self._pending_command_type = None
+            if response.get("success"):
+                result = response.get("result", {})
+                output_folder = result.get("output_folder", "unknown")
+                self.status_label.setText(f"Apply completed! Output: {output_folder}")
+                self.progress_bar.setVisible(False)
+                self.apply_button.setEnabled(True)
+                self.load_deskew_button.setEnabled(True)
+                # Emit registered signal with output paths for Deconvolution
+                time_range = self._apply_time_range if hasattr(self, '_apply_time_range') else (0, 0)
+                output_data = {
+                    "a_path": os.path.join(output_folder, f"a_t{time_range[0]}.zarr"),
+                    "b_path": os.path.join(output_folder, f"b_t{time_range[0]}.zarr"),
+                    "output_folder": output_folder,
+                }
+                self.registered.emit(output_data)
+            else:
+                error_msg = response.get("error", "Unknown error")
+                self._on_apply_error(error_msg)
+
+    def _on_register_ready_main(self, result):
+        """Handle successful remote registration results on main thread.
+
+        Unlike local registration, the remote server only returns the transform
+        matrix and correlation ratio (not the full registered volumes).
+        """
+        transform_matrix = result.get("transform_matrix")
+        cr = result.get("correlation_ratio", 0.0)
+
+        # Store for saving
+        self.registration_matrix = transform_matrix
+        self.correlation_ratio = cr
+
+        # Update status and results
+        self.status_label.setText("Registration completed on remote server!")
+
+        results_text = f"""
+        <b>Registration Results:</b><br>
+        Metric: {cr:.3f}<br>
+        (Volumes remain on remote server)
+        """
+        self.results_label.setText(results_text)
+
+        self.register_button.setEnabled(True)
+        self.load_deskew_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+
+        # Emit signal with registration results (no volumes in remote mode)
+        output_data = {
+            "transform_matrix": transform_matrix,
+            "correlation_ratio": cr,
+            "transform_type": self.transform_combo.currentText(),
+            "step_size": self.step_size_spin.value(),
+            "pixel_size": self.pixel_size_spin.value(),
+            "theta": math.pi / 4,  # Hardcoded to 45 degrees
+        }
+        self.registered.emit(output_data)
+
+    def _on_remote_progress(self, message: str, percentage: int):
+        """Handle progress signal from RemoteClient (runs on main thread)."""
+        self.update_progress(message)
+        if percentage >= 0:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(percentage)
 
     def on_error(self, error_msg):
         """Handle error."""
@@ -1855,13 +2218,39 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setVisible(False)
 
     def save_registration_params(self):
-        """Save registration parameters to a JSON file in the Data Path folder."""
+        """Save registration parameters to a JSON file in the Data Path folder.
+
+        Uses remote server when connection is active and path is remote,
+        otherwise saves locally.
+        """
         data_path = self.path_edit.text()
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
-        if not data_path or (not use_remote and not os.path.exists(data_path)):
+        if not data_path:
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
 
+        # For local mode, validate path exists
+        if not self._remote_mode and not os.path.exists(data_path):
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        # Check we have registration results
+        if self.registration_matrix is None or self.correlation_ratio is None:
+            QMessageBox.warning(
+                self, "Error", "Please register data before saving parameters."
+            )
+            return
+
+        # Build parameters dictionary
+        params_dict = self._build_registration_params()
+
+        # Branch to local or remote save
+        if self._remote_mode and self.remote_client:
+            self._save_params_remote(data_path, params_dict)
+        else:
+            self._save_params_local(data_path, params_dict)
+
+    def _build_registration_params(self) -> dict:
+        """Build the registration parameters dictionary from current UI state."""
         # Mapping dicts for display name to internal string
         metric_map = {
             "Norm. Inner Prod.": "nip",
@@ -1873,14 +2262,14 @@ class RegistrationWidget(QWidget):
             "Cubic Spline": "cubspl",
         }
 
-        # Build parameters dictionary
-        params = {
+        return {
             "deskewing_parameters": {
                 "method": self.method_combo.currentText(),
                 "step_size_um": self.step_size_spin.value(),
                 "pixel_size_um": self.pixel_size_spin.value(),
-                "theta_degrees": self.theta_spin.value(),
+                "theta_degrees": 45.0,  # Hardcoded to 45 degrees
                 "auto_crop": self.auto_crop_checkbox.isChecked(),
+                "camera_offset": self.camera_offset_spin.value(),
             },
             "pre_reg_transform": {
                 "tz_um": self._pre_reg_transform[0],
@@ -1899,20 +2288,45 @@ class RegistrationWidget(QWidget):
                 "bound_rot_shear": self.bound_rot_shear_spin.value(),
                 "bound_scale": self.bound_scale_spin.value(),
             },
-            "affine_registration_matrix": self.registration_matrix.tolist(),
+            "affine_registration_matrix": self.registration_matrix.tolist() if hasattr(self.registration_matrix, "tolist") else self.registration_matrix,
             "correlation_ratio": self.correlation_ratio,
         }
 
-        # Write JSON file
+    def _save_params_local(self, data_path: str, params_dict: dict):
+        """Save parameters to a JSON file locally."""
         output_path = os.path.join(data_path, "deskew_registration_params.json")
         try:
             with open(output_path, "w") as f:
-                json.dump(params, f, indent=2)
-            self.status_label.setText(f"Registration parameters saved!")
+                json.dump(params_dict, f, indent=2)
+            self.status_label.setText("Registration parameters saved!")
             # Enable Apply section after successful save
             self._update_apply_section()
         except (IOError, OSError) as e:
             QMessageBox.critical(self, "Error", f"Failed to save parameters: {e}")
+
+    def _save_params_remote(self, data_path: str, params_dict: dict):
+        """Save parameters via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self.on_error("Remote client not available")
+            return
+
+        params = {
+            "data_path": data_path,
+            "params_dict": params_dict,
+        }
+
+        # Store context for signal handler
+        self._pending_command_type = "save_params"
+
+        try:
+            self.remote_client.send_command(
+                command="save_params",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self.on_error(f"Failed to send command: {e}")
 
     def _detect_dataset_dimensions(self):
         """Detect the number of timepoints and channels from the dataset.
@@ -1953,10 +2367,35 @@ class RegistrationWidget(QWidget):
             return (1, 1)
 
     def _update_apply_section(self):
-        """Update Apply section based on existence of deskew_registration_params.json."""
+        """Update Apply section based on existence of deskew_registration_params.json.
+
+        In remote mode, relies on _remote_params_saved flag since os.path.exists
+        does not work for remote paths.
+        """
         data_path = self.path_edit.text()
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
-        if not data_path or (not use_remote and not os.path.exists(data_path)):
+        if not data_path:
+            self._set_apply_enabled(False)
+            return
+
+        # Remote mode: check via SFTP first, then fall back to flag
+        if self._remote_mode:
+            if self._remote_params_saved:
+                self._set_apply_enabled(True)
+            else:
+                # Check if params file exists on remote server via SFTP
+                try:
+                    sftp = self.remote_client.get_sftp_client()
+                    params_path = f"{data_path}/deskew_registration_params.json"
+                    sftp.stat(params_path)
+                    # File exists
+                    self._remote_params_saved = True
+                    self._set_apply_enabled(True)
+                except (FileNotFoundError, AttributeError):
+                    self._set_apply_enabled(False)
+            return
+
+        # Local mode: check file system
+        if not os.path.exists(data_path):
             self._set_apply_enabled(False)
             return
 
@@ -1984,11 +2423,13 @@ class RegistrationWidget(QWidget):
         self.apply_button.setEnabled(enabled)
 
     def apply_registration(self):
-        """Apply saved registration transformations to specified ranges."""
+        """Apply saved registration transformations to specified ranges.
+
+        Uses remote server when connection is active and path is remote,
+        otherwise falls back to local execution using ApplyWorker.
+        """
         data_path = self.path_edit.text()
-        # Check if local computation is possible
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
-        if not data_path or (not use_remote and not os.path.exists(data_path)):
+        if not data_path:
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
         if not self.has_pyspim and not use_remote:
@@ -2001,10 +2442,15 @@ class RegistrationWidget(QWidget):
             )
             return
 
-        params_path = os.path.join(data_path, "deskew_registration_params.json")
-        if not use_remote and not os.path.exists(params_path):
-            QMessageBox.warning(self, "Error", "Registration parameters file not found")
-            return
+        # For local mode, validate path and params file exist
+        if not self._remote_mode:
+            if not os.path.exists(data_path):
+                QMessageBox.warning(self, "Error", "Please select a valid data path")
+                return
+            params_path = os.path.join(data_path, "deskew_registration_params.json")
+            if not os.path.exists(params_path):
+                QMessageBox.warning(self, "Error", "Registration parameters file not found")
+                return
 
         time_min = self.time_min_spin.value()
         time_max = self.time_max_spin.value()
@@ -2021,6 +2467,7 @@ class RegistrationWidget(QWidget):
         multi_pos = self.multi_pos_checkbox.isChecked()
         position = self.position_spin.value()
         ignore_bbox = self.ignore_bbox_checkbox.isChecked()
+        save_tiffs = self.save_tiffs_checkbox.isChecked()
 
         # Determine output folder
         if multi_pos:
@@ -2028,11 +2475,9 @@ class RegistrationWidget(QWidget):
         else:
             output_folder = os.path.join(data_path, "dskreg")
 
-        # Remove existing output folder
-        if os.path.exists(output_folder):
-            import shutil
-            shutil.rmtree(output_folder)
-        os.makedirs(output_folder, exist_ok=True)
+        # Store for later signal emission
+        self._apply_output_folder = output_folder
+        self._apply_time_range = (time_min, time_max)
 
         # Disable UI during processing
         self.apply_button.setEnabled(False)
@@ -2042,16 +2487,65 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setValue(0)
         self.status_label.setText("Starting apply...")
 
-        # Create and start worker
-        self.apply_worker = ApplyWorker(
-            data_path, params_path,
-            (time_min, time_max), (chan_min, chan_max),
-            multi_pos, position, output_folder, ignore_bbox,
-        )
-        self.apply_worker.finished.connect(self._on_apply_finished)
-        self.apply_worker.error_occurred.connect(self._on_apply_error)
-        self.apply_worker.progress_updated.connect(self._on_apply_progress)
-        self.apply_worker.start()
+        # Branch to local or remote execution
+        if self._remote_mode and self.remote_client:
+            self._apply_registration_remote(
+                data_path, output_folder,
+                (time_min, time_max), (chan_min, chan_max),
+                multi_pos, position, ignore_bbox,
+                save_tiffs,
+            )
+        else:
+            params_path = os.path.join(data_path, "deskew_registration_params.json")
+            self.apply_worker = ApplyWorker(
+                data_path, params_path,
+                (time_min, time_max), (chan_min, chan_max),
+                multi_pos, position, output_folder, ignore_bbox,
+                save_tiffs,
+            )
+            self.apply_worker.finished.connect(self._on_apply_finished)
+            self.apply_worker.error_occurred.connect(self._on_apply_error)
+            self.apply_worker.progress_updated.connect(self._on_apply_progress)
+            self.apply_worker.start()
+
+    def _apply_registration_remote(
+        self,
+        data_path: str,
+        output_folder: str,
+        time_range: tuple,
+        channel_range: tuple,
+        multi_pos: bool,
+        position: int,
+        ignore_bbox: bool,
+        save_tiffs: bool,
+    ):
+        """Apply registration via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self._on_apply_error("Remote client not available")
+            return
+
+        params = {
+            "data_path": data_path,
+            "output_folder": output_folder,
+            "time_range": time_range,
+            "channel_range": channel_range,
+            "multi_pos": multi_pos,
+            "position": position,
+            "ignore_bbox": ignore_bbox,
+            "save_tiffs": save_tiffs,
+        }
+
+        self._pending_command_type = "apply_registration"
+
+        try:
+            self.remote_client.send_command(
+                command="apply_registration",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self._on_apply_error(f"Failed to send command: {e}")
 
     def _on_apply_progress(self, message: str, percentage: int):
         """Handle progress update from ApplyWorker."""
@@ -2064,6 +2558,16 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setVisible(False)
         self.apply_button.setEnabled(True)
         self.load_deskew_button.setEnabled(True)
+        # Emit registered signal with output paths for Deconvolution
+        output_folder = self._apply_output_folder if hasattr(self, '_apply_output_folder') else None
+        if output_folder:
+            time_min = self.time_min_spin.value()
+            output_data = {
+                "a_path": os.path.join(output_folder, f"a_t{time_min}.zarr"),
+                "b_path": os.path.join(output_folder, f"b_t{time_min}.zarr"),
+                "output_folder": output_folder,
+            }
+            self.registered.emit(output_data)
 
     def _on_apply_error(self, error_msg: str):
         """Handle error from ApplyWorker."""

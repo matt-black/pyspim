@@ -1,14 +1,22 @@
-"""
-Remote connection widget for napari-pyspim.
+"""Remote Connection tab for configuring and managing SSH connections.
 
-Provides a tab for configuring and managing SSH connections to a
-remote compute server.
+Provides the UI for Tab 0 in the main pipeline widget, allowing users to
+configure SSH connection parameters and connect/disconnect from a remote
+compute server.
 """
 
+from __future__ import annotations
+
+import json
+import logging
 from pathlib import Path
+from typing import Optional
 
-from qtpy.QtCore import Qt, QTimer
+logger = logging.getLogger(__name__)
+
+from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -25,241 +33,307 @@ from qtpy.QtWidgets import (
 )
 
 from ._remote_client import RemoteClient
+from ._sftp_browser import SftpBrowserDialog
 
 
 class RemoteConnectionWidget(QWidget):
-    """Widget for configuring and managing remote SSH connection."""
+    """Tab 0 widget for SSH connection management.
 
-    def __init__(self, remote_client: RemoteClient, parent=None):
-        super().__init__(parent)
-        self._client = remote_client
-        self._client.connected.connect(self._on_connected)
-        self._client.disconnected.connect(self._on_disconnected)
-        self._client.error.connect(self._on_error)
-        self._client.progress.connect(self._on_progress)
+    Parameters
+    ----------
+    napari_viewer
+        The napari viewer instance (passed by plugin infrastructure).
+    remote_client : RemoteClient, optional
+        Pre-existing client to reuse.  If ``None`` a new one is created.
+    """
+
+    def __init__(
+        self,
+        napari_viewer,  # type: ignore[name-defined]
+        remote_client: Optional[RemoteClient] = None,
+    ):
+        super().__init__()
+        self.viewer = napari_viewer
+        self.client = remote_client or RemoteClient()
         self._connecting = False
-        self.setup_ui()
-        self._load_saved_config()
+        self._waiting_for_test = False  # Track if we're waiting for test connection response
+        self._setup_ui()
+        self._load_config()
+        self._connect_signals()
 
-    def setup_ui(self):
-        """Set up the user interface."""
-        layout = QVBoxLayout()
-        layout.setSpacing(8)
+    # ------------------------------------------------------------------
+    # UI Construction
+    # ------------------------------------------------------------------
 
-        # Connection Settings Group
-        settings_group = QGroupBox("Connection Settings")
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # --- Connection Settings Group ---
+        settings_group = QGroupBox("SSH Connection Settings")
         settings_layout = QFormLayout()
 
         # Host
         self.host_edit = QLineEdit()
-        self.host_edit.setPlaceholderText("e.g., compute.example.com")
+        self.host_edit.setPlaceholderText("e.g. compute.example.com or 192.168.1.100")
         settings_layout.addRow("Host:", self.host_edit)
 
-        # Port
+        # Port + Username (same row)
+        port_user_layout = QHBoxLayout()
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(22)
-        settings_layout.addRow("Port:", self.port_spin)
-
-        # Username
+        port_user_layout.addWidget(QLabel("Port:"))
+        port_user_layout.addWidget(self.port_spin)
+        port_user_layout.addSpacing(20)
         self.username_edit = QLineEdit()
         self.username_edit.setPlaceholderText("SSH username")
-        settings_layout.addRow("Username:", self.username_edit)
+        port_user_layout.addWidget(QLabel("Username:"))
+        port_user_layout.addWidget(self.username_edit)
+        settings_layout.addRow("", port_user_layout)
 
-        # Auth Method
+        # Auth method
         auth_layout = QHBoxLayout()
         self.auth_password = QRadioButton("Password")
         self.auth_key = QRadioButton("Private Key")
         self.auth_key.setChecked(True)
-        self.auth_password.toggled.connect(self._on_auth_method_changed)
         auth_layout.addWidget(self.auth_password)
         auth_layout.addWidget(self.auth_key)
-        auth_layout.addStretch()
         settings_layout.addRow("Auth Method:", auth_layout)
 
         # Password
         self.password_edit = QLineEdit()
-        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_edit.setPlaceholderText("SSH password")
+        self.password_edit.setEchoMode(QLineEdit.Password)
         self.password_edit.setVisible(False)
         settings_layout.addRow("Password:", self.password_edit)
 
-        # Private Key Path
+        # Private key path + browse
         key_layout = QHBoxLayout()
         self.key_path_edit = QLineEdit()
-        self.key_path_edit.setPlaceholderText("Path to SSH private key")
-        self.key_browse_button = QPushButton("Browse")
-        self.key_browse_button.clicked.connect(self._browse_key_path)
+        self.key_path_edit.setPlaceholderText("/path/to/local/private/key")
+        self.key_browse_btn = QPushButton("Browse")
         key_layout.addWidget(self.key_path_edit)
-        key_layout.addWidget(self.key_browse_button)
+        key_layout.addWidget(self.key_browse_btn)
         settings_layout.addRow("Private Key:", key_layout)
 
-        # Key Passphrase
+        # Key passphrase
         self.key_passphrase_edit = QLineEdit()
-        self.key_passphrase_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_passphrase_edit.setPlaceholderText("Key passphrase (optional)")
+        self.key_passphrase_edit.setEchoMode(QLineEdit.Password)
+        self.key_passphrase_edit.setPlaceholderText("Optional")
         settings_layout.addRow("Key Passphrase:", self.key_passphrase_edit)
 
         settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
 
-        # Remote Environment Group
+        # --- Remote Environment Group ---
         env_group = QGroupBox("Remote Environment")
         env_layout = QFormLayout()
 
-        self.venv_edit = QLineEdit()
-        self.venv_edit.setPlaceholderText("e.g., /home/user/venv")
-        self.venv_edit.setToolTip(
-            "Path to the Python virtual environment on the remote server "
-            "where pyspim is installed."
+        venv_layout = QHBoxLayout()
+        self.venv_path_edit = QLineEdit()
+        self.venv_path_edit.setPlaceholderText(
+            "e.g. /home/user/venv  (path to pyspim venv on remote server)"
         )
-        env_layout.addRow("Python Virtual Env:", self.venv_edit)
+        self.venv_browse_btn = QPushButton("Browse")
+        venv_layout.addWidget(self.venv_path_edit)
+        venv_layout.addWidget(self.venv_browse_btn)
+        env_layout.addRow("Remote Python Venv:", venv_layout)
 
         env_group.setLayout(env_layout)
+        layout.addWidget(env_group)
 
-        # Connection Status
+        # --- Status + Progress ---
         status_layout = QHBoxLayout()
-
         self.status_label = QLabel("Disconnected")
-        self.status_label.setStyleSheet("color: #888; font-weight: bold;")
+        self.status_label.setStyleSheet("color: gray; font-weight: bold;")
         status_layout.addWidget(self.status_label)
-
-        self.status_indicator = QLabel()
-        self.status_indicator.setFixedSize(12, 12)
-        self.status_indicator.setStyleSheet(
-            "background-color: #cc0000; border-radius: 6px;"
-        )
-        self.status_indicator.setToolTip("Connection status")
-        status_layout.addWidget(self.status_indicator)
-
         status_layout.addStretch()
+        layout.addLayout(status_layout)
 
-        # Connect/Disconnect Button
-        self.connect_button = QPushButton("Connect")
-        self.connect_button.clicked.connect(self._toggle_connection)
-        self.connect_button.setMinimumWidth(100)
-        status_layout.addWidget(self.connect_button)
-
-        # Save Config Button
-        self.save_config_button = QPushButton("Save Config")
-        self.save_config_button.clicked.connect(self._save_config)
-        self.save_config_button.setToolTip("Save connection settings for next session")
-        status_layout.addWidget(self.save_config_button)
-
-        # Progress Bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        self.progress_bar.setRange(0, 0)  # Indeterminate
-
-        # Add to main layout
-        layout.addWidget(settings_group)
-        layout.addWidget(env_group)
-        layout.addLayout(status_layout)
         layout.addWidget(self.progress_bar)
+
+        # --- Connect / Disconnect + Test Buttons ---
+        button_layout = QHBoxLayout()
+
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.setMinimumHeight(40)
+        self.connect_btn.setStyleSheet(
+            "QPushButton { font-size: 14px; font-weight: bold; }"
+        )
+        button_layout.addWidget(self.connect_btn)
+
+        self.test_btn = QPushButton("Test Connection")
+        self.test_btn.setMinimumHeight(40)
+        self.test_btn.setEnabled(False)
+        self.test_btn.setStyleSheet(
+            "QPushButton { font-size: 14px; font-weight: bold; }"
+        )
+        button_layout.addWidget(self.test_btn)
+
+        layout.addLayout(button_layout)
+
         layout.addStretch()
 
-        self.setLayout(layout)
+    # ------------------------------------------------------------------
+    # Signal Connections
+    # ------------------------------------------------------------------
+
+    def _connect_signals(self):
+        # Auth method toggle
+        self.auth_password.toggled.connect(self._on_auth_method_changed)
+
+        # Browse buttons
+        self.key_browse_btn.clicked.connect(self._on_key_browse)
+        self.venv_browse_btn.clicked.connect(self._on_venv_browse)
+
+        # Connect button
+        self.connect_btn.clicked.connect(self._on_connect_clicked)
+
+        # Test button
+        self.test_btn.clicked.connect(self._on_test_clicked)
+
+        # Remote client signals
+        self.client.connected.connect(self._on_connected)
+        self.client.disconnected.connect(self._on_disconnected)
+        self.client.error.connect(self._on_error)
+        self.client.progress.connect(self._on_progress)
+        self.client.command_response.connect(self._on_command_response)
+
+    # ------------------------------------------------------------------
+    # Config Persistence
+    # ------------------------------------------------------------------
+
+    def _config_path(self) -> Path:
+        return Path.home() / ".pyspim" / "remote_config.json"
+
+    def _load_config(self):
+        """Load saved connection settings (not password/passphrase)."""
+        cfg = self._config_path()
+        if not cfg.exists():
+            return
+        try:
+            data = json.loads(cfg.read_text())
+            self.host_edit.setText(data.get("host", ""))
+            self.port_spin.setValue(data.get("port", 22))
+            self.username_edit.setText(data.get("username", ""))
+            method = data.get("auth_method", "key")
+            if method == "password":
+                self.auth_password.setChecked(True)
+            else:
+                self.auth_key.setChecked(True)
+            self.key_path_edit.setText(data.get("key_path", ""))
+            self.venv_path_edit.setText(data.get("remote_venv", ""))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    def _save_config(self):
+        """Persist non-sensitive connection settings."""
+        cfg = self._config_path()
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "host": self.host_edit.text().strip(),
+            "port": self.port_spin.value(),
+            "username": self.username_edit.text().strip(),
+            "auth_method": "password" if self.auth_password.isChecked() else "key",
+            "key_path": self.key_path_edit.text().strip(),
+            "remote_venv": self.venv_path_edit.text().strip(),
+        }
+        cfg.write_text(json.dumps(data, indent=2))
+
+    # ------------------------------------------------------------------
+    # Slot Implementations
+    # ------------------------------------------------------------------
 
     def _on_auth_method_changed(self):
-        """Toggle visibility of password/key fields based on auth method."""
-        use_password = self.auth_password.isChecked()
-        self.password_edit.setVisible(use_password)
-        self.key_path_edit.setVisible(not use_password)
-        self.key_browse_button.setVisible(not use_password)
-        self.key_passphrase_edit.setVisible(not use_password)
+        show_password = self.auth_password.isChecked()
+        self.password_edit.setVisible(show_password)
+        self.key_path_edit.setVisible(not show_password)
+        self.key_browse_btn.setVisible(not show_password)
+        self.key_passphrase_edit.setVisible(not show_password)
 
-    def _browse_key_path(self):
-        """Open file dialog to select SSH private key."""
+    def _on_key_browse(self):
+        """Open local file dialog for private key selection."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select SSH Private Key", str(Path.home() / '.ssh'),
-            "Key Files (*.pem *.key *id_rsa *id_ed25519 *);;All Files (*)"
+            self,
+            "Select SSH Private Key",
+            str(Path.home() / ".ssh"),
+            "Private Keys (*.pem *.key *id_rsa *id_ed25519 *);;All Files (*)",
         )
         if path:
             self.key_path_edit.setText(path)
 
-    def _load_saved_config(self):
-        """Load saved connection settings into the UI."""
-        config = self._client.load_config()
-        if not config:
+    def _on_venv_browse(self):
+        """Open SFTP browser for remote venv path selection."""
+        if not self.client.is_connected:
+            QMessageBox.information(
+                self,
+                "Not Connected",
+                "You must connect to the server first before browsing "
+                "remote directories.\n\nAlternatively, type the path "
+                "manually and then click Connect.",
+            )
             return
+        try:
+            sftp = self.client.get_sftp_client()
+            # Determine home directory
+            try:
+                home = sftp.normalize(".")
+            except Exception:
+                home = "/"
+            dialog = SftpBrowserDialog(
+                sftp,
+                parent=self,
+                initial_path=home,
+                title="Select Remote Python Virtual Environment",
+            )
+            if dialog.exec_() == QDialog.Accepted and dialog.selected_path:  # type: ignore[attr-defined]
+                self.venv_path_edit.setText(dialog.selected_path)
+        except Exception as e:
+            QMessageBox.critical(self, "SFTP Error", str(e))
 
-        if 'host' in config:
-            self.host_edit.setText(config['host'])
-        if 'port' in config:
-            self.port_spin.setValue(config['port'])
-        if 'username' in config:
-            self.username_edit.setText(config['username'])
-        if 'auth_method' in config:
-            if config['auth_method'] == 'password':
-                self.auth_password.setChecked(True)
-            else:
-                self.auth_key.setChecked(True)
-            self._on_auth_method_changed()
-        if 'key_path' in config:
-            self.key_path_edit.setText(config['key_path'])
-        if 'remote_venv' in config:
-            self.venv_edit.setText(config['remote_venv'])
-
-    def _save_config(self):
-        """Save current settings to config file."""
-        config = {
-            'host': self.host_edit.text(),
-            'port': self.port_spin.value(),
-            'username': self.username_edit.text(),
-            'auth_method': 'password' if self.auth_password.isChecked() else 'key',
-            'key_path': self.key_path_edit.text(),
-            'remote_venv': self.venv_edit.text(),
-        }
-        self._client.save_config(config)
-        QMessageBox.information(self, "Config Saved",
-                                "Connection settings saved to ~/.pyspim/remote_config.json")
-
-    def _toggle_connection(self):
-        """Handle Connect/Disconnect button click."""
-        if self._client.is_connected:
+    def _on_connect_clicked(self):
+        if self.client.is_connected:
             self._disconnect()
         else:
             self._connect()
 
     def _connect(self):
-        """Establish SSH connection."""
+        """Validate inputs and attempt SSH connection."""
         host = self.host_edit.text().strip()
         port = self.port_spin.value()
         username = self.username_edit.text().strip()
 
         if not host:
-            QMessageBox.warning(self, "Missing Host", "Please enter a remote host.")
+            QMessageBox.warning(self, "Missing Host", "Please enter a host.")
             return
         if not username:
-            QMessageBox.warning(self, "Missing Username", "Please enter an SSH username.")
+            QMessageBox.warning(self, "Missing Username", "Please enter a username.")
             return
 
-        auth_method = 'password' if self.auth_password.isChecked() else 'key'
-        password = self.password_edit.text() if auth_method == 'password' else None
-        key_path = self.key_path_edit.text().strip() if auth_method == 'key' else None
-        key_passphrase = self.key_passphrase_edit.text() if auth_method == 'key' else None
-        remote_venv = self.venv_edit.text().strip() or None
+        auth_method = "password" if self.auth_password.isChecked() else "key"
+        password = self.password_edit.text() if auth_method == "password" else None
+        key_path = self.key_path_edit.text().strip() if auth_method == "key" else None
+        key_passphrase = self.key_passphrase_edit.text() if auth_method == "key" else None
+        remote_venv = self.venv_path_edit.text().strip() or None
 
-        if auth_method == 'key' and not key_path:
-            QMessageBox.warning(self, "Missing Key Path",
-                                "Please select an SSH private key file.")
-            return
+        # Save config before connecting
+        self._save_config()
 
-        # Auto-save config on connect
-        config = {
-            'host': host,
-            'port': port,
-            'username': username,
-            'auth_method': auth_method,
-            'key_path': key_path or '',
-            'remote_venv': remote_venv or '',
-        }
-        self._client.save_config(config)
+        # Update UI to connecting state
+        self._set_connecting_state()
 
-        # Update UI for connecting state
-        self._set_connecting_state(True)
+        # Use QTimer to defer connection so UI can update
+        QTimer.singleShot(50, lambda: self._do_connect(
+            host, port, username, auth_method,
+            password, key_path, key_passphrase, remote_venv,
+        ))
 
-        # Attempt connection
-        self._client.connect(
+    def _do_connect(
+        self, host, port, username, auth_method,
+        password, key_path, key_passphrase, remote_venv,
+    ):
+        success = self.client.connect(
             host=host,
             port=port,
             username=username,
@@ -269,83 +343,192 @@ class RemoteConnectionWidget(QWidget):
             key_passphrase=key_passphrase,
             remote_venv=remote_venv,
         )
+        if not success:
+            # Reset to disconnected state (error signal may also fire)
+            self._set_disconnected_state()
 
     def _disconnect(self):
-        """Disconnect from remote server."""
-        self._client.disconnect_ssh()
+        self._set_disconnecting_state()
+        self.client.disconnect_session()
 
-    def _set_connecting_state(self, connecting: bool):
-        """Update UI for connecting/disconnecting state."""
-        self._connecting = connecting
-        self.connect_button.setEnabled(not connecting)
-        self.host_edit.setEnabled(not connecting)
-        self.port_spin.setEnabled(not connecting)
-        self.username_edit.setEnabled(not connecting)
-        self.password_edit.setEnabled(not connecting)
-        self.key_path_edit.setEnabled(not connecting)
-        self.key_passphrase_edit.setEnabled(not connecting)
-        self.venv_edit.setEnabled(not connecting)
-        self.auth_password.setEnabled(not connecting)
-        self.auth_key.setEnabled(not connecting)
-        self.progress_bar.setVisible(connecting)
+    # ------------------------------------------------------------------
+    # State Management
+    # ------------------------------------------------------------------
 
-        if connecting:
-            self.connect_button.setText("Connecting...")
-            self.status_label.setText("Connecting...")
-            self.status_label.setStyleSheet("color: #cc9900; font-weight: bold;")
-            self.status_indicator.setStyleSheet(
-                "background-color: #cc9900; border-radius: 6px;"
+    def _set_connecting_state(self):
+        self.connect_btn.setEnabled(False)
+        self.connect_btn.setText("Connecting...")
+        self.status_label.setText("Connecting...")
+        self.status_label.setStyleSheet("color: orange; font-weight: bold;")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate
+        self._set_inputs_enabled(False)
+
+    def _set_connected_state(self):
+        self.connect_btn.setEnabled(True)
+        self.connect_btn.setText("Disconnect")
+        self.connect_btn.setStyleSheet(
+            "QPushButton { font-size: 14px; font-weight: bold; "
+            "background-color: #e74c3c; color: white; }"
+        )
+        self.status_label.setText("Connected")
+        self.status_label.setStyleSheet("color: green; font-weight: bold;")
+        self.progress_bar.setVisible(False)
+        self._set_inputs_enabled(True)
+        self.test_btn.setEnabled(True)
+
+        # Show capabilities
+        caps = self.client.server_capabilities
+        if caps:
+            cuda = caps.get("has_cuda", "unknown")
+            version = caps.get("pyspim_version", "unknown")
+            self.status_label.setText(
+                f"Connected  |  CUDA: {cuda}  |  pyspim: {version}"
             )
-        else:
-            self.connect_button.setText("Connect")
 
-    @staticmethod
-    def _on_connected():
-        """Handle successful connection."""
-        # UI updates handled by _on_connection_state_changed via timer
-        pass
+    def _set_disconnected_state(self):
+        self.connect_btn.setEnabled(True)
+        self.connect_btn.setText("Connect")
+        self.connect_btn.setStyleSheet(
+            "QPushButton { font-size: 14px; font-weight: bold; }"
+        )
+        self.status_label.setText("Disconnected")
+        self.status_label.setStyleSheet("color: gray; font-weight: bold;")
+        self.progress_bar.setVisible(False)
+        self._set_inputs_enabled(True)
+        self.test_btn.setEnabled(False)
+
+    def _set_disconnecting_state(self):
+        self.connect_btn.setEnabled(False)
+        self.connect_btn.setText("Disconnecting...")
+        self.status_label.setText("Disconnecting...")
+        self.status_label.setStyleSheet("color: orange; font-weight: bold;")
+
+    def _set_inputs_enabled(self, enabled: bool):
+        self.host_edit.setEnabled(enabled)
+        self.port_spin.setEnabled(enabled)
+        self.username_edit.setEnabled(enabled)
+        self.auth_password.setEnabled(enabled)
+        self.auth_key.setEnabled(enabled)
+        self.password_edit.setEnabled(enabled)
+        self.key_path_edit.setEnabled(enabled)
+        self.key_browse_btn.setEnabled(enabled)
+        self.key_passphrase_edit.setEnabled(enabled)
+        self.venv_path_edit.setEnabled(enabled)
+        # Venv browse only works when connected
+        self.venv_browse_btn.setEnabled(self.client.is_connected)
+
+    # ------------------------------------------------------------------
+    # Client Signal Handlers
+    # ------------------------------------------------------------------
+
+    def _on_connected(self):
+        self._set_connected_state()
 
     def _on_disconnected(self):
-        """Handle disconnection."""
-        QTimer.singleShot(0, self._update_disconnected_ui)
-
-    def _update_disconnected_ui(self):
-        """Update UI for disconnected state on main thread."""
-        self._set_connecting_state(False)
-        self.connect_button.setText("Connect")
-        self.status_label.setText("Disconnected")
-        self.status_label.setStyleSheet("color: #888; font-weight: bold;")
-        self.status_indicator.setStyleSheet(
-            "background-color: #cc0000; border-radius: 6px;"
-        )
-        self.progress_bar.setVisible(False)
-
-    def _on_connected_ui(self):
-        """Update UI for connected state on main thread."""
-        self._set_connecting_state(False)
-        self.connect_button.setText("Disconnect")
-        self.status_label.setText(f"Connected to {self.host_edit.text()}")
-        self.status_label.setStyleSheet("color: #00aa00; font-weight: bold;")
-        self.status_indicator.setStyleSheet(
-            "background-color: #00cc00; border-radius: 6px;"
-        )
-        self.progress_bar.setVisible(False)
+        self._set_disconnected_state()
 
     def _on_error(self, message: str):
-        """Handle error from remote client."""
-        self._set_connecting_state(False)
+        self._set_disconnected_state()
         self.status_label.setText("Connection Failed")
-        self.status_label.setStyleSheet("color: #cc0000; font-weight: bold;")
-        self.status_indicator.setStyleSheet(
-            "background-color: #cc0000; border-radius: 6px;"
-        )
-        self.progress_bar.setVisible(False)
+        self.status_label.setStyleSheet("color: red; font-weight: bold;")
         QMessageBox.critical(self, "Connection Error", message)
 
-    def _on_progress(self, message: str):
-        """Handle progress update."""
+    def _on_progress(self, message: str, percentage: int):
+        if percentage >= 0:
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(percentage)
         self.status_label.setText(message)
 
-    # Override signal handlers to update UI on main thread
-    def _on_connected(self):
-        QTimer.singleShot(0, self._on_connected_ui)
+    # ------------------------------------------------------------------
+    # Test Connection
+    # ------------------------------------------------------------------
+
+    def _on_test_clicked(self):
+        """Send a test command to the remote server and display the result."""
+        if not self.client.is_connected:
+            QMessageBox.warning(self, "Not Connected", "Please connect first.")
+            return
+
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("Testing...")
+        self.status_label.setText("Testing connection...")
+        self.status_label.setStyleSheet("color: orange; font-weight: bold;")
+
+        # Mark that we're waiting for a test response
+        self._waiting_for_test = True
+
+        # Safety timeout: reset button if no response within 15 seconds
+        self._test_timeout_timer = QTimer(self)
+        self._test_timeout_timer.setSingleShot(True)
+        self._test_timeout_timer.timeout.connect(self._on_test_timeout)
+        self._test_timeout_timer.start(15000)
+
+        self.client.send_command(
+            command="compute",
+            params={"expression": "2+2"},
+            callback=None,  # Use command_response signal instead
+            progress_callback=None,
+        )
+
+    def _on_test_timeout(self):
+        """Called when the test connection times out."""
+        self._waiting_for_test = False
+        self.test_btn.setEnabled(True)
+        self.test_btn.setText("Test Connection")
+        self.status_label.setText("Test timed out")
+        self.status_label.setStyleSheet("color: red; font-weight: bold;")
+        QMessageBox.critical(
+            self,
+            "Test Timed Out",
+            "No response from the remote server within 15 seconds.\n\n"
+            "The server may have crashed. Try reconnecting.",
+        )
+
+    def _on_command_response(self, response: dict):
+        """Handle command responses from the server (runs on main thread via Qt signal).
+
+        This slot is connected to RemoteClient.command_response which is emitted
+        from the receiver thread. Qt automatically marshals the signal to the
+        main thread when the receiver lives on the main thread.
+
+        Only handles 'compute' command responses (from Test Connection button).
+        Other commands (compute_projections, query_positions) are handled by
+        their respective widgets via _pending_command_type.
+        """
+        # Only handle responses when we're waiting for a test connection result
+        if not self._waiting_for_test:
+            return
+        self._waiting_for_test = False
+
+        # Cancel the timeout timer if it's still pending
+        timer = getattr(self, "_test_timeout_timer", None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+            del self._test_timeout_timer
+
+        if response.get("success"):
+            result = response.get("result", {})
+            expression = result.get("expression", "2+2")
+            value = result.get("result", "unknown")
+            QMessageBox.information(
+                self,
+                "Connection Test Successful",
+                f"Remote calculation completed successfully!\n\n"
+                f"{expression} = {value}",
+            )
+            self.status_label.setText("Test passed")
+            self.status_label.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            error_msg = response.get("error", "Unknown error")
+            QMessageBox.critical(
+                self,
+                "Connection Test Failed",
+                f"The remote server returned an error:\n\n{error_msg}",
+            )
+            self.status_label.setText("Test failed")
+            self.status_label.setStyleSheet("color: red; font-weight: bold;")
+        self.test_btn.setEnabled(True)
+        self.test_btn.setText("Test Connection")

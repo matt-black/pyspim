@@ -2,16 +2,24 @@
 Main widget for the diSPIM processing pipeline.
 
 This widget provides a tabbed interface for all processing steps:
-0. Remote Connection (optional)
+0. Remote Connection
 1. ROI Detection
 2. Registration
 3. Deconvolution
 """
 
+import logging
+
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
-from . import HAS_PYSPIM
+# Force debug logging (napari may have already configured root logger,
+# so basicConfig() alone is a no-op).
+_root = logging.getLogger()
+_root.setLevel(logging.DEBUG)
+if not _root.handlers:
+    _root.addHandler(logging.StreamHandler())
+
 from ._deconvolution import DeconvolutionWidget
 from ._remote_client import RemoteClient
 from ._remote_connection import RemoteConnectionWidget
@@ -25,6 +33,7 @@ class DispimPipelineWidget(QWidget):
     def __init__(self, napari_viewer):
         super().__init__()
         self.viewer = napari_viewer
+        # Shared remote client across all tabs
         self.remote_client = RemoteClient()
         self.setup_ui()
 
@@ -40,13 +49,13 @@ class DispimPipelineWidget(QWidget):
         # Create tab widget
         self.tab_widget = QTabWidget()
 
-        # Create Remote Connection widget
-        self.remote_connection = RemoteConnectionWidget(self.remote_client)
-
-        # Create individual step widgets, passing HAS_PYSPIM to control local mode
-        self.roi_detection = RoiDetectionWidget(self.viewer, self.remote_client, has_pyspim=HAS_PYSPIM)
-        self.registration = RegistrationWidget(self.viewer, self.remote_client, has_pyspim=HAS_PYSPIM)
-        self.deconvolution = DeconvolutionWidget(self.viewer, self.remote_client, has_pyspim=HAS_PYSPIM)
+        # Create individual step widgets
+        self.remote_connection = RemoteConnectionWidget(
+            self.viewer, self.remote_client
+        )
+        self.roi_detection = RoiDetectionWidget(self.viewer, self.remote_client)
+        self.registration = RegistrationWidget(self.viewer, self.remote_client)
+        self.deconvolution = DeconvolutionWidget(self.viewer, self.remote_client)
 
         # Add tabs
         self.tab_widget.addTab(self.remote_connection, "0. Remote Connection")

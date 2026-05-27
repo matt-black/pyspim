@@ -12,10 +12,10 @@ import tifffile
 import zarr
 from scipy import ndimage
 
-from qtpy.QtCore import Signal
-
 from ._psf import generate_psf_im, normalize_psf_im
-from qtpy.QtCore import QThread, QTimer
+from ._remote_client import RemoteClient
+from ._sftp_browser import SftpBrowserDialog
+from qtpy.QtCore import QThread, QTimer, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -317,13 +317,21 @@ class DeconvolutionWidget(QWidget):
 
     deconvolved = Signal(dict)
 
-    def __init__(self, viewer, remote_client=None, has_pyspim=True):
+    def __init__(self, viewer, remote_client: Optional[RemoteClient] = None):
         super().__init__()
         self.viewer = viewer
         self.remote_client = remote_client
-        self.has_pyspim = has_pyspim
         self.decon_worker = None
+        self._remote_mode = False
+        self._pending_command_type = None  # 'deconvolve'
+        self._remote_output_path = None
         self.setup_ui()
+        # Connect to remote client signals if available
+        if remote_client is not None:
+            remote_client.command_response.connect(self._on_remote_command_response)
+            remote_client.progress.connect(self._on_remote_progress)
+            remote_client.connected.connect(self._update_ui_for_remote_mode)
+            remote_client.disconnected.connect(self._update_ui_for_remote_mode)
 
     def setup_ui(self):
         """Set up the user interface."""
@@ -392,7 +400,7 @@ class DeconvolutionWidget(QWidget):
         # Deskew Method dropdown
         deskew_layout = QFormLayout()
         self.deskew_method_combo = QComboBox()
-        self.deskew_method_combo.addItems(["Orthogonal", "Shear-Warp"])
+        self.deskew_method_combo.addItems(["Orthogonal", "Shear-Warp", "Affine"])
         deskew_layout.addRow("Deskew Method:", self.deskew_method_combo)
         input_layout.addLayout(deskew_layout)
 
@@ -685,6 +693,17 @@ class DeconvolutionWidget(QWidget):
 
         action_layout.addLayout(save_row)
 
+        # Output format selector (visible when Save is checked)
+        format_row = QHBoxLayout()
+        format_row.addWidget(QLabel("Format:"))
+        self.output_format_combo = QComboBox()
+        self.output_format_combo.addItems(["OME-TIFF", "Zarr"])
+        self.output_format_combo.setCurrentText("OME-TIFF")
+        self.output_format_combo.setVisible(False)
+        format_row.addWidget(self.output_format_combo)
+        format_row.addStretch()
+        action_layout.addLayout(format_row)
+
         # Save Only checkbox
         self.save_only_check = QCheckBox("Save Only")
         self.save_only_check.setEnabled(False)
@@ -738,6 +757,7 @@ class DeconvolutionWidget(QWidget):
     def on_save_toggled(self, checked):
         """Handle Save checkbox toggle."""
         self.save_path_widget.setVisible(checked)
+        self.output_format_combo.setVisible(checked)
         self.save_only_check.setEnabled(checked)
         if not checked:
             self.save_only_check.setChecked(False)
@@ -782,40 +802,118 @@ class DeconvolutionWidget(QWidget):
 
     def browse_path(self, view):
         """Browse for zarr directory path."""
-        path = QFileDialog.getExistingDirectory(self, f"Select zarr directory for View {view.upper()}")
-        if path:
-            if view == "a":
-                self.path_a_edit.setText(path)
-            else:
-                self.path_b_edit.setText(path)
+        if self._is_remote_connected():
+            self._browse_remote_path(view)
+        else:
+            path = QFileDialog.getExistingDirectory(self, f"Select zarr directory for View {view.upper()}")
+            if path:
+                if view == "a":
+                    self.path_a_edit.setText(path)
+                else:
+                    self.path_b_edit.setText(path)
+
+    def _browse_remote_path(self, view):
+        """Open SFTP browser to select remote zarr directory."""
+        if not self.remote_client:
+            return
+        try:
+            sftp = self.remote_client.get_sftp_client()
+            # Determine home directory as initial path
+            home_dir = f"/home/{self.remote_client._username}" if self.remote_client._username else "/"
+            dialog = SftpBrowserDialog(sftp, parent=self, initial_path=home_dir)
+            if dialog.exec_() and dialog.selected_path:  # type: ignore[attr-defined]
+                self._remote_mode = True
+                if view == "a":
+                    self.path_a_edit.setText(dialog.selected_path)
+                else:
+                    self.path_b_edit.setText(dialog.selected_path)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open SFTP browser: {e}")
 
     def browse_psf(self, psf_type):
         """Browse for PSF file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, f"Select PSF {psf_type.upper()} file", "", "NumPy/TIFF files (*.npy *.tif)"
-        )
-        if file_path:
-            if psf_type == "a":
-                self.psf_a_path.setText(file_path)
-            else:
-                self.psf_b_path.setText(file_path)
+        if self._is_remote_connected():
+            self._browse_remote_psf(psf_type)
+        else:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, f"Select PSF {psf_type.upper()} file", "", "NumPy/TIFF files (*.npy *.tif)"
+            )
+            if file_path:
+                if psf_type == "a":
+                    self.psf_a_path.setText(file_path)
+                else:
+                    self.psf_b_path.setText(file_path)
+
+    def _browse_remote_psf(self, psf_type):
+        """Open SFTP browser to select remote PSF file."""
+        if not self.remote_client:
+            return
+        try:
+            sftp = self.remote_client.get_sftp_client()
+            home_dir = f"/home/{self.remote_client._username}" if self.remote_client._username else "/"
+            dialog = SftpBrowserDialog(sftp, parent=self, initial_path=home_dir, select_file=True)
+            if dialog.exec_() and dialog.selected_path:  # type: ignore[attr-defined]
+                self._remote_mode = True
+                if psf_type == "a":
+                    self.psf_a_path.setText(dialog.selected_path)
+                else:
+                    self.psf_b_path.setText(dialog.selected_path)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open SFTP browser: {e}")
 
     def browse_backprojector(self, bp_type):
         """Browse for backprojector file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, f"Select Backprojector {bp_type.upper()} file", "", "NumPy/TIFF files (*.npy *.tif)"
-        )
-        if file_path:
-            if bp_type == "a":
-                self.bp_a_path.setText(file_path)
-            else:
-                self.bp_b_path.setText(file_path)
+        if self._is_remote_connected():
+            self._browse_remote_backprojector(bp_type)
+        else:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, f"Select Backprojector {bp_type.upper()} file", "", "NumPy/TIFF files (*.npy *.tif)"
+            )
+            if file_path:
+                if bp_type == "a":
+                    self.bp_a_path.setText(file_path)
+                else:
+                    self.bp_b_path.setText(file_path)
+
+    def _browse_remote_backprojector(self, bp_type):
+        """Open SFTP browser to select remote backprojector file."""
+        if not self.remote_client:
+            return
+        try:
+            sftp = self.remote_client.get_sftp_client()
+            home_dir = f"/home/{self.remote_client._username}" if self.remote_client._username else "/"
+            dialog = SftpBrowserDialog(sftp, parent=self, initial_path=home_dir, select_file=True)
+            if dialog.exec_() and dialog.selected_path:  # type: ignore[attr-defined]
+                self._remote_mode = True
+                if bp_type == "a":
+                    self.bp_a_path.setText(dialog.selected_path)
+                else:
+                    self.bp_b_path.setText(dialog.selected_path)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open SFTP browser: {e}")
 
     def browse_save_path(self):
         """Browse for save path."""
-        path = QFileDialog.getExistingDirectory(self, "Select output directory")
-        if path:
-            self.save_path_edit.setText(path)
+        if self._is_remote_connected():
+            self._browse_remote_save_path()
+        else:
+            path = QFileDialog.getExistingDirectory(self, "Select output directory")
+            if path:
+                self.save_path_edit.setText(path)
+
+    def _browse_remote_save_path(self):
+        """Open SFTP browser to select remote output directory."""
+        if not self.remote_client:
+            return
+        try:
+            sftp = self.remote_client.get_sftp_client()
+            home_dir = f"/home/{self.remote_client._username}" if self.remote_client._username else "/"
+            dialog = SftpBrowserDialog(sftp, parent=self, initial_path=home_dir)
+            if dialog.exec_() and dialog.selected_path:  # type: ignore[attr-defined]
+                self._remote_mode = True
+                self.save_path_edit.setText(dialog.selected_path)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open SFTP browser: {e}")
 
     def update_layer_lists(self, event=None):
         """Update the layer selection dropdowns."""
@@ -844,8 +942,23 @@ class DeconvolutionWidget(QWidget):
             self.layer_b_combo.setCurrentText(current_b)
 
     def set_input_data(self, data_dict):
-        """Receive input data from registration step (placeholder for future wiring)."""
-        pass
+        """Receive input data from registration step.
+
+        If the data contains paths from the Apply step, auto-populate
+        the input fields and switch to Paths mode.
+        """
+        if not data_dict:
+            return
+        if "a_path" in data_dict:
+            self.path_a_edit.setText(data_dict["a_path"])
+        if "b_path" in data_dict:
+            self.path_b_edit.setText(data_dict["b_path"])
+        if "output_folder" in data_dict:
+            self.save_path_edit.setText(data_dict["output_folder"])
+        # If paths are provided, switch to Paths mode
+        if "a_path" in data_dict or "b_path" in data_dict:
+            self.input_mode_paths.setChecked(True)
+            self.on_input_mode_changed()
 
     # === Helper methods for collecting UI parameters ===
 
@@ -1052,16 +1165,9 @@ class DeconvolutionWidget(QWidget):
 
     def deconvolve_data(self):
         """Start deconvolution based on UI parameters."""
-        # Check if local computation is possible
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
-        if not self.has_pyspim and not use_remote:
-            QMessageBox.warning(
-                self, "pyspim Not Available",
-                "Local computation requires pyspim, which is not installed.\n\n"
-                "Either:\n"
-                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
-                "2. Install pyspim: pip install napari-pyspim[full]"
-            )
+        # Branch to remote path when connected
+        if self._is_remote_connected():
+            self._deconvolve_remote()
             return
 
         try:
@@ -1141,3 +1247,187 @@ class DeconvolutionWidget(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to start deconvolution: {e}")
             import traceback
             traceback.print_exc()
+
+    # === Remote mode helpers ===
+
+    def _is_remote_connected(self) -> bool:
+        """Check if a remote connection is currently active."""
+        return (
+            self.remote_client is not None
+            and self.remote_client.is_connected
+        )
+
+    def _update_ui_for_remote_mode(self):
+        """Update UI controls based on remote connection state."""
+        remote = self._is_remote_connected()
+        self._remote_mode = remote
+
+        if remote:
+            # Force Paths mode
+            self.input_mode_paths.setChecked(True)
+            self.on_input_mode_changed()
+            self.input_mode_layers.setEnabled(False)
+            self.input_mode_paths.setEnabled(False)
+            # Force Save and Save Only checked
+            self.save_check.setChecked(True)
+            self.save_check.setEnabled(False)
+            self.save_only_check.setEnabled(False)
+        else:
+            # Restore normal behavior
+            self.input_mode_layers.setEnabled(True)
+            self.input_mode_paths.setEnabled(True)
+            self.save_check.setEnabled(True)
+            self.save_only_check.setEnabled(True)
+
+    def _deconvolve_remote(self):
+        """Collect parameters from UI and send deconvolve command to remote server."""
+        # Collect path inputs
+        a_path = self.path_a_edit.text().strip()
+        b_path = self.path_b_edit.text().strip()
+        if not a_path or not b_path:
+            QMessageBox.warning(
+                self, "Error", "Please specify input paths for View A and View B"
+            )
+            return
+
+        # Collect save parameters
+        save_path = self.save_path_edit.text().strip()
+        if not save_path:
+            QMessageBox.warning(
+                self, "Error", "Please specify an output path for saving"
+            )
+            return
+
+        output_format = self.output_format_combo.currentText()  # "OME-TIFF" or "Zarr"
+
+        # Collect PSF parameters
+        psf_type = self.psf_type_combo.currentText()
+        psf_a_path = self.psf_a_path.text().strip()
+        psf_b_path = self.psf_b_path.text().strip()
+
+        # Collect deskew method for theta-based PSF rotation
+        deskew_method = self.deskew_method_combo.currentText()
+
+        # Collect per-view FWHM for PSF generation
+        fwhm_a_lat = self.psf_a_fwhm_lateral.value()
+        fwhm_a_ax = self.psf_a_fwhm_axial.value()
+        fwhm_b_lat = self.psf_b_fwhm_lateral.value()
+        fwhm_b_ax = self.psf_b_fwhm_axial.value()
+
+        # Collect backprojector parameters
+        # Derive bp_type from flipped_psf_check + psf_type_combo
+        if self.flipped_psf_check.isChecked():
+            bp_type = "flipped_psf"
+        else:
+            bp_type = psf_type.lower()  # "gaussian" or "custom"
+        bp_a_path = self.bp_a_path.text().strip()
+        bp_b_path = self.bp_b_path.text().strip()
+
+        # Collect deconvolution parameters
+        decon_function = self._get_decon_function()
+        num_iter = self.iterations_spin.value()
+        epsilon = self.epsilon_spin.value()
+        req_both = self.require_both_check.isChecked()
+        boundary_correction = self.boundary_enable_check.isChecked()
+        boundary_sigma = self.boundary_threshold_spin.value()
+
+        # Collect chunkwise parameters
+        chunkwise = self.chunkwise_enable_check.isChecked()
+        chunk_size = (
+            self.chunk_size_z.value(),
+            self.chunk_size_y.value(),
+            self.chunk_size_x.value(),
+        )
+        overlap = (
+            self.overlap_z.value(),
+            self.overlap_y.value(),
+            self.overlap_x.value(),
+        )
+
+        # Build command parameters
+        params = {
+            "a_path": a_path,
+            "b_path": b_path,
+            "save_path": save_path,
+            "output_format": output_format,
+            "psf_type": psf_type.lower(),  # Normalize to lowercase for server
+            "psf_a_path": psf_a_path if psf_type == "Custom" else None,
+            "psf_b_path": psf_b_path if psf_type == "Custom" else None,
+            "deskew_method": deskew_method,
+            "fwhm_a_lat": fwhm_a_lat,
+            "fwhm_a_ax": fwhm_a_ax,
+            "fwhm_b_lat": fwhm_b_lat,
+            "fwhm_b_ax": fwhm_b_ax,
+            "bp_type": bp_type,
+            "bp_a_path": bp_a_path if bp_type == "custom" else None,
+            "bp_b_path": bp_b_path if bp_type == "custom" else None,
+            "bp_fwhm_a_lat": self.bp_a_fwhm_lateral.value(),
+            "bp_fwhm_a_ax": self.bp_a_fwhm_axial.value(),
+            "bp_fwhm_b_lat": self.bp_b_fwhm_lateral.value(),
+            "bp_fwhm_b_ax": self.bp_b_fwhm_axial.value(),
+            "decon_function": decon_function,
+            "num_iter": num_iter,
+            "epsilon": epsilon,
+            "req_both": req_both,
+            "boundary_correction": boundary_correction,
+            "boundary_sigma": boundary_sigma,
+            "chunkwise": chunkwise,
+            "chunk_size": chunk_size,
+            "overlap": overlap,
+        }
+
+        # Update UI state
+        self.deconvolve_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.status_label.setText("Sending deconvolution command to remote server...")
+
+        # Track pending command
+        self._pending_command_type = "deconvolve"
+        self._remote_output_path = None
+
+        # Send command; response arrives via the command_response signal
+        # (connected in __init__), which is automatically marshaled to the
+        # main thread by Qt's QueuedConnection mechanism.
+        self.remote_client.send_command(  # type: ignore[union-attr]
+            "deconvolve", params
+        )
+
+    def _on_remote_command_response(self, response: dict):
+        """Handle response from remote server for deconvolve command.
+
+        Delivered on the main thread via the ``command_response`` Qt signal
+        (QueuedConnection from the receiver thread).
+        """
+        if self._pending_command_type != "deconvolve":
+            return  # Not our command
+
+        success = response.get("success", False)
+        result = response.get("result") or {}
+
+        # Clear pending flag so we stop listening for more messages.
+        self._pending_command_type = None
+
+        if not success:
+            error_msg = result.get("error") or response.get("error", "Unknown error")
+            self.deconvolve_button.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            self.status_label.setText("Error during deconvolution")
+            QMessageBox.critical(self, "Error", f"Remote deconvolution failed: {error_msg}")
+            return
+
+        # Success
+        self._remote_output_path = result.get("output_path")
+        self.deconvolve_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.status_label.setText("Deconvolution complete")
+        output_msg = f"Deconvolution complete.\nOutput: {self._remote_output_path}"
+        QMessageBox.information(self, "Success", output_msg)
+
+    def _on_remote_progress(self, message: str, percentage: int):
+        """Handle progress updates from remote server."""
+        if self._pending_command_type == "deconvolve":
+            self.status_label.setText(message)
+            if percentage >= 0:
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(percentage)

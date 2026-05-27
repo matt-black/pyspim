@@ -24,6 +24,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from ._remote_client import RemoteClient
 from ._sftp_browser import SftpBrowserDialog
 
 
@@ -32,7 +33,6 @@ class ProjectionLoaderWorker(QThread):
 
     projections_loaded = Signal(dict)
     error_occurred = Signal(str)
-    progress = Signal(str)
 
     def __init__(
         self,
@@ -148,13 +148,16 @@ class RoiDetectionWidget(QWidget):
 
     roi_applied = Signal(dict)
 
-    def __init__(self, viewer, remote_client=None, has_pyspim=True):
+    def __init__(self, viewer, remote_client: RemoteClient | None = None):
         super().__init__()
         self.viewer = viewer
         self.remote_client = remote_client
-        self.has_pyspim = has_pyspim
         self.loader_worker = None
         self.data_path = None
+        self._remote_mode = False  # True when data_path is on remote server
+        # Track pending remote command type for signal-based response handling
+        self._pending_command_type = None  # 'compute_projections' or 'query_positions'
+        self._pending_data_path = None  # Store data_path for use in signal handler
         # Layer references - 4 image layers (2 views x 2 projections)
         self.projection_yx_a_layer = None
         self.projection_yx_b_layer = None
@@ -166,6 +169,10 @@ class RoiDetectionWidget(QWidget):
         # Flag to prevent recursive shape updates
         self._syncing_shapes = False
         self.setup_ui()
+        # Connect to remote client signals if available
+        if remote_client is not None:
+            remote_client.command_response.connect(self._on_remote_command_response)
+            remote_client.progress.connect(self._on_remote_progress)
 
     def setup_ui(self):
         """Set up the user interface."""
@@ -225,6 +232,12 @@ class RoiDetectionWidget(QWidget):
         self.load_button.setEnabled(False)
         path_layout.addRow(self.load_button)
 
+        # Save button - appears below Load, enabled only after data is loaded
+        self.save_button = QPushButton("Save")
+        self.save_button.clicked.connect(self.save_bbox)
+        self.save_button.setEnabled(False)
+        path_layout.addRow(self.save_button)
+
         path_group.setLayout(path_layout)
 
         # Progress bar
@@ -238,18 +251,11 @@ class RoiDetectionWidget(QWidget):
         self.roi_info_label = QLabel("")
         self.roi_info_label.setWordWrap(True)
 
-        # Save button
-        self.save_button = QPushButton("Save")
-        self.save_button.clicked.connect(self.save_bbox)
-        self.save_button.setEnabled(False)
-
         # Add widgets to layout
         layout.addWidget(path_group)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
         layout.addWidget(self.roi_info_label)
-        layout.addWidget(self.save_button)
-
         self.setLayout(layout)
 
         # Connect path validation
@@ -257,42 +263,67 @@ class RoiDetectionWidget(QWidget):
 
     def browse_data_path(self):
         """Open file dialog to select data path.
-        
-        Uses SFTP browser when connected to a remote server, otherwise local dialog.
+
+        Uses SFTP browser when remote connection is active, otherwise local dialog.
         """
-        if self.remote_client is not None and self.remote_client.is_connected:
-            path = SftpBrowserDialog.browse(
-                self.remote_client, parent=self
-            )
+        if self._is_remote_connected():
+            self._browse_remote()
         else:
-            path = QFileDialog.getExistingDirectory(
-                self, "Select μManager Acquisition Folder"
-            )
+            self._browse_local()
+
+    def _browse_local(self):
+        """Open local file dialog to select data path."""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select μManager Acquisition Folder"
+        )
         if path:
+            self._remote_mode = False
             self.path_edit.setText(path)
+
+    def _browse_remote(self):
+        """Open SFTP browser dialog to select remote data path."""
+        if not self.remote_client:
+            return
+        try:
+            sftp = self.remote_client.get_sftp_client()
+            # Determine home directory as initial path
+            try:
+                home = sftp.normalize(".")
+            except Exception:
+                home = "/"
+            dialog = SftpBrowserDialog(
+                sftp,
+                parent=self,
+                initial_path=home,
+                title="Select Remote μManager Acquisition Folder",
+            )
+            if dialog.exec_() and dialog.selected_path:  # type: ignore[attr-defined]
+                self._remote_mode = True
+                self.path_edit.setText(dialog.selected_path)
+        except Exception as e:
+            QMessageBox.critical(self, "SFTP Error", f"Failed to browse remote:\n{e}")
 
     def validate_path(self):
         """Validate the selected data path."""
         path = self.path_edit.text()
-        if not path:
-            self.load_button.setEnabled(False)
-            return
-        # Accept any non-empty path when in remote mode (SFTP browser is trusted)
-        use_remote = self.remote_client is not None and self.remote_client.is_connected
-        if use_remote:
-            self.load_button.setEnabled(True)
+        if self._remote_mode:
+            # For remote paths, just check non-empty
+            self.load_button.setEnabled(bool(path))
         else:
-            self.load_button.setEnabled(os.path.exists(path))
+            self.load_button.setEnabled(bool(path and os.path.exists(path)))
 
     def _on_multi_pos_toggled(self, checked: bool):
         """Handle Multi-Position checkbox toggled."""
         self.position_spin.setVisible(checked)
         if checked:
-            # Try to auto-detection number of positions from the data
             path = self.path_edit.text()
-            # Skip auto-detection in remote mode (requires local data access)
-            use_remote = self.remote_client is not None and self.remote_client.is_connected
-            if path and (not use_remote) and os.path.exists(path):
+            if not path:
+                return
+            if self._remote_mode and self.remote_client:
+                # Query position count on the remote server
+                self._query_positions_remote(path)
+            elif os.path.exists(path):
+                # Local auto-detect
                 try:
                     from pyspim.data import dispim as data
                     with data.uManagerAcquisition(path, True, np) as acq:
@@ -301,6 +332,20 @@ class RoiDetectionWidget(QWidget):
                 except Exception:
                     # If auto-detection fails, keep default range
                     pass
+
+    def _query_positions_remote(self, data_path: str):
+        """Query number of positions from remote server via signal-based pattern."""
+        if not self.remote_client:
+            return
+        self._pending_command_type = "query_positions"
+        try:
+            self.remote_client.send_command(
+                command="query_positions",
+                params={"data_path": data_path},
+                callback=None,  # Use command_response signal instead
+            )
+        except Exception:
+            self._pending_command_type = None
 
     def _remove_existing_layers(self):
         """Remove any existing projection and shapes layers."""
@@ -333,7 +378,11 @@ class RoiDetectionWidget(QWidget):
         self.shapes_zy_layer = None
 
     def load_projections(self):
-        """Load data and compute projections for both views."""
+        """Load data and compute projections for both views.
+
+        Uses remote server when connection is active and path is remote,
+        otherwise falls back to local execution.
+        """
         data_path = self.path_edit.text()
         channel = self.channel_spin.value() - 1  # Convert to 0-indexed
         projection_type = self.projection_combo.currentText()
@@ -341,9 +390,12 @@ class RoiDetectionWidget(QWidget):
         time = self.time_spin.value()
         position = self.position_spin.value()
 
-        # Check if local computation is possible
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
-        if not data_path or (not use_remote and not os.path.exists(data_path)):
+        if not data_path:
+            QMessageBox.warning(self, "Error", "Please select a valid data path")
+            return
+
+        # For local mode, validate path exists
+        if not self._remote_mode and not os.path.exists(data_path):
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
         if not self.has_pyspim and not use_remote:
@@ -369,8 +421,21 @@ class RoiDetectionWidget(QWidget):
         # Store current settings
         self.data_path = data_path
 
-        # Create and start worker (loads both views)
-        use_remote = (self.remote_client is not None and self.remote_client.is_connected)
+        if self._remote_mode and self.remote_client:
+            # Remote execution
+            self._load_projections_remote(
+                data_path, channel, projection_type, multi_pos, time, position
+            )
+        else:
+            # Local execution
+            self._load_projections_local(
+                data_path, channel, projection_type, multi_pos, time, position
+            )
+
+    def _load_projections_local(
+        self, data_path, channel, projection_type, multi_pos, time, position
+    ):
+        """Load projections locally using ProjectionLoaderWorker."""
         self.loader_worker = ProjectionLoaderWorker(
             data_path, channel, projection_type, multi_pos, time, position,
             use_remote=use_remote,
@@ -380,6 +445,77 @@ class RoiDetectionWidget(QWidget):
         self.loader_worker.error_occurred.connect(self.on_error)
         self.loader_worker.progress.connect(self.on_progress)
         self.loader_worker.start()
+
+    def _load_projections_remote(
+        self, data_path, channel, projection_type, multi_pos, time, position
+    ):
+        """Load projections via remote server using signal-based pattern."""
+        if not self.remote_client:
+            self.on_error("Remote client not available")
+            return
+
+        params = {
+            "data_path": data_path,
+            "channel": channel,
+            "projection_type": projection_type,
+            "multi_pos": multi_pos,
+            "time": time,
+            "position": position,
+        }
+
+        # Store context for signal handler
+        self._pending_command_type = "compute_projections"
+        self._pending_data_path = data_path
+
+        try:
+            # Use callback=None — rely on command_response signal (marshaled to main thread)
+            self.remote_client.send_command(
+                command="compute_projections",
+                params=params,
+                callback=None,
+                progress_callback=None,
+            )
+        except Exception as e:
+            self.on_error(f"Failed to send command: {e}")
+
+    def _on_remote_command_response(self, response: dict):
+        """Handle command_response signal from RemoteClient (runs on main thread).
+
+        Only handles responses for commands we sent (compute_projections, query_positions).
+        Other commands (like 'compute' from test connection) are ignored.
+        """
+        if self._pending_command_type == "compute_projections":
+            self._pending_command_type = None
+            if response.get("success"):
+                result = response.get("result", {})
+                # Convert volume_shape lists back to tuples for consistency
+                if "volume_shape_a" in result and isinstance(result["volume_shape_a"], list):
+                    result["volume_shape_a"] = tuple(result["volume_shape_a"])
+                if "volume_shape_b" in result and isinstance(result["volume_shape_b"], list):
+                    result["volume_shape_b"] = tuple(result["volume_shape_b"])
+                result["data_path"] = self._pending_data_path
+                self._pending_data_path = None
+                self.on_projections_loaded(result)
+            else:
+                error_msg = response.get("error", "Unknown error")
+                self._pending_data_path = None
+                self.on_error(error_msg)
+        elif self._pending_command_type == "query_positions":
+            self._pending_command_type = None
+            if response.get("success"):
+                num_pos = response.get("result", {}).get("num_positions", 1)
+                self.position_spin.setRange(0, max(0, num_pos - 1))
+
+    def _on_remote_progress(self, message: str, percentage: int):
+        """Handle progress signal from RemoteClient (runs on main thread)."""
+        self.status_label.setText(message)
+        if percentage >= 0:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(percentage)
+
+    def _is_remote_connected(self):
+        """Check if remote connection is active."""
+        return self.remote_client is not None and self.remote_client.is_connected
 
     def on_projections_loaded(self, result):
         """Handle successful projection loading - schedule on main thread."""
@@ -596,7 +732,10 @@ class RoiDetectionWidget(QWidget):
         self.roi_info_label.setText(info_text)
 
     def save_bbox(self):
-        """Save bounding box to JSON file."""
+        """Save bounding box to JSON file.
+
+        Uses SFTP when in remote mode, otherwise saves locally.
+        """
         if not self.shapes_yx_layer or not self.shapes_zy_layer:
             QMessageBox.warning(self, "Error", "Please load projections first")
             return
@@ -609,7 +748,7 @@ class RoiDetectionWidget(QWidget):
         # internal buffer until the layer mode switches away from editing
         self._commit_shape_edits(self.shapes_yx_layer)
         self._commit_shape_edits(self.shapes_zy_layer)
-        
+
         # Extract bounding box from YX Shapes layer
         # YX is transposed (X, Y): row=X, col=Y
         yx_corners = list(self.shapes_yx_layer.data[0])
@@ -629,14 +768,45 @@ class RoiDetectionWidget(QWidget):
 
         # Save to JSON file (shared for both views)
         filename = "bbox_raw.json"
-        output_path = os.path.join(self.data_path, filename)
 
+        if self._remote_mode and self.remote_client:
+            self._save_bbox_remote(bbox_3d, filename)
+        else:
+            self._save_bbox_local(bbox_3d, filename)
+
+    def _save_bbox_local(self, bbox_3d, filename):
+        """Save bounding box to local JSON file."""
+        assert self.data_path is not None
+        output_path = os.path.join(self.data_path, filename)
         try:
             with open(output_path, "w") as f:
                 json.dump(bbox_3d, f)
-            self._update_roi_info(x_start, x_end, y_start, y_end, z_start, z_end)
+            self._update_roi_info_from_bbox(bbox_3d)
+            self.status_label.setText("Bounding box saved locally.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save bounding box: {e}")
+
+    def _save_bbox_remote(self, bbox_3d, filename):
+        """Save bounding box to remote server via SFTP."""
+        if not self.remote_client:
+            return
+        try:
+            sftp = self.remote_client.get_sftp_client()
+            remote_path = f"{self.data_path}/{filename}"
+            json_content = json.dumps(bbox_3d)
+            with sftp.open(remote_path, "w") as f:
+                f.write(json_content)
+            self._update_roi_info_from_bbox(bbox_3d)
+            self.status_label.setText("Bounding box saved to remote server.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save bounding box remotely: {e}")
+
+    def _update_roi_info_from_bbox(self, bbox_3d):
+        """Update ROI info display from bbox_3d list."""
+        z_start, z_end = bbox_3d[0]
+        y_start, y_end = bbox_3d[1]
+        x_start, x_end = bbox_3d[2]
+        self._update_roi_info(x_start, x_end, y_start, y_end, z_start, z_end)
 
     def on_error(self, error_msg):
         """Handle error."""
