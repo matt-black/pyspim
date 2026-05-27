@@ -45,7 +45,7 @@ def output_shape(
     direction: int,
     auto_crop: bool,
 ) -> Tuple[int, int, int]:
-    """output_shape Compute output shape of deskewing transform.
+    """Compute output shape of deskewing transform.
 
     Args:
         z (int): shape of input volume, z-direction

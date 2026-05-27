@@ -196,7 +196,7 @@ __global__ void affineTransform(
                 for (int x = x0; x < sx_o; x += x_stride) {{
                     // get current voxel and coordinate in transformed coordinate system
                     float4 voxel = make_float4(x, y, z, 1.0f);
-                    int oidx = xyz2idx(x, y, z, sx_o, sy_o);
+                    size_t oidx = xyz2idx(x, y, z, sx_o, sy_o);
                     #ifdef CUBSPL
                         const float3 coord = make_float3(
                             dot(voxel, make_float4(M_aff[0], M_aff[1], M_aff[2], M_aff[3])),
