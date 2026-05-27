@@ -298,6 +298,7 @@ def handle_load_deskew(params: dict) -> dict:
     time = params.get("time", 0)
     position = params.get("position", 0)
     auto_crop = params.get("auto_crop", True)
+    camera_offset = params.get("camera_offset", 0)
 
     from pyspim.data import dispim as data
     from pyspim import deskew as dsk
@@ -326,6 +327,12 @@ def handle_load_deskew(params: dict) -> dict:
         else:
             volume_a = acq.get("a", channel, time, window=window)
             volume_b = acq.get("b", channel, time, window=window)
+
+    # --- Subtract camera offset if non-zero ---
+    if camera_offset > 0:
+        from pyspim.data.dispim import subtract_constant_uint16arr
+        volume_a = subtract_constant_uint16arr(volume_a, camera_offset)
+        volume_b = subtract_constant_uint16arr(volume_b, camera_offset)
 
     # --- Deskew View A (direction = 1) ---
     if method == "shear":
@@ -1158,6 +1165,7 @@ def handle_apply_registration(params: dict) -> dict:
     method = _normalize_deskew_method(dp["method"])
     step_size = dp["step_size_um"]
     pixel_size = dp["pixel_size_um"]
+    camera_offset = dp.get("camera_offset", 0)
     theta_deg = 45.0  # Hardcoded to 45 degrees
     theta_rad = math.pi / 4
     affine_matrix = np.array(saved_params["affine_registration_matrix"])
@@ -1221,6 +1229,12 @@ def handle_apply_registration(params: dict) -> dict:
             else:
                 vol_a = acq.get("a", first_chan, t, window=window)
                 vol_b = acq.get("b", first_chan, t, window=window)
+
+        # Subtract camera offset if non-zero
+        if camera_offset > 0:
+            from pyspim.data.dispim import subtract_constant_uint16arr
+            vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+            vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
 
         a_dsk = dsk.deskew_stage_scan(
             vol_a, pixel_size, step_size, 1,
@@ -1300,6 +1314,12 @@ def handle_apply_registration(params: dict) -> dict:
                 else:
                     vol_a = acq.get("a", chan_idx, t, window=window)
                     vol_b = acq.get("b", chan_idx, t, window=window)
+
+            # Subtract camera offset if non-zero
+            if camera_offset > 0:
+                from pyspim.data.dispim import subtract_constant_uint16arr
+                vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+                vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
 
             a_dsk = dsk.deskew_stage_scan(
                 vol_a, pixel_size, step_size, 1,

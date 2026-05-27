@@ -63,6 +63,7 @@ class LoadDeskewWorker(QThread):
         time: int = 0,
         position: int = 0,
         auto_crop: bool = True,
+        camera_offset: int = 0,
     ):
         super().__init__()
         self.data_path = data_path
@@ -77,6 +78,7 @@ class LoadDeskewWorker(QThread):
         self.time = time
         self.position = position
         self.auto_crop = auto_crop
+        self.camera_offset = camera_offset
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists."""
@@ -147,6 +149,13 @@ class LoadDeskewWorker(QThread):
                 else:
                     volume_a = acq.get("a", self.channel, self.time, window=window)
                     volume_b = acq.get("b", self.channel, self.time, window=window)
+
+            # Subtract camera offset if non-zero
+            if self.camera_offset > 0:
+                self.progress_updated.emit(f"Subtracting camera offset: {self.camera_offset}...")
+                from pyspim.data.dispim import subtract_constant_uint16arr
+                volume_a = subtract_constant_uint16arr(volume_a, self.camera_offset)
+                volume_b = subtract_constant_uint16arr(volume_b, self.camera_offset)
 
             self.progress_updated.emit(
                 f"Data loaded - A: {volume_a.shape}, B: {volume_b.shape}"
@@ -563,6 +572,7 @@ class ApplyWorker(QThread):
             method = dp["method"]
             step_size = dp["step_size_um"]
             pixel_size = dp["pixel_size_um"]
+            camera_offset = dp.get("camera_offset", 0)
             theta_deg = 45.0  # Hardcoded to 45 degrees
             theta_rad = math.pi / 4
             affine_matrix = np.array(params["affine_registration_matrix"])
@@ -620,6 +630,12 @@ class ApplyWorker(QThread):
                     else:
                         vol_a = acq.get("a", first_chan, t, window=window)
                         vol_b = acq.get("b", first_chan, t, window=window)
+
+                # Subtract camera offset if non-zero
+                if camera_offset > 0:
+                    from pyspim.data.dispim import subtract_constant_uint16arr
+                    vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+                    vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
 
                 a_dsk = dsk.deskew_stage_scan(
                     vol_a, pixel_size, step_size, 1,
@@ -701,6 +717,12 @@ class ApplyWorker(QThread):
                         else:
                             vol_a = acq.get("a", chan_idx, t, window=window)
                             vol_b = acq.get("b", chan_idx, t, window=window)
+
+                    # Subtract camera offset if non-zero
+                    if camera_offset > 0:
+                        from pyspim.data.dispim import subtract_constant_uint16arr
+                        vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+                        vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
 
                     # Deskew View A
                     a_dsk = dsk.deskew_stage_scan(
@@ -871,6 +893,14 @@ class RegistrationWidget(QWidget):
         self.ignore_bbox_checkbox = QCheckBox("Ignore bounding box")
         self.ignore_bbox_checkbox.setToolTip("If checked, load all data for deskewing instead of using bbox_raw.json")
         path_layout.addRow(self.ignore_bbox_checkbox)
+
+        self.camera_offset_spin = QSpinBox()
+        self.camera_offset_spin.setRange(0, 65535)
+        self.camera_offset_spin.setValue(100)
+        self.camera_offset_spin.setToolTip(
+            "Subtract this constant value from raw pixel intensities after loading."
+        )
+        path_layout.addRow("Camera Offset:", self.camera_offset_spin)
 
         path_group.setLayout(path_layout)
 
@@ -1288,6 +1318,7 @@ class RegistrationWidget(QWidget):
         method = self.method_combo.currentText()
         auto_crop = self.auto_crop_checkbox.isChecked()
         ignore_bbox = self.ignore_bbox_checkbox.isChecked()
+        camera_offset = self.camera_offset_spin.value()
 
         # Branch to local or remote execution
         if self._remote_mode and self.remote_client:
@@ -1296,7 +1327,7 @@ class RegistrationWidget(QWidget):
                 pixel_size, step_size,
                 method, ignore_bbox,
                 multi_pos, time, position,
-                auto_crop,
+                auto_crop, camera_offset,
             )
         else:
             self._load_deskew_local(
@@ -1304,7 +1335,7 @@ class RegistrationWidget(QWidget):
                 pixel_size, step_size,
                 method, ignore_bbox,
                 multi_pos, time, position,
-                auto_crop,
+                auto_crop, camera_offset,
             )
 
     def _load_deskew_local(
@@ -1312,7 +1343,7 @@ class RegistrationWidget(QWidget):
         pixel_size, step_size,
         method, ignore_bbox,
         multi_pos, time, position,
-        auto_crop,
+        auto_crop, camera_offset,
     ):
         """Load deskew locally using LoadDeskewWorker."""
         self.load_worker = LoadDeskewWorker(
@@ -1320,7 +1351,7 @@ class RegistrationWidget(QWidget):
             pixel_size, step_size,
             method, ignore_bbox,
             multi_pos, time, position,
-            auto_crop,
+            auto_crop, camera_offset,
         )
         self.load_worker.ready.connect(self.on_load_deskew_ready)
         self.load_worker.error_occurred.connect(self.on_error)
@@ -1332,7 +1363,7 @@ class RegistrationWidget(QWidget):
         pixel_size, step_size,
         method, ignore_bbox,
         multi_pos, time, position,
-        auto_crop,
+        auto_crop, camera_offset,
     ):
         """Load deskew via remote server using signal-based pattern."""
         if not self.remote_client:
@@ -1352,6 +1383,7 @@ class RegistrationWidget(QWidget):
             "time": time,
             "position": position,
             "auto_crop": auto_crop,
+            "camera_offset": camera_offset,
         }
 
         # Store context for signal handler
@@ -2105,6 +2137,7 @@ class RegistrationWidget(QWidget):
                 "pixel_size_um": self.pixel_size_spin.value(),
                 "theta_degrees": 45.0,  # Hardcoded to 45 degrees
                 "auto_crop": self.auto_crop_checkbox.isChecked(),
+                "camera_offset": self.camera_offset_spin.value(),
             },
             "pre_reg_transform": {
                 "tz_um": self._pre_reg_transform[0],
