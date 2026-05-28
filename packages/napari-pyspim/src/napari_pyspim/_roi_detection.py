@@ -429,7 +429,7 @@ class RoiDetectionWidget(QWidget):
         """Load projections locally using ProjectionLoaderWorker."""
         self.loader_worker = ProjectionLoaderWorker(
             data_path, channel, projection_type, multi_pos, time, position,
-            use_remote=use_remote,
+            use_remote=False,
             remote_client=self.remote_client,
         )
         self.loader_worker.projections_loaded.connect(self.on_projections_loaded)

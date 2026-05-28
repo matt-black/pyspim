@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -90,6 +91,17 @@ class RemoteConnectionWidget(QWidget):
         port_user_layout.addWidget(QLabel("Username:"))
         port_user_layout.addWidget(self.username_edit)
         settings_layout.addRow("", port_user_layout)
+
+        # Jump Host (checkbox + text field on same row)
+        jump_layout = QHBoxLayout()
+        self.use_jump_host_checkbox = QCheckBox("Use Jump Host")
+        self.jump_host_edit = QLineEdit()
+        self.jump_host_edit.setPlaceholderText("e.g. jump.example.com")
+        self.jump_host_edit.setEnabled(False)
+        jump_layout.addWidget(self.use_jump_host_checkbox)
+        jump_layout.addWidget(QLabel("Jump Host:"))
+        jump_layout.addWidget(self.jump_host_edit)
+        settings_layout.addRow("", jump_layout)
 
         # Auth method
         auth_layout = QHBoxLayout()
@@ -183,6 +195,9 @@ class RemoteConnectionWidget(QWidget):
         # Auth method toggle
         self.auth_password.toggled.connect(self._on_auth_method_changed)
 
+        # Jump host toggle
+        self.use_jump_host_checkbox.toggled.connect(self._on_jump_host_toggled)
+
         # Browse buttons
         self.key_browse_btn.clicked.connect(self._on_key_browse)
         self.venv_browse_btn.clicked.connect(self._on_venv_browse)
@@ -224,6 +239,10 @@ class RemoteConnectionWidget(QWidget):
                 self.auth_key.setChecked(True)
             self.key_path_edit.setText(data.get("key_path", ""))
             self.venv_path_edit.setText(data.get("remote_venv", ""))
+            self.use_jump_host_checkbox.setChecked(data.get("use_jump_host", False))
+            self.jump_host_edit.setText(data.get("jump_host", ""))
+            # Trigger toggle to set correct enabled state
+            self._on_jump_host_toggled(self.use_jump_host_checkbox.isChecked())
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -238,6 +257,8 @@ class RemoteConnectionWidget(QWidget):
             "auth_method": "password" if self.auth_password.isChecked() else "key",
             "key_path": self.key_path_edit.text().strip(),
             "remote_venv": self.venv_path_edit.text().strip(),
+            "use_jump_host": self.use_jump_host_checkbox.isChecked(),
+            "jump_host": self.jump_host_edit.text().strip(),
         }
         cfg.write_text(json.dumps(data, indent=2))
 
@@ -251,6 +272,12 @@ class RemoteConnectionWidget(QWidget):
         self.key_path_edit.setVisible(not show_password)
         self.key_browse_btn.setVisible(not show_password)
         self.key_passphrase_edit.setVisible(not show_password)
+
+    def _on_jump_host_toggled(self, checked: bool):
+        """Enable or disable the jump host text field."""
+        self.jump_host_edit.setEnabled(checked)
+        if not checked:
+            self.jump_host_edit.clear()
 
     def _on_key_browse(self):
         """Open local file dialog for private key selection."""
@@ -311,6 +338,12 @@ class RemoteConnectionWidget(QWidget):
             QMessageBox.warning(self, "Missing Username", "Please enter a username.")
             return
 
+        use_jump_host = self.use_jump_host_checkbox.isChecked()
+        jump_host = self.jump_host_edit.text().strip() if use_jump_host else None
+        if use_jump_host and not jump_host:
+            QMessageBox.warning(self, "Missing Jump Host", "Please enter a jump host hostname.")
+            return
+
         auth_method = "password" if self.auth_password.isChecked() else "key"
         password = self.password_edit.text() if auth_method == "password" else None
         key_path = self.key_path_edit.text().strip() if auth_method == "key" else None
@@ -326,12 +359,12 @@ class RemoteConnectionWidget(QWidget):
         # Use QTimer to defer connection so UI can update
         QTimer.singleShot(50, lambda: self._do_connect(
             host, port, username, auth_method,
-            password, key_path, key_passphrase, remote_venv,
+            password, key_path, key_passphrase, remote_venv, jump_host,
         ))
 
     def _do_connect(
         self, host, port, username, auth_method,
-        password, key_path, key_passphrase, remote_venv,
+        password, key_path, key_passphrase, remote_venv, jump_host,
     ):
         success = self.client.connect(
             host=host,
@@ -342,6 +375,7 @@ class RemoteConnectionWidget(QWidget):
             key_path=key_path,
             key_passphrase=key_passphrase,
             remote_venv=remote_venv,
+            jump_host=jump_host,
         )
         if not success:
             # Reset to disconnected state (error signal may also fire)
@@ -408,6 +442,8 @@ class RemoteConnectionWidget(QWidget):
         self.host_edit.setEnabled(enabled)
         self.port_spin.setEnabled(enabled)
         self.username_edit.setEnabled(enabled)
+        self.use_jump_host_checkbox.setEnabled(enabled)
+        self.jump_host_edit.setEnabled(enabled and self.use_jump_host_checkbox.isChecked())
         self.auth_password.setEnabled(enabled)
         self.auth_key.setEnabled(enabled)
         self.password_edit.setEnabled(enabled)

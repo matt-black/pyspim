@@ -78,6 +78,7 @@ class RemoteClient(QObject):
     def __init__(self, parent=None):  # type: ignore[no-untyped-def]
         super().__init__(parent)
         self._ssh: paramiko.SSHClient | None = None
+        self._jump_ssh: paramiko.SSHClient | None = None
         self._channel: paramiko.Channel | None = None
         self._sftp: paramiko.SFTPClient | None = None
         self._sender_thread: threading.Thread | None = None
@@ -110,6 +111,7 @@ class RemoteClient(QObject):
         key_path: str | None = None,
         key_passphrase: str | None = None,
         remote_venv: str | None = None,
+        jump_host: str | None = None,
     ) -> bool:
         """Establish SSH connection and start remote Python session.
 
@@ -131,6 +133,8 @@ class RemoteClient(QObject):
             Passphrase for encrypted private key.
         remote_venv : str, optional
             Path to the pyspim virtualenv on the remote server.
+        jump_host : str, optional
+            Hostname of the jump (bastion) host to route through.
 
         Returns
         -------
@@ -143,13 +147,8 @@ class RemoteClient(QObject):
             self._username = username
             self._key_path = key_path
 
-            # --- SSH connection ---
-            self._ssh = paramiko.SSHClient()
-            self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
+            # --- Build connection kwargs (reused for jump and target) ---
             connect_kwargs: dict[str, Any] = {
-                "hostname": host,
-                "port": port,
                 "username": username,
                 "allow_agent": True,
                 "look_for_keys": False,  # Only use explicitly provided key
@@ -163,7 +162,50 @@ class RemoteClient(QObject):
                 if key_passphrase:
                     connect_kwargs["passphrase"] = key_passphrase
 
-            self._ssh.connect(**connect_kwargs)
+            # --- SSH connection (with optional jump host) ---
+            if jump_host:
+                # Step 1: Connect to the jump host
+                logger.info("[CONNECT] Connecting to jump host: %s@%s:%s",
+                            username, jump_host, port)
+                self._jump_ssh = paramiko.SSHClient()
+                self._jump_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                self._jump_ssh.connect(
+                    hostname=jump_host,
+                    port=port,
+                    **connect_kwargs,
+                )
+
+                # Step 2: Open a TCP channel through the jump host to the target
+                jump_transport = self._jump_ssh.get_transport()
+                if jump_transport is None:
+                    raise ConnectionError("Failed to get transport from jump host")
+                dest_addr = (host, port)
+                src_addr = ("127.0.0.1", 0)
+                channel = jump_transport.open_channel("direct-tcpip", dest_addr, src_addr)
+                logger.info("[CONNECT] TCP tunnel established to %s:%s via %s",
+                            host, port, jump_host)
+
+                # Step 3: Connect to the target host through the tunnel
+                logger.info("[CONNECT] Connecting to target host through jump: %s@%s",
+                            username, host)
+                self._ssh = paramiko.SSHClient()
+                self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                self._ssh.connect(
+                    hostname=host,
+                    sock=channel,
+                    **connect_kwargs,
+                )
+            else:
+                # Direct connection (no jump host)
+                logger.info("[CONNECT] Direct connection to %s@%s:%s",
+                            username, host, port)
+                self._ssh = paramiko.SSHClient()
+                self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                self._ssh.connect(
+                    hostname=host,
+                    port=port,
+                    **connect_kwargs,
+                )
 
             # --- SFTP ---
             self._sftp = self._ssh.open_sftp()
@@ -299,6 +341,13 @@ class RemoteClient(QObject):
             except Exception:
                 pass
             self._ssh = None
+
+        if self._jump_ssh:
+            try:
+                self._jump_ssh.close()
+            except Exception:
+                pass
+            self._jump_ssh = None
 
         self._pending_callbacks.clear()
         self._pending_progress.clear()

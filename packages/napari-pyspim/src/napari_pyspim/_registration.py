@@ -2423,16 +2423,7 @@ class RegistrationWidget(QWidget):
         if not data_path:
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
-        if not self.has_pyspim and not use_remote:
-            QMessageBox.warning(
-                self, "pyspim Not Available",
-                "Local computation requires pyspim, which is not installed.\n\n"
-                "Either:\n"
-                "1. Connect to a remote server (Tab 0: Remote Connection), or\n"
-                "2. Install pyspim: pip install napari-pyspim[full]"
-            )
-            return
-
+    
         # For local mode, validate path and params file exist
         if not self._remote_mode:
             if not os.path.exists(data_path):
