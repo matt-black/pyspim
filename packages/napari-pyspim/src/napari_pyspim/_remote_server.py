@@ -488,68 +488,6 @@ def _get_deskew_kwargs(method: str) -> dict:
         return {"preserve_dtype": True}
 
 
-def _compute_common_crops_server(a_shape, b_shape, t0):
-    """Compute crop slices for both volumes to their common overlapping region.
-
-    Server-side mirror of ``RegistrationWidget._compute_common_crops()``.
-
-    Args:
-        a_shape: Shape of View A deskewed volume (Z, Y, X).
-        b_shape: Shape of View B deskewed volume (Z, Y, X).
-        t0: Pre-reg translation in pixel units [tz, ty, tx].
-
-    Returns:
-        Tuple of (a_slices, b_slices, cropped_shape) or (None, None, None) if no overlap.
-    """
-    Za, Ya, Xa = a_shape
-    Zb, Yb, Xb = b_shape
-    tz, ty, tx = t0
-
-    z_start_a = max(0, tz)
-    z_end_a = min(Za, tz + Zb)
-    y_start_a = max(0, ty)
-    y_end_a = min(Ya, ty + Yb)
-    x_start_a = max(0, tx)
-    x_end_a = min(Xa, tx + Xb)
-
-    if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
-        return None, None, None
-
-    z_start_b = max(0, -tz)
-    z_end_b = min(Zb, Za - tz)
-    y_start_b = max(0, -ty)
-    y_end_b = min(Yb, Ya - ty)
-    x_start_b = max(0, -tx)
-    x_end_b = min(Xb, Xa - tx)
-
-    shape_a = (
-        int(z_end_a - z_start_a),
-        int(y_end_a - y_start_a),
-        int(x_end_a - x_start_a),
-    )
-    shape_b = (
-        int(z_end_b - z_start_b),
-        int(y_end_b - y_start_b),
-        int(x_end_b - x_start_b),
-    )
-
-    cropped_shape = tuple(min(a, b) for a, b in zip(shape_a, shape_b))
-
-    a_slices = (
-        slice(int(z_start_a), int(z_start_a) + cropped_shape[0]),
-        slice(int(y_start_a), int(y_start_a) + cropped_shape[1]),
-        slice(int(x_start_a), int(x_start_a) + cropped_shape[2]),
-    )
-
-    b_slices = (
-        slice(int(z_start_b), int(z_start_b) + cropped_shape[0]),
-        slice(int(y_start_b), int(y_start_b) + cropped_shape[1]),
-        slice(int(x_start_b), int(x_start_b) + cropped_shape[2]),
-    )
-
-    return a_slices, b_slices, cropped_shape
-
-
 def handle_register(params: dict) -> dict:
     """Register two deskewed volumes stored in a session.
 
@@ -564,7 +502,7 @@ def handle_register(params: dict) -> dict:
         session_id : str
         transform_type : str  ('t', 't+r', 't+r+s', 't+sh', 't+ssh', 't+sh+s')
         pre_reg_translation : list  [tz, ty, tx] in pixel units
-        crop_to_common : bool
+        crop_bounds : dict with z_start, z_end, y_start, y_end, x_start, x_end
         metric : str  ('nip', 'cr', 'ncc')
         interp_method : str  ('linear', 'cubspl')
         use_piecewise : bool
@@ -586,7 +524,7 @@ def handle_register(params: dict) -> dict:
     session_id = params["session_id"]
     transform_type = params["transform_type"]
     pre_reg_translation = params["pre_reg_translation"]  # [tz, ty, tx] in pixels
-    crop_to_common = params.get("crop_to_common", False)
+    crop_bounds = params.get("crop_bounds")
     metric = params.get("metric", "cr")
     interp_method = params.get("interp_method", "cubspl")
     use_piecewise = params.get("use_piecewise", True)
@@ -602,16 +540,29 @@ def handle_register(params: dict) -> dict:
     a_dsk = session["a_deskewed"]
     b_dsk = session["b_deskewed"]
 
-    # --- Apply crop_to_common if requested ---
-    t0 = pre_reg_translation
-    if crop_to_common:
-        a_slices, b_slices, cropped_shape = _compute_common_crops_server(
-            a_dsk.shape, b_dsk.shape, t0
-        )
-        if a_slices is not None:
-            a_dsk = a_dsk[a_slices]
-            b_dsk = b_dsk[b_slices]
-            t0 = [0, 0, 0]  # Pre-reg translation accounted for by crop
+    # --- Apply crop bounds if present ---
+    t0 = [0, 0, 0]  # Pre-reg translation absorbed by crop
+    if crop_bounds:
+        z_start = crop_bounds["z_start"]
+        z_end = crop_bounds["z_end"]
+        y_start = crop_bounds["y_start"]
+        y_end = crop_bounds["y_end"]
+        x_start = crop_bounds["x_start"]
+        x_end = crop_bounds["x_end"]
+        tz, ty, tx = pre_reg_translation
+
+        # Crop View A
+        a_dsk = a_dsk[z_start:z_end, y_start:y_end, x_start:x_end]
+
+        # Compute corresponding crop in View B coordinates
+        Zb, Yb, Xb = b_dsk.shape
+        z_start_b = max(0, int(z_start - tz))
+        z_end_b = min(Zb, int(z_end - tz))
+        y_start_b = max(0, int(y_start - ty))
+        y_end_b = min(Yb, int(y_end - ty))
+        x_start_b = max(0, int(x_start - tx))
+        x_end_b = min(Xb, int(x_end - tx))
+        b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
     # --- Pad volumes to same size if needed ---
     from pyspim.util import pad_to_same_size
@@ -696,12 +647,18 @@ def handle_register(params: dict) -> dict:
 
     # Crop to common size (matching local worker logic)
     min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
+    a_cropped = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
     b_cropped = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
 
     # Compute max projections for registered B
     yx_proj_b = np.max(b_cropped, axis=0)  # (Y, X)
     zy_proj_b = np.max(b_cropped, axis=2)  # (Z, Y)
     xz_proj_b = np.max(b_cropped, axis=1)  # (Z, X)
+
+    # Always compute max projections for cropped A
+    yx_proj_a = np.max(a_cropped, axis=0)  # (Y, X)
+    zy_proj_a = np.max(a_cropped, axis=2)  # (Z, Y)
+    xz_proj_a = np.max(a_cropped, axis=1)  # (Z, X)
 
     # --- Extract results ---
     if hasattr(T, "get"):
@@ -719,6 +676,9 @@ def handle_register(params: dict) -> dict:
         "yx_proj_b": yx_proj_b,
         "zy_proj_b": zy_proj_b,
         "xz_proj_b": xz_proj_b,
+        "yx_proj_a": yx_proj_a,
+        "zy_proj_a": zy_proj_a,
+        "xz_proj_a": xz_proj_a,
     }
 
 
@@ -1193,8 +1153,8 @@ def handle_apply_registration(params: dict) -> dict:
     affine_matrix = np.array(saved_params["affine_registration_matrix"])
 
     rp = saved_params["registration_parameters"]
-    crop_to_common = rp.get("crop_to_common", False)
     interp_method = rp.get("interp_method", "cubspl")
+    crop_bounds = saved_params.get("crop_bounds")
     pre_reg = saved_params["pre_reg_transform"]
     pre_reg_t = [
         pre_reg["tz_um"] / pixel_size,
@@ -1276,13 +1236,23 @@ def handle_apply_registration(params: dict) -> dict:
         except Exception:
             pass
 
-        if crop_to_common:
-            a_slices, b_slices, cropped_shape = _compute_common_crops_server(
-                a_dsk.shape, b_dsk.shape, pre_reg_t,
-            )
-            if a_slices is not None:
-                a_dsk = a_dsk[a_slices]
-                b_dsk = b_dsk[b_slices]
+        if crop_bounds:
+            z_start = crop_bounds["z_start"]
+            z_end = crop_bounds["z_end"]
+            y_start = crop_bounds["y_start"]
+            y_end = crop_bounds["y_end"]
+            x_start = crop_bounds["x_start"]
+            x_end = crop_bounds["x_end"]
+            tz, ty, tx = pre_reg_t
+            a_dsk = a_dsk[z_start:z_end, y_start:y_end, x_start:x_end]
+            Zb, Yb, Xb = b_dsk.shape
+            z_start_b = max(0, int(z_start - tz))
+            z_end_b = min(Zb, int(z_end - tz))
+            y_start_b = max(0, int(y_start - ty))
+            y_end_b = min(Yb, int(y_end - ty))
+            x_start_b = max(0, int(x_start - tx))
+            x_end_b = min(Xb, int(x_end - tx))
+            b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
         b_cupy = cp.asarray(b_dsk)
         b_reg = affine.transform(
@@ -1377,13 +1347,23 @@ def handle_apply_registration(params: dict) -> dict:
             except Exception:
                 pass
 
-            if crop_to_common:
-                a_slices, b_slices, cropped_shape = _compute_common_crops_server(
-                    a_dsk.shape, b_dsk.shape, pre_reg_t,
-                )
-                if a_slices is not None:
-                    a_dsk = a_dsk[a_slices]
-                    b_dsk = b_dsk[b_slices]
+            if crop_bounds:
+                z_start = crop_bounds["z_start"]
+                z_end = crop_bounds["z_end"]
+                y_start = crop_bounds["y_start"]
+                y_end = crop_bounds["y_end"]
+                x_start = crop_bounds["x_start"]
+                x_end = crop_bounds["x_end"]
+                tz, ty, tx = pre_reg_t
+                a_dsk = a_dsk[z_start:z_end, y_start:y_end, x_start:x_end]
+                Zb, Yb, Xb = b_dsk.shape
+                z_start_b = max(0, int(z_start - tz))
+                z_end_b = min(Zb, int(z_end - tz))
+                y_start_b = max(0, int(y_start - ty))
+                y_end_b = min(Yb, int(y_end - ty))
+                x_start_b = max(0, int(x_start - tx))
+                x_end_b = min(Xb, int(x_end - tx))
+                b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
             b_cupy = cp.asarray(b_dsk)
             b_reg = affine.transform(

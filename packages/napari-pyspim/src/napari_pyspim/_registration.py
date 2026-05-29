@@ -582,70 +582,6 @@ class ApplyWorker(QThread):
         else:  # dispim
             return {"preserve_dtype": True}
 
-    def _compute_common_crops(self, a_shape, b_shape, t0):
-        """Compute crop slices for both volumes to their common overlapping region.
-
-        Replicates the logic from RegistrationWidget._compute_common_crops().
-
-        Args:
-            a_shape: Shape of View A deskewed volume (Z, Y, X).
-            b_shape: Shape of View B deskewed volume (Z, Y, X).
-            t0: Pre-reg translation in pixel units [tz, ty, tx].
-
-        Returns:
-            Tuple of (a_slices, b_slices, cropped_shape) or (None, None, None) if no overlap.
-        """
-        Za, Ya, Xa = a_shape
-        Zb, Yb, Xb = b_shape
-        tz, ty, tx = t0
-
-        z_start_a = max(0, tz)
-        z_end_a = min(Za, tz + Zb)
-        y_start_a = max(0, ty)
-        y_end_a = min(Ya, ty + Yb)
-        x_start_a = max(0, tx)
-        x_end_a = min(Xa, tx + Xb)
-
-        if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
-            return None, None, None
-
-        z_start_b = max(0, -tz)
-        z_end_b = min(Zb, Za - tz)
-        y_start_b = max(0, -ty)
-        y_end_b = min(Yb, Ya - ty)
-        x_start_b = max(0, -tx)
-        x_end_b = min(Xb, Xa - tx)
-
-        # Compute each view's shape independently to detect truncation differences
-        shape_a = (
-            int(z_end_a - z_start_a),
-            int(y_end_a - y_start_a),
-            int(x_end_a - x_start_a),
-        )
-        shape_b = (
-            int(z_end_b - z_start_b),
-            int(y_end_b - y_start_b),
-            int(x_end_b - x_start_b),
-        )
-
-        # Use minimum to guarantee both can be cropped to this size
-        cropped_shape = tuple(min(a, b) for a, b in zip(shape_a, shape_b))
-
-        # Both slices use cropped_shape as the end offset to ensure identical output sizes
-        a_slices = (
-            slice(int(z_start_a), int(z_start_a) + cropped_shape[0]),
-            slice(int(y_start_a), int(y_start_a) + cropped_shape[1]),
-            slice(int(x_start_a), int(x_start_a) + cropped_shape[2]),
-        )
-
-        b_slices = (
-            slice(int(z_start_b), int(z_start_b) + cropped_shape[0]),
-            slice(int(y_start_b), int(y_start_b) + cropped_shape[1]),
-            slice(int(x_start_b), int(x_start_b) + cropped_shape[2]),
-        )
-
-        return a_slices, b_slices, cropped_shape
-
     def run(self):
         """Apply deskewing and registration to specified time/channel ranges."""
         try:
@@ -671,9 +607,8 @@ class ApplyWorker(QThread):
             theta_rad = math.pi / 4
             affine_matrix = np.array(params["affine_registration_matrix"])
 
-            # Load registration parameters for crop_to_common logic
+            # Load registration parameters
             rp = params["registration_parameters"]
-            crop_to_common = rp.get("crop_to_common", False)
             interp_method = rp.get("interp_method", "cubspl")
             pre_reg = params["pre_reg_transform"]
             # Convert pre-reg transform from micrometers to pixel units
@@ -682,6 +617,8 @@ class ApplyWorker(QThread):
                 pre_reg["ty_um"] / pixel_size,
                 pre_reg["tx_um"] / pixel_size,
             ]
+            # Load crop bounds from saved params
+            crop_bounds = params.get("crop_bounds")
 
             # Get deskew kwargs
             deskew_kwargs = self._get_deskew_kwargs(method)
@@ -749,14 +686,28 @@ class ApplyWorker(QThread):
                 except:
                     pass
 
-                # Apply crop_to_common if enabled in saved params
-                if crop_to_common:
-                    a_slices, b_slices, cropped_shape = self._compute_common_crops(
-                        a_dsk.shape, b_dsk.shape, pre_reg_t
-                    )
-                    if a_slices is not None:
-                        a_dsk = a_dsk[a_slices]
-                        b_dsk = b_dsk[b_slices]
+                # Apply crop bounds if present in saved params
+                if crop_bounds:
+                    z_start = crop_bounds["z_start"]
+                    z_end = crop_bounds["z_end"]
+                    y_start = crop_bounds["y_start"]
+                    y_end = crop_bounds["y_end"]
+                    x_start = crop_bounds["x_start"]
+                    x_end = crop_bounds["x_end"]
+                    tz, ty, tx = pre_reg_t
+
+                    # Crop View A
+                    a_dsk = a_dsk[z_start:z_end, y_start:y_end, x_start:x_end]
+
+                    # Compute corresponding crop in View B coordinates
+                    Zb, Yb, Xb = b_dsk.shape
+                    z_start_b = max(0, int(z_start - tz))
+                    z_end_b = min(Zb, int(z_end - tz))
+                    y_start_b = max(0, int(y_start - ty))
+                    y_end_b = min(Yb, int(y_end - ty))
+                    x_start_b = max(0, int(x_start - tx))
+                    x_end_b = min(Xb, int(x_end - tx))
+                    b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
                 # Apply affine transform to B
                 b_cupy = cp.asarray(b_dsk)
@@ -854,14 +805,28 @@ class ApplyWorker(QThread):
                     except:
                         pass
 
-                    # Apply crop_to_common if enabled in saved params
-                    if crop_to_common:
-                        a_slices, b_slices, cropped_shape = self._compute_common_crops(
-                            a_dsk.shape, b_dsk.shape, pre_reg_t
-                        )
-                        if a_slices is not None:
-                            a_dsk = a_dsk[a_slices]
-                            b_dsk = b_dsk[b_slices]
+                    # Apply crop bounds if present in saved params
+                    if crop_bounds:
+                        z_start = crop_bounds["z_start"]
+                        z_end = crop_bounds["z_end"]
+                        y_start = crop_bounds["y_start"]
+                        y_end = crop_bounds["y_end"]
+                        x_start = crop_bounds["x_start"]
+                        x_end = crop_bounds["x_end"]
+                        tz, ty, tx = pre_reg_t
+
+                        # Crop View A
+                        a_dsk = a_dsk[z_start:z_end, y_start:y_end, x_start:x_end]
+
+                        # Compute corresponding crop in View B coordinates
+                        Zb, Yb, Xb = b_dsk.shape
+                        z_start_b = max(0, int(z_start - tz))
+                        z_end_b = min(Zb, int(z_end - tz))
+                        y_start_b = max(0, int(y_start - ty))
+                        y_end_b = min(Yb, int(y_end - ty))
+                        x_start_b = max(0, int(x_start - tx))
+                        x_end_b = min(Xb, int(x_end - tx))
+                        b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
                     # Apply affine transform to B
                     b_cupy = cp.asarray(b_dsk)
@@ -935,10 +900,20 @@ class RegistrationWidget(QWidget):
         self.projection_yx_b_reg_layer = None
         self.projection_zy_b_reg_layer = None
         self.projection_xz_b_reg_layer = None
+        # Cropped View A registered projection layer references
+        self.projection_yx_a_reg_layer = None
+        self.projection_zy_a_reg_layer = None
+        self.projection_xz_a_reg_layer = None
+        # Crop shapes layer references (3 layers for YX, ZY, XZ projections)
+        self.shapes_yx_layer = None
+        self.shapes_zy_layer = None
+        self.shapes_xz_layer = None
         # Pre-registration transform state (stored in micrometers: [tz, ty, tx])
         self._pre_reg_transform = [0.0, 0.0, 0.0]
         # Flag to prevent recursive sync when programmatically updating layers
         self._syncing_transforms = False
+        # Flag to prevent recursive shape updates during cross-view sync
+        self._syncing_shapes = False
         # Store pixel size for layer scale
         self._pixel_size = None
         # Store registration results for saving
@@ -1165,13 +1140,6 @@ class RegistrationWidget(QWidget):
         self.piecewise_checkbox.setChecked(True)
         params_layout.addRow(self.piecewise_checkbox)
 
-        self.crop_to_common_checkbox = QCheckBox("Crop to Common")
-        self.crop_to_common_checkbox.setToolTip(
-            "When enabled, crops deskewed volumes to the overlapping region "
-            "determined by the pre-reg translation before registration."
-        )
-        params_layout.addRow(self.crop_to_common_checkbox)
-
         params_group.setLayout(params_layout)
 
         # Register button
@@ -1373,6 +1341,19 @@ class RegistrationWidget(QWidget):
             layers_to_remove.append(self.projection_zy_b_reg_layer)
         if self.projection_xz_b_reg_layer:
             layers_to_remove.append(self.projection_xz_b_reg_layer)
+        if self.projection_yx_a_reg_layer:
+            layers_to_remove.append(self.projection_yx_a_reg_layer)
+        if self.projection_zy_a_reg_layer:
+            layers_to_remove.append(self.projection_zy_a_reg_layer)
+        if self.projection_xz_a_reg_layer:
+            layers_to_remove.append(self.projection_xz_a_reg_layer)
+        # Crop shapes layers
+        if self.shapes_yx_layer:
+            layers_to_remove.append(self.shapes_yx_layer)
+        if self.shapes_zy_layer:
+            layers_to_remove.append(self.shapes_zy_layer)
+        if self.shapes_xz_layer:
+            layers_to_remove.append(self.shapes_xz_layer)
 
         for layer in layers_to_remove:
             try:
@@ -1390,12 +1371,18 @@ class RegistrationWidget(QWidget):
         self.projection_yx_b_reg_layer = None
         self.projection_zy_b_reg_layer = None
         self.projection_xz_b_reg_layer = None
+        self.projection_yx_a_reg_layer = None
+        self.projection_zy_a_reg_layer = None
+        self.projection_xz_a_reg_layer = None
+        # Reset crop shapes layers
+        self.shapes_yx_layer = None
+        self.shapes_zy_layer = None
+        self.shapes_xz_layer = None
 
         # Reset pre-reg transform state
         self._pre_reg_transform = [0.0, 0.0, 0.0]
-        # Reset crop checkbox
-        self.crop_to_common_checkbox.setChecked(False)
         self._syncing_transforms = False
+        self._syncing_shapes = False
         self._pixel_size = None
         self.reset_transform_button.setEnabled(False)
         self._update_pre_reg_label()
@@ -1577,7 +1564,7 @@ class RegistrationWidget(QWidget):
                 yx_proj_a_t,
                 name="YX Projection (View A)",
                 colormap="red",
-                opacity=0.5,
+                opacity=0.9,
                 blending="additive",
                 scale=(pixel_size, pixel_size),
             )
@@ -1587,7 +1574,7 @@ class RegistrationWidget(QWidget):
                 yx_proj_b_t,
                 name="YX Projection (View B)",
                 colormap="cyan",
-                opacity=0.5,
+                opacity=0.9,
                 blending="additive",
                 scale=(pixel_size, pixel_size),
             )
@@ -1597,7 +1584,7 @@ class RegistrationWidget(QWidget):
                 zy_proj_a,
                 name="ZY Projection (View A)",
                 colormap="red",
-                opacity=0.5,
+                opacity=0.9,
                 blending="additive",
                 scale=(pixel_size, pixel_size),
                 translate=(offset_z_um, 0),
@@ -1608,7 +1595,7 @@ class RegistrationWidget(QWidget):
                 zy_proj_b,
                 name="ZY Projection (View B)",
                 colormap="cyan",
-                opacity=0.5,
+                opacity=0.9,
                 blending="additive",
                 scale=(pixel_size, pixel_size),
                 translate=(offset_z_um, 0),
@@ -1621,7 +1608,7 @@ class RegistrationWidget(QWidget):
                 xz_proj_a_t,
                 name="XZ Projection (View A)",
                 colormap="red",
-                opacity=0.5,
+                opacity=0.9,
                 blending="additive",
                 scale=(pixel_size, pixel_size),
                 translate=(0, offset_x_um),
@@ -1633,11 +1620,62 @@ class RegistrationWidget(QWidget):
                 xz_proj_b_t,
                 name="XZ Projection (View B)",
                 colormap="cyan",
-                opacity=0.5,
+                opacity=0.9,
                 blending="additive",
                 scale=(pixel_size, pixel_size),
                 translate=(0, offset_x_um),
             )
+
+            # --- Add crop shapes layers ---
+            # YX shapes layer: display (X, Y), row=X, col=Y
+            X, Y = yx_proj_a_t.shape
+            yx_rect = [[(0, 0), (0, Y - 1), (X - 1, Y - 1), (X - 1, 0)]]
+            self.shapes_yx_layer = self.viewer.add_shapes(
+                yx_rect,
+                shape_type="rectangle",
+                name="YX Crop ROI",
+                edge_color="lime",
+                face_color="transparent",
+                edge_width=2,
+                scale=(pixel_size, pixel_size),
+                translate=self.projection_yx_a_layer.translate,
+            )
+            self.shapes_yx_layer.editable = True
+
+            # ZY shapes layer: display (Z, Y), row=Z, col=Y
+            Z, Y_zy = zy_proj_a.shape
+            zy_rect = [[(0, 0), (0, Y_zy - 1), (Z - 1, Y_zy - 1), (Z - 1, 0)]]
+            self.shapes_zy_layer = self.viewer.add_shapes(
+                zy_rect,
+                shape_type="rectangle",
+                name="ZY Crop ROI",
+                edge_color="lime",
+                face_color="transparent",
+                edge_width=2,
+                scale=(pixel_size, pixel_size),
+                translate=self.projection_zy_a_layer.translate,
+            )
+            self.shapes_zy_layer.editable = True
+
+            # XZ shapes layer: display (X, Z), row=X, col=Z
+            X_xz, Z_xz = xz_proj_a_t.shape
+            xz_rect = [[(0, 0), (0, Z_xz - 1), (X_xz - 1, Z_xz - 1), (X_xz - 1, 0)]]
+            self.shapes_xz_layer = self.viewer.add_shapes(
+                xz_rect,
+                shape_type="rectangle",
+                name="XZ Crop ROI",
+                edge_color="lime",
+                face_color="transparent",
+                edge_width=2,
+                scale=(pixel_size, pixel_size),
+                translate=self.projection_xz_a_layer.translate,
+            )
+            self.shapes_xz_layer.editable = True
+
+            # Connect shapes data change events for cross-view sync
+            self.shapes_yx_layer.events.data.connect(self.on_yx_shapes_changed)
+            self.shapes_zy_layer.events.data.connect(self.on_zy_shapes_changed)
+            self.shapes_xz_layer.events.data.connect(self.on_xz_shapes_changed)
 
             # Connect affine change events for View B layers
             # The Transform mode in napari updates layer.affine, not layer.translate
@@ -1752,6 +1790,180 @@ class RegistrationWidget(QWidget):
         finally:
             self._syncing_transforms = False
 
+    # ---------------------------------------------------------------------
+    # Crop shapes layer helpers
+    # ---------------------------------------------------------------------
+
+    def _commit_shape_edits(self, layer):
+        """Force a shapes layer to commit any pending interactive edits."""
+        if layer.mode in ("transform", "direct"):
+            previous_mode = layer.mode
+            layer.mode = "pan_zoom"
+            layer.mode = previous_mode
+
+    def on_yx_shapes_changed(self):
+        """Handle changes to YX shapes layer - sync Y to ZY, X to XZ.
+
+        YX display (X, Y): row=X, col=Y
+        ZY display (Z, Y): row=Z, col=Y  -> sync Y (col)
+        XZ display (X, Z): row=X, col=Z  -> sync X (row)
+        """
+        if self._syncing_shapes:
+            return
+        self._syncing_shapes = True
+        try:
+            if not self.shapes_yx_layer or len(self.shapes_yx_layer.data) == 0:
+                return
+            yx_corners = list(self.shapes_yx_layer.data[0])
+            y_min = int(min(c[1] for c in yx_corners))
+            y_max = int(max(c[1] for c in yx_corners))
+            x_min = int(min(c[0] for c in yx_corners))
+            x_max = int(max(c[0] for c in yx_corners))
+
+            # Sync Y to ZY layer (col = Y)
+            if self.shapes_zy_layer and len(self.shapes_zy_layer.data) > 0:
+                zy_corners = list(self.shapes_zy_layer.data[0])
+                zy_y_min = min(c[1] for c in zy_corners)
+                zy_y_max = max(c[1] for c in zy_corners)
+                new_zy_corners = []
+                for corner in zy_corners:
+                    z, y = corner
+                    new_y = y_min if y == zy_y_min else y_max
+                    new_zy_corners.append([z, new_y])
+                self.shapes_zy_layer.data = [new_zy_corners]
+
+            # Sync X to XZ layer (row = X)
+            if self.shapes_xz_layer and len(self.shapes_xz_layer.data) > 0:
+                xz_corners = list(self.shapes_xz_layer.data[0])
+                xz_x_min = min(c[0] for c in xz_corners)
+                xz_x_max = max(c[0] for c in xz_corners)
+                new_xz_corners = []
+                for corner in xz_corners:
+                    x, z = corner
+                    new_x = x_min if x == xz_x_min else x_max
+                    new_xz_corners.append([new_x, z])
+                self.shapes_xz_layer.data = [new_xz_corners]
+        finally:
+            self._syncing_shapes = False
+
+    def on_zy_shapes_changed(self):
+        """Handle changes to ZY shapes layer - sync Y to YX, Z to XZ.
+
+        ZY display (Z, Y): row=Z, col=Y
+        YX display (X, Y): row=X, col=Y  -> sync Y (col)
+        XZ display (X, Z): row=X, col=Z  -> sync Z (col)
+        """
+        if self._syncing_shapes:
+            return
+        self._syncing_shapes = True
+        try:
+            if not self.shapes_zy_layer or len(self.shapes_zy_layer.data) == 0:
+                return
+            zy_corners = list(self.shapes_zy_layer.data[0])
+            y_min = int(min(c[1] for c in zy_corners))
+            y_max = int(max(c[1] for c in zy_corners))
+            z_min = int(min(c[0] for c in zy_corners))
+            z_max = int(max(c[0] for c in zy_corners))
+
+            # Sync Y to YX layer (col = Y)
+            if self.shapes_yx_layer and len(self.shapes_yx_layer.data) > 0:
+                yx_corners = list(self.shapes_yx_layer.data[0])
+                yx_y_min = min(c[1] for c in yx_corners)
+                yx_y_max = max(c[1] for c in yx_corners)
+                new_yx_corners = []
+                for corner in yx_corners:
+                    x, y = corner
+                    new_y = y_min if y == yx_y_min else y_max
+                    new_yx_corners.append([x, new_y])
+                self.shapes_yx_layer.data = [new_yx_corners]
+
+            # Sync Z to XZ layer (col = Z)
+            if self.shapes_xz_layer and len(self.shapes_xz_layer.data) > 0:
+                xz_corners = list(self.shapes_xz_layer.data[0])
+                xz_z_min = min(c[1] for c in xz_corners)
+                xz_z_max = max(c[1] for c in xz_corners)
+                new_xz_corners = []
+                for corner in xz_corners:
+                    x, z = corner
+                    new_z = z_min if z == xz_z_min else z_max
+                    new_xz_corners.append([x, new_z])
+                self.shapes_xz_layer.data = [new_xz_corners]
+        finally:
+            self._syncing_shapes = False
+
+    def on_xz_shapes_changed(self):
+        """Handle changes to XZ shapes layer - sync X to YX, Z to ZY.
+
+        XZ display (X, Z): row=X, col=Z
+        YX display (X, Y): row=X, col=Y  -> sync X (row)
+        ZY display (Z, Y): row=Z, col=Y  -> sync Z (row)
+        """
+        if self._syncing_shapes:
+            return
+        self._syncing_shapes = True
+        try:
+            if not self.shapes_xz_layer or len(self.shapes_xz_layer.data) == 0:
+                return
+            xz_corners = list(self.shapes_xz_layer.data[0])
+            x_min = int(min(c[0] for c in xz_corners))
+            x_max = int(max(c[0] for c in xz_corners))
+            z_min = int(min(c[1] for c in xz_corners))
+            z_max = int(max(c[1] for c in xz_corners))
+
+            # Sync X to YX layer (row = X)
+            if self.shapes_yx_layer and len(self.shapes_yx_layer.data) > 0:
+                yx_corners = list(self.shapes_yx_layer.data[0])
+                yx_x_min = min(c[0] for c in yx_corners)
+                yx_x_max = max(c[0] for c in yx_corners)
+                new_yx_corners = []
+                for corner in yx_corners:
+                    x, y = corner
+                    new_x = x_min if x == yx_x_min else x_max
+                    new_yx_corners.append([new_x, y])
+                self.shapes_yx_layer.data = [new_yx_corners]
+
+            # Sync Z to ZY layer (row = Z)
+            if self.shapes_zy_layer and len(self.shapes_zy_layer.data) > 0:
+                zy_corners = list(self.shapes_zy_layer.data[0])
+                zy_z_min = min(c[0] for c in zy_corners)
+                zy_z_max = max(c[0] for c in zy_corners)
+                new_zy_corners = []
+                for corner in zy_corners:
+                    z, y = corner
+                    new_z = z_min if z == zy_z_min else z_max
+                    new_zy_corners.append([new_z, y])
+                self.shapes_zy_layer.data = [new_zy_corners]
+        finally:
+            self._syncing_shapes = False
+
+    def _extract_crop_bounds(self) -> tuple:
+        """Extract 3D crop bounds from YX, ZY, and XZ shapes layers.
+
+        Returns
+        -------
+        tuple
+            (z_start, z_end, y_start, y_end, x_start, x_end) in pixel units
+            relative to deskewed View A coordinates.
+        """
+        # Commit pending interactive edits
+        self._commit_shape_edits(self.shapes_yx_layer)
+        self._commit_shape_edits(self.shapes_zy_layer)
+        self._commit_shape_edits(self.shapes_xz_layer)
+
+        # Extract from YX (display: X, Y) -> row=X, col=Y
+        yx_corners = list(self.shapes_yx_layer.data[0])
+        x_start = int(min(c[0] for c in yx_corners))
+        x_end = int(max(c[0] for c in yx_corners)) + 1
+        y_start = int(min(c[1] for c in yx_corners))
+        y_end = int(max(c[1] for c in yx_corners)) + 1
+
+        # Extract from ZY (display: Z, Y) -> row=Z, col=Y
+        zy_corners = list(self.shapes_zy_layer.data[0])
+        z_start = int(min(c[0] for c in zy_corners))
+        z_end = int(max(c[0] for c in zy_corners)) + 1
+
+        return (z_start, z_end, y_start, y_end, x_start, x_end)
+
     def _format_transform_details(self, transform_matrix, transform_type):
         """Format the fitted transform components as an HTML string for display.
 
@@ -1833,78 +2045,6 @@ class RegistrationWidget(QWidget):
             if "pixel_size" in data_dict:
                 self.pixel_size_spin.setValue(data_dict["pixel_size"])
 
-    def _compute_common_crops(self, a_shape, b_shape, t0):
-        """Compute crop slices for both volumes to their common overlapping region.
-
-        Uses the pre-reg translation to determine the area where View A and
-        translated View B overlap, then returns crop slices for each volume.
-
-        Args:
-            a_shape: Shape of View A deskewed volume (Z, Y, X).
-            b_shape: Shape of View B deskewed volume (Z, Y, X).
-            t0: Pre-reg translation in pixel units [tz, ty, tx].
-
-        Returns:
-            Tuple of (a_slices, b_slices, cropped_shape) where each slices is
-            a tuple of three slice objects for (Z, Y, X) dimensions.
-            Returns (None, None, None) if no valid overlap exists.
-        """
-        Za, Ya, Xa = a_shape
-        Zb, Yb, Xb = b_shape
-        tz, ty, tx = t0
-
-        # Compute overlap in View A's coordinate system
-        # View A occupies [0, Za] x [0, Ya] x [0, Xa]
-        # View B translated occupies [tz, tz+Zb] x [ty, ty+Yb] x [tx, tx+Xb]
-        z_start_a = max(0, tz)
-        z_end_a = min(Za, tz + Zb)
-        y_start_a = max(0, ty)
-        y_end_a = min(Ya, ty + Yb)
-        x_start_a = max(0, tx)
-        x_end_a = min(Xa, tx + Xb)
-
-        # Check if valid overlap exists
-        if z_start_a >= z_end_a or y_start_a >= y_end_a or x_start_a >= x_end_a:
-            return None, None, None
-
-        # Crop slices for View B (shifted back to B's own coordinates by subtracting translation)
-        z_start_b = max(0, -tz)
-        z_end_b = min(Zb, Za - tz)
-        y_start_b = max(0, -ty)
-        y_end_b = min(Yb, Ya - ty)
-        x_start_b = max(0, -tx)
-        x_end_b = min(Xb, Xa - tx)
-
-        # Compute each view's shape independently to detect truncation differences
-        shape_a = (
-            int(z_end_a - z_start_a),
-            int(y_end_a - y_start_a),
-            int(x_end_a - x_start_a),
-        )
-        shape_b = (
-            int(z_end_b - z_start_b),
-            int(y_end_b - y_start_b),
-            int(x_end_b - x_start_b),
-        )
-
-        # Use minimum to guarantee both can be cropped to this size
-        cropped_shape = tuple(min(a, b) for a, b in zip(shape_a, shape_b))
-
-        # Both slices use cropped_shape as the end offset to ensure identical output sizes
-        a_slices = (
-            slice(int(z_start_a), int(z_start_a) + cropped_shape[0]),
-            slice(int(y_start_a), int(y_start_a) + cropped_shape[1]),
-            slice(int(x_start_a), int(x_start_a) + cropped_shape[2]),
-        )
-
-        b_slices = (
-            slice(int(z_start_b), int(z_start_b) + cropped_shape[0]),
-            slice(int(y_start_b), int(y_start_b) + cropped_shape[1]),
-            slice(int(x_start_b), int(x_start_b) + cropped_shape[2]),
-        )
-
-        return a_slices, b_slices, cropped_shape
-
     def register_data(self):
         """Register the deskewed data.
 
@@ -1945,36 +2085,48 @@ class RegistrationWidget(QWidget):
         # Convert pre-reg transform from micrometers to pixel units
         pixel_size = self.pixel_size_spin.value()
         t0 = [t / pixel_size for t in self._pre_reg_transform]
+        tz, ty, tx = t0
 
-        # Determine volumes to register and initial translation
-        a_vol = self.a_deskewed
-        b_vol = self.b_deskewed
-        initial_t = list(t0)
+        # Extract crop bounds from shapes layers
+        z_start, z_end, y_start, y_end, x_start, x_end = self._extract_crop_bounds()
 
-        # Apply cropping if "Crop to Common" is enabled
-        crop_enabled = self.crop_to_common_checkbox.isChecked()
-        if crop_enabled:
-            a_slices, b_slices, cropped_shape = self._compute_common_crops(
-                self.a_deskewed.shape, self.b_deskewed.shape, t0
-            )
-            if a_slices is None:
-                QMessageBox.warning(
-                    self,
-                    "No Common Region",
-                    "The pre-reg translation results in no overlapping region "
-                    "between View A and View B. Disabling crop and proceeding "
-                    "with full volumes.",
-                )
-                self.crop_to_common_checkbox.setChecked(False)
-                self.update_progress("No common region found - using full volumes")
-            else:
-                a_vol = self.a_deskewed[a_slices]
-                b_vol = self.b_deskewed[b_slices]
-                initial_t = [0, 0, 0]  # Pre-reg translation accounted for by crop
-                self.update_progress(
-                    f"Cropped to common region: "
-                    f"{cropped_shape[0]}x{cropped_shape[1]}x{cropped_shape[2]}"
-                )
+        # Crop View A to crop region
+        crop_slices_a = (
+            slice(z_start, z_end),
+            slice(y_start, y_end),
+            slice(x_start, x_end),
+        )
+
+        # Compute corresponding crop in View B coordinates (shift by -pre-reg translation)
+        Zb, Yb, Xb = self.b_deskewed.shape
+        z_start_b = max(0, int(z_start - tz))
+        z_end_b = min(Zb, int(z_end - tz))
+        y_start_b = max(0, int(y_start - ty))
+        y_end_b = min(Yb, int(y_end - ty))
+        x_start_b = max(0, int(x_start - tx))
+        x_end_b = min(Xb, int(x_end - tx))
+
+        crop_slices_b = (
+            slice(z_start_b, z_end_b),
+            slice(y_start_b, y_end_b),
+            slice(x_start_b, x_end_b),
+        )
+
+        # Crop both volumes
+        a_vol = self.a_deskewed[crop_slices_a]
+        b_vol = self.b_deskewed[crop_slices_b]
+
+        # Use min size to guarantee both volumes have the same shape
+        min_shape = tuple(min(a, b) for a, b in zip(a_vol.shape, b_vol.shape))
+        a_vol = a_vol[:min_shape[0], :min_shape[1], :min_shape[2]]
+        b_vol = b_vol[:min_shape[0], :min_shape[1], :min_shape[2]]
+
+        # Initial translation is always [0, 0, 0] (absorbed by crop)
+        initial_t = [0, 0, 0]
+
+        self.update_progress(
+            f"Cropped to region: {min_shape[0]}x{min_shape[1]}x{min_shape[2]}"
+        )
 
         # Map metric display name to internal string
         metric_map = {
@@ -2042,11 +2194,18 @@ class RegistrationWidget(QWidget):
         }
         interp_method = interp_method_map.get(self.interp_method_combo.currentText(), "cubspl")
 
+        # Extract crop bounds from shapes layers
+        z_start, z_end, y_start, y_end, x_start, x_end = self._extract_crop_bounds()
+
         params = {
             "session_id": self._session_id,
             "transform_type": self.transform_combo.currentText(),
             "pre_reg_translation": pre_reg_translation,
-            "crop_to_common": self.crop_to_common_checkbox.isChecked(),
+            "crop_bounds": {
+                "z_start": z_start, "z_end": z_end,
+                "y_start": y_start, "y_end": y_end,
+                "x_start": x_start, "x_end": x_end,
+            },
             "metric": metric,
             "interp_method": interp_method,
             "use_piecewise": self.piecewise_checkbox.isChecked(),
@@ -2068,35 +2227,52 @@ class RegistrationWidget(QWidget):
         except Exception as e:
             self.on_error(f"Failed to send command: {e}")
 
-    def _add_registered_projection_layers(self, yx_proj, zy_proj, xz_proj):
-        """Add max projection layers for B-registered data in yellow.
+    def _add_registered_projection_layers(
+        self, yx_proj_b, zy_proj_b, xz_proj_b,
+        yx_proj_a=None, zy_proj_a=None, xz_proj_a=None
+    ):
+        """Add max projection layers for registered data.
 
-        Replaces any existing registered projection layers. The B projections
-        overlay the View A projection positions so the user can visually verify
-        the quality of the B registration.
+        Adds B-registered projections in yellow, and optionally cropped View A
+        projections in magenta. Hides the original pre-registration projection
+        layers so the user can focus on the registration result.
 
         Args:
-            yx_proj: YX projection array, shape (Y, X)
-            zy_proj: ZY projection array, shape (Z, Y)
-            xz_proj: XZ projection array, shape (Z, X)
+            yx_proj_b: YX projection of registered B, shape (Y, X)
+            zy_proj_b: ZY projection of registered B, shape (Z, Y)
+            xz_proj_b: XZ projection of registered B, shape (Z, X)
+            yx_proj_a: Optional YX projection of cropped A, shape (Y, X)
+            zy_proj_a: Optional ZY projection of cropped A, shape (Z, Y)
+            xz_proj_a: Optional XZ projection of cropped A, shape (Z, X)
         """
         pixel_size = self._pixel_size
         if pixel_size is None:
             return
 
-        # Transpose for display (matching existing pattern)
-        yx_t = yx_proj.T  # (X, Y)
-        xz_t = xz_proj.T  # (X, Z)
+        # Hide original pre-registration projection layers
+        for layer in [
+            self.projection_yx_a_layer, self.projection_yx_b_layer,
+            self.projection_zy_a_layer, self.projection_zy_b_layer,
+            self.projection_xz_a_layer, self.projection_xz_b_layer,
+        ]:
+            if layer is not None:
+                layer.visible = False
+
+        # Transpose B projections for display (matching existing pattern)
+        yx_b_t = yx_proj_b.T  # (X, Y)
+        xz_b_t = xz_proj_b.T  # (X, Z)
 
         # Calculate offsets matching existing projection layout
-        Z, Y_zy = zy_proj.shape
-        offset_z_um = -Z * pixel_size
-        offset_x_um = Y_zy * pixel_size
+        Z_b, Y_zy_b = zy_proj_b.shape
+        offset_z_um = -Z_b * pixel_size
+        offset_x_um = Y_zy_b * pixel_size
 
         # Remove existing registered projection layers if any
         for layer_attr in [
             "projection_yx_b_reg_layer", "projection_zy_b_reg_layer",
             "projection_xz_b_reg_layer",
+            "projection_yx_a_reg_layer", "projection_zy_a_reg_layer",
+            "projection_xz_a_reg_layer",
         ]:
             layer = getattr(self, layer_attr)
             if layer is not None:
@@ -2105,28 +2281,60 @@ class RegistrationWidget(QWidget):
                 except (ValueError, TypeError):
                     pass
 
-        # Add YX projection — overlays View A YX position
+        # Add YX projection for B Registered — overlays View A YX position
         self.projection_yx_b_reg_layer = self.viewer.add_image(
-            yx_t, name="YX Projection (B Registered)",
-            colormap="yellow", opacity=0.5, blending="additive",
+            yx_b_t, name="YX Projection (B Registered)",
+            colormap="yellow", opacity=0.9, blending="additive",
             scale=(pixel_size, pixel_size),
         )
 
-        # Add ZY projection — overlays View A ZY position
+        # Add ZY projection for B Registered — overlays View A ZY position
         self.projection_zy_b_reg_layer = self.viewer.add_image(
-            zy_proj, name="ZY Projection (B Registered)",
-            colormap="yellow", opacity=0.5, blending="additive",
+            zy_proj_b, name="ZY Projection (B Registered)",
+            colormap="yellow", opacity=0.9, blending="additive",
             scale=(pixel_size, pixel_size),
             translate=(offset_z_um, 0),
         )
 
-        # Add XZ projection — overlays View A XZ position
+        # Add XZ projection for B Registered — overlays View A XZ position
         self.projection_xz_b_reg_layer = self.viewer.add_image(
-            xz_t, name="XZ Projection (B Registered)",
-            colormap="yellow", opacity=0.5, blending="additive",
+            xz_b_t, name="XZ Projection (B Registered)",
+            colormap="yellow", opacity=0.9, blending="additive",
             scale=(pixel_size, pixel_size),
             translate=(0, offset_x_um),
         )
+
+        # Add cropped View A layers if projections provided
+        if yx_proj_a is not None and zy_proj_a is not None and xz_proj_a is not None:
+            yx_a_t = yx_proj_a.T  # (X, Y)
+            xz_a_t = xz_proj_a.T  # (X, Z)
+
+            Z_a, Y_zy_a = zy_proj_a.shape
+            offset_z_um_a = -Z_a * pixel_size
+            offset_x_um_a = Y_zy_a * pixel_size
+
+            # YX
+            self.projection_yx_a_reg_layer = self.viewer.add_image(
+                yx_a_t, name="YX Projection (A Cropped)",
+                colormap="magenta", opacity=0.9, blending="additive",
+                scale=(pixel_size, pixel_size),
+            )
+
+            # ZY
+            self.projection_zy_a_reg_layer = self.viewer.add_image(
+                zy_proj_a, name="ZY Projection (A Cropped)",
+                colormap="magenta", opacity=0.9, blending="additive",
+                scale=(pixel_size, pixel_size),
+                translate=(offset_z_um_a, 0),
+            )
+
+            # XZ
+            self.projection_xz_a_reg_layer = self.viewer.add_image(
+                xz_a_t, name="XZ Projection (A Cropped)",
+                colormap="magenta", opacity=0.9, blending="additive",
+                scale=(pixel_size, pixel_size),
+                translate=(0, offset_x_um_a),
+            )
 
     def on_registered(self, result):
         """Handle successful registration."""
@@ -2143,8 +2351,16 @@ class RegistrationWidget(QWidget):
         zy_proj_b = np.max(b_registered, axis=2)  # (Z, Y)
         xz_proj_b = np.max(b_registered, axis=1)  # (Z, X)
 
-        # Add registered projection layers (replaces 3D volume layers)
-        self._add_registered_projection_layers(yx_proj_b, zy_proj_b, xz_proj_b)
+        # Always compute A projections (cropped volume is always returned)
+        yx_proj_a = np.max(a_registered, axis=0)  # (Y, X)
+        zy_proj_a = np.max(a_registered, axis=2)  # (Z, Y)
+        xz_proj_a = np.max(a_registered, axis=1)  # (Z, X)
+
+        # Add registered projection layers
+        self._add_registered_projection_layers(
+            yx_proj_b, zy_proj_b, xz_proj_b,
+            yx_proj_a, zy_proj_a, xz_proj_a
+        )
 
         # Update status and results
         self.status_label.setText(
@@ -2259,10 +2475,16 @@ class RegistrationWidget(QWidget):
         self.correlation_ratio = cr
 
         # Add registered projection layers from server
+        # Always show cropped A projections (server always returns them now)
+        yx_proj_a = result.get("yx_proj_a")
+        zy_proj_a = result.get("zy_proj_a")
+        xz_proj_a = result.get("xz_proj_a")
+
         self._add_registered_projection_layers(
             result["yx_proj_b"],
             result["zy_proj_b"],
             result["xz_proj_b"],
+            yx_proj_a, zy_proj_a, xz_proj_a,
         )
 
         # Update status and results
@@ -2372,7 +2594,6 @@ class RegistrationWidget(QWidget):
             },
             "registration_parameters": {
                 "transform_type": self.transform_combo.currentText(),
-                "crop_to_common": self.crop_to_common_checkbox.isChecked(),
                 "metric": metric_map.get(self.metric_combo.currentText(), "cr"),
                 "interp_method": interp_method_map.get(
                     self.interp_method_combo.currentText(), "cubspl"
