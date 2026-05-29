@@ -686,6 +686,23 @@ def handle_register(params: dict) -> dict:
             verbose=False,
         )
 
+    # --- Apply transformation to B ---
+    from pyspim.interp import affine
+    b_reg = affine.transform(
+        cp.asarray(b_dsk), cp.asarray(T),
+        interp_method=interp_method, preserve_dtype=True,
+        out_shp=None, block_size_z=8, block_size_y=8, block_size_x=8,
+    ).get()
+
+    # Crop to common size (matching local worker logic)
+    min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
+    b_cropped = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
+
+    # Compute max projections for registered B
+    yx_proj_b = np.max(b_cropped, axis=0)  # (Y, X)
+    zy_proj_b = np.max(b_cropped, axis=2)  # (Z, Y)
+    xz_proj_b = np.max(b_cropped, axis=1)  # (Z, X)
+
     # --- Extract results ---
     if hasattr(T, "get"):
         T = T.get()
@@ -699,6 +716,9 @@ def handle_register(params: dict) -> dict:
     return {
         "transform_matrix": T_list,
         "correlation_ratio": cr,
+        "yx_proj_b": yx_proj_b,
+        "zy_proj_b": zy_proj_b,
+        "xz_proj_b": xz_proj_b,
     }
 
 

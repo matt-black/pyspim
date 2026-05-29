@@ -931,6 +931,10 @@ class RegistrationWidget(QWidget):
         self.projection_zy_b_layer = None
         self.projection_xz_a_layer = None
         self.projection_xz_b_layer = None
+        # Registered projection layer references (B only)
+        self.projection_yx_b_reg_layer = None
+        self.projection_zy_b_reg_layer = None
+        self.projection_xz_b_reg_layer = None
         # Pre-registration transform state (stored in micrometers: [tz, ty, tx])
         self._pre_reg_transform = [0.0, 0.0, 0.0]
         # Flag to prevent recursive sync when programmatically updating layers
@@ -1363,6 +1367,12 @@ class RegistrationWidget(QWidget):
             layers_to_remove.append(self.projection_xz_a_layer)
         if self.projection_xz_b_layer:
             layers_to_remove.append(self.projection_xz_b_layer)
+        if self.projection_yx_b_reg_layer:
+            layers_to_remove.append(self.projection_yx_b_reg_layer)
+        if self.projection_zy_b_reg_layer:
+            layers_to_remove.append(self.projection_zy_b_reg_layer)
+        if self.projection_xz_b_reg_layer:
+            layers_to_remove.append(self.projection_xz_b_reg_layer)
 
         for layer in layers_to_remove:
             try:
@@ -1377,6 +1387,9 @@ class RegistrationWidget(QWidget):
         self.projection_zy_b_layer = None
         self.projection_xz_a_layer = None
         self.projection_xz_b_layer = None
+        self.projection_yx_b_reg_layer = None
+        self.projection_zy_b_reg_layer = None
+        self.projection_xz_b_reg_layer = None
 
         # Reset pre-reg transform state
         self._pre_reg_transform = [0.0, 0.0, 0.0]
@@ -2055,6 +2068,66 @@ class RegistrationWidget(QWidget):
         except Exception as e:
             self.on_error(f"Failed to send command: {e}")
 
+    def _add_registered_projection_layers(self, yx_proj, zy_proj, xz_proj):
+        """Add max projection layers for B-registered data in yellow.
+
+        Replaces any existing registered projection layers. The B projections
+        overlay the View A projection positions so the user can visually verify
+        the quality of the B registration.
+
+        Args:
+            yx_proj: YX projection array, shape (Y, X)
+            zy_proj: ZY projection array, shape (Z, Y)
+            xz_proj: XZ projection array, shape (Z, X)
+        """
+        pixel_size = self._pixel_size
+        if pixel_size is None:
+            return
+
+        # Transpose for display (matching existing pattern)
+        yx_t = yx_proj.T  # (X, Y)
+        xz_t = xz_proj.T  # (X, Z)
+
+        # Calculate offsets matching existing projection layout
+        Z, Y_zy = zy_proj.shape
+        offset_z_um = -Z * pixel_size
+        offset_x_um = Y_zy * pixel_size
+
+        # Remove existing registered projection layers if any
+        for layer_attr in [
+            "projection_yx_b_reg_layer", "projection_zy_b_reg_layer",
+            "projection_xz_b_reg_layer",
+        ]:
+            layer = getattr(self, layer_attr)
+            if layer is not None:
+                try:
+                    self.viewer.layers.remove(layer)
+                except (ValueError, TypeError):
+                    pass
+
+        # Add YX projection — overlays View A YX position
+        self.projection_yx_b_reg_layer = self.viewer.add_image(
+            yx_t, name="YX Projection (B Registered)",
+            colormap="yellow", opacity=0.5, blending="additive",
+            scale=(pixel_size, pixel_size),
+        )
+
+        # Add ZY projection — overlays View A ZY position
+        self.projection_zy_b_reg_layer = self.viewer.add_image(
+            zy_proj, name="ZY Projection (B Registered)",
+            colormap="yellow", opacity=0.5, blending="additive",
+            scale=(pixel_size, pixel_size),
+            translate=(offset_z_um, 0),
+        )
+
+        # Add XZ projection — overlays View A XZ position
+        self.projection_xz_b_reg_layer = self.viewer.add_image(
+            xz_t, name="XZ Projection (B Registered)",
+            colormap="yellow", opacity=0.5, blending="additive",
+            scale=(pixel_size, pixel_size),
+            translate=(0, offset_x_um),
+        )
+
     def on_registered(self, result):
         """Handle successful registration."""
         a_registered = result["a_registered"]
@@ -2065,52 +2138,13 @@ class RegistrationWidget(QWidget):
         self.registration_matrix = transform_matrix
         self.correlation_ratio = cr
 
-        # Add registered data as new layers
-        output_a_name = "View A: Registered"
-        output_b_name = "View B: Registered"
+        # Compute max projections from registered B volume
+        yx_proj_b = np.max(b_registered, axis=0)  # (Y, X)
+        zy_proj_b = np.max(b_registered, axis=2)  # (Z, Y)
+        xz_proj_b = np.max(b_registered, axis=1)  # (Z, X)
 
-        # Remove old layers if they exist
-        for layer_name in [output_a_name, output_b_name]:
-            try:
-                layer = self.viewer.layers[layer_name]
-                self.viewer.layers.remove(layer)
-            except (KeyError, ValueError):
-                pass
-
-        _pixel_size = self.pixel_size_spin.value()
-        self.viewer.add_image(
-            a_registered,
-            name=output_a_name,
-            metadata={
-                "transform_matrix": transform_matrix,
-                "correlation_ratio": cr,
-                "transform_type": result["transform_type"],
-                "step_size": self.step_size_spin.value(),
-                "pixel_size": _pixel_size,
-                "theta": math.pi / 4,  # Hardcoded to 45 degrees
-            },
-            scale=(_pixel_size, _pixel_size, _pixel_size),
-            opacity=0.5,
-            blending="additive",
-            colormap="red",
-        )
-
-        self.viewer.add_image(
-            b_registered,
-            name=output_b_name,
-            metadata={
-                "transform_matrix": transform_matrix,
-                "correlation_ratio": cr,
-                "transform_type": result["transform_type"],
-                "step_size": self.step_size_spin.value(),
-                "pixel_size": self.pixel_size_spin.value(),
-                "theta": math.pi / 4,  # Hardcoded to 45 degrees
-            },
-            scale=(_pixel_size, _pixel_size, _pixel_size),
-            opacity=0.5,
-            blending="additive",
-            colormap="cyan",
-        )
+        # Add registered projection layers (replaces 3D volume layers)
+        self._add_registered_projection_layers(yx_proj_b, zy_proj_b, xz_proj_b)
 
         # Update status and results
         self.status_label.setText(
@@ -2214,8 +2248,8 @@ class RegistrationWidget(QWidget):
     def _on_register_ready_main(self, result):
         """Handle successful remote registration results on main thread.
 
-        Unlike local registration, the remote server only returns the transform
-        matrix and correlation ratio (not the full registered volumes).
+        The remote server returns the transform matrix, correlation ratio,
+        and maximum projections of the B-registered volume.
         """
         transform_matrix = result.get("transform_matrix")
         cr = result.get("correlation_ratio", 0.0)
@@ -2223,6 +2257,13 @@ class RegistrationWidget(QWidget):
         # Store for saving
         self.registration_matrix = transform_matrix
         self.correlation_ratio = cr
+
+        # Add registered projection layers from server
+        self._add_registered_projection_layers(
+            result["yx_proj_b"],
+            result["zy_proj_b"],
+            result["xz_proj_b"],
+        )
 
         # Update status and results
         self.status_label.setText("Registration completed on remote server!")
