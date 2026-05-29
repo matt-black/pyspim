@@ -40,7 +40,7 @@ from ._sftp_browser import SftpBrowserDialog
 from ._utils import decompose_affine_matrix
 
 # Lazy imports to avoid CUDA compilation at module level
-# from pyspim.reg import pcc, powell
+# from pyspim.reg import pcc, opt
 # from pyspim.interp import affine
 # from pyspim.util import pad_to_same_size, launch_params_for_volume
 
@@ -308,6 +308,7 @@ class RegistrationWorker(QThread):
         initial_translation=None,
         metric="cr",
         interp_method="cubspl",
+        opt_method="powell",
         use_piecewise=True,
         bound_translation=20.0,
         bound_rot_shear=5.0,
@@ -322,6 +323,7 @@ class RegistrationWorker(QThread):
         self.initial_translation = initial_translation if initial_translation is not None else [0, 0, 0]
         self.metric = metric
         self.interp_method = interp_method
+        self.opt_method = opt_method
         self.use_piecewise = use_piecewise
         self.bound_translation = bound_translation
         self.bound_rot_shear = bound_rot_shear
@@ -341,7 +343,7 @@ class RegistrationWorker(QThread):
         try:
             # Lazy imports to avoid CUDA compilation at module level
             from pyspim.interp import affine
-            from pyspim.reg import powell
+            from pyspim.reg import opt
             from pyspim.util import launch_params_for_volume, pad_to_same_size
 
             shp_a = self.a_deskewed.shape
@@ -404,24 +406,26 @@ class RegistrationWorker(QThread):
 
             # Perform optimization
             if self.use_piecewise:
-                T, res = powell.optimize_affine_piecewise(
+                T, res = opt.optimize_affine_piecewise(
                     cp.asarray(a_dsk),
                     cp.asarray(b_dsk),
                     metric=self.metric,
                     transform=self.transform_type,
                     interp_method=self.interp_method,
+                    opt_method=self.opt_method,
                     par0=par0,
                     bounds=bounds,
                     kernel_launch_params=launch_par,
                     verbose=False,
                 )
             else:
-                T, res = powell.optimize_affine(
+                T, res = opt.optimize_affine(
                     cp.asarray(a_dsk),
                     cp.asarray(b_dsk),
                     metric=self.metric,
                     transform=self.transform_type,
                     interp_method=self.interp_method,
+                    opt_method=self.opt_method,
                     par0=par0,
                     bounds=bounds,
                     kernel_launch_params=launch_par,
@@ -480,6 +484,7 @@ class RegistrationWorker(QThread):
                     "initial_translation": self.initial_translation,
                     "metric": self.metric,
                     "interp_method": self.interp_method,
+                    "opt_method": self.opt_method,
                     "use_piecewise": self.use_piecewise,
                     "bound_translation": self.bound_translation,
                     "bound_rot_shear": self.bound_rot_shear,
@@ -493,6 +498,7 @@ class RegistrationWorker(QThread):
                     "initial_translation": self.initial_translation,
                     "metric": self.metric,
                     "interp_method": self.interp_method,
+                    "opt_method": self.opt_method,
                     "use_piecewise": self.use_piecewise,
                     "bound_translation": self.bound_translation,
                     "bound_rot_shear": self.bound_rot_shear,
@@ -1088,6 +1094,11 @@ class RegistrationWidget(QWidget):
         self.interp_method_combo.addItems(["Linear", "Cubic Spline"])
         self.interp_method_combo.setCurrentText("Cubic Spline")
         params_layout.addRow("Interpolation Method:", self.interp_method_combo)
+
+        self.opt_method_combo = QComboBox()
+        self.opt_method_combo.addItems(["Powell", "L-BFGS-B", "COBYLA", "Nelder-Mead", "TNC"])
+        self.opt_method_combo.setCurrentText("Powell")
+        params_layout.addRow("Optimization Method:", self.opt_method_combo)
 
         # Bounds group
         bounds_group = QGroupBox("Bounds")
@@ -2157,6 +2168,7 @@ class RegistrationWidget(QWidget):
             initial_translation=initial_t,
             metric=metric,
             interp_method=interp_method,
+            opt_method=self.opt_method_combo.currentText(),
             use_piecewise=use_piecewise,
             bound_translation=bound_translation,
             bound_rot_shear=bound_rot_shear,
@@ -2212,6 +2224,7 @@ class RegistrationWidget(QWidget):
             "bound_translation": self.bound_translation_spin.value(),
             "bound_rot_shear": self.bound_rot_shear_spin.value(),
             "bound_scale": self.bound_scale_spin.value(),
+            "opt_method": self.opt_method_combo.currentText(),
         }
 
         # Store context for signal handler
@@ -2602,6 +2615,7 @@ class RegistrationWidget(QWidget):
                 "bound_translation": self.bound_translation_spin.value(),
                 "bound_rot_shear": self.bound_rot_shear_spin.value(),
                 "bound_scale": self.bound_scale_spin.value(),
+                "opt_method": self.opt_method_combo.currentText(),
             },
             "affine_registration_matrix": self.registration_matrix.tolist() if hasattr(self.registration_matrix, "tolist") else self.registration_matrix,
             "correlation_ratio": self.correlation_ratio,

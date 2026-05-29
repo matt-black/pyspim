@@ -531,6 +531,7 @@ def handle_register(params: dict) -> dict:
     bound_translation = params.get("bound_translation", 20.0)
     bound_rot_shear = params.get("bound_rot_shear", 5.0)
     bound_scale = params.get("bound_scale", 0.05)
+    opt_method = params.get("opt_method", "powell")
 
     # --- Retrieve deskewed volumes from session ---
     if session_id not in SESSIONS:
@@ -604,7 +605,7 @@ def handle_register(params: dict) -> dict:
     par0 = np.array(par0, dtype=np.float64)
 
     # --- Perform optimization ---
-    from pyspim.reg import powell
+    from pyspim.reg import opt
     from pyspim.util import launch_params_for_volume
 
     launch_par = launch_params_for_volume(a_dsk.shape, 8, 8, 8)
@@ -613,24 +614,26 @@ def handle_register(params: dict) -> dict:
     b_gpu = cp.asarray(b_dsk)
 
     if use_piecewise:
-        T, res = powell.optimize_affine_piecewise(
+        T, res = opt.optimize_affine_piecewise(
             a_gpu,
             b_gpu,
             metric=metric,
             transform=transform_type,
             interp_method=interp_method,
+            opt_method=opt_method,
             par0=par0,
             bounds=bounds,
             kernel_launch_params=launch_par,
             verbose=False,
         )
     else:
-        T, res = powell.optimize_affine(
+        T, res = opt.optimize_affine(
             a_gpu,
             b_gpu,
             metric=metric,
             transform=transform_type,
             interp_method=interp_method,
+            opt_method=opt_method,
             par0=par0,
             bounds=bounds,
             kernel_launch_params=launch_par,
