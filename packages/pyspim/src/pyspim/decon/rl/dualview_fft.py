@@ -125,11 +125,11 @@ def _deconvolve_multichannel(
 ) -> NDArray:
     xp = cupy.get_array_module(view_a)
     n_chan = view_a.shape[0]
-    psf_a = repeat(psf_a) if isinstance(psf_a, NDArray) else psf_a
-    psf_b = repeat(psf_b) if isinstance(psf_b, NDArray) else psf_b
-    if isinstance(backproj_a, NDArray):
+    psf_a = repeat(psf_a) if isinstance(psf_a, (numpy.ndarray, cupy.ndarray)) else psf_a
+    psf_b = repeat(psf_b) if isinstance(psf_b, (numpy.ndarray, cupy.ndarray)) else psf_b
+    if isinstance(backproj_a, (numpy.ndarray, cupy.ndarray)):
         backproj_a = repeat(backproj_a)
-    if isinstance(backproj_b, NDArray):
+    if isinstance(backproj_b, (numpy.ndarray, cupy.ndarray)):
         backproj_b = repeat(backproj_b)
     pfun = partial(
         _deconvolve_single_channel,
@@ -566,7 +566,9 @@ def _additive_joint_rl_boundcorr(
     psf_a = psf_a.astype(float_type, copy=False)
     psf_b = psf_b.astype(float_type, copy=False)
     if est_i is None:
-        est_i = (view_a + view_b) / 2.0
+        est = (view_a + view_b) / 2.0
+    else:
+        est = est_i
     # utility function for convolution
     if xp == cupy:
         conv = lambda k, i: fftconv_gpu(i, k, mode="same")
@@ -596,6 +598,7 @@ def _additive_joint_rl_boundcorr(
     # pad the views and mask with zeros
     view_a = xp.pad(view_a, pad, mode="constant", constant_values=0)
     view_b = xp.pad(view_b, pad, mode="constant", constant_values=0)
+    est = xp.pad(est, pad, mode="constant", constant_values=0)
     M_a = xp.pad(M_a, pad, mode="constant", constant_values=0)
     M_b = xp.pad(M_b, pad, mode="constant", constant_values=0)
     # calculate the window, $\overbar{w}(n')$ (Eqn. 17)
@@ -633,7 +636,7 @@ def _additive_joint_rl_boundcorr(
     if req_both:
         est[xp.logical_or(view_a == 0, view_b == 0)] = 0
     # trim out padding
-    if len(est) == 2:
+    if est.ndim == 2:
         return est[pad[0][0] : -pad[0][1], pad[1][0] : -pad[1][1]]
     else:
         return est[
@@ -946,7 +949,7 @@ def _decon_chunk(
         sys.stderr.flush()
         # Try to return the GPU back to the pool
         try:
-            if "gpu_id" in dir():
+            if gpu_id is not None:
                 gpu_queue.put(gpu_id)
         except Exception:
             pass
