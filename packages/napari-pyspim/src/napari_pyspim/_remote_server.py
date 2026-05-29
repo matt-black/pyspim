@@ -685,7 +685,7 @@ def handle_register(params: dict) -> dict:
             kernel_launch_params=launch_par,
             verbose=False,
         )
-    T = np.linalg.inv(T)
+
     # --- Apply transformation to B ---
     from pyspim.interp import affine
     b_reg = affine.transform(
