@@ -131,6 +131,9 @@ def transform(
 
     Returns:
         cupy.ndarray: transformed volume
+
+    Notes:
+        The input transform, T, should be the forward transform mapping the input to the desired output domain. Internally, this function takes the inverse of the specified transform and then iterates over the output domain to extract values from the input array.
     """
     if cupy.get_array_module(A) == cupy: # type: ignore
         kernel = _get_kernel(A.dtype, interp_method, preserve_dtype)
@@ -139,7 +142,7 @@ def transform(
         launch_params = launch_params_for_volume(
             out_shp, block_size_z, block_size_y, block_size_x
         )
-        T = cupy.asarray(T).astype(cupy.float32)
+        T = cupy.linalg.inv(cupy.asarray(T)).astype(cupy.float32)
         # preallocate output and call kernel
         out_dtype = A.dtype if preserve_dtype else cupy.float32
         out = cupy.zeros(out_shp, dtype=out_dtype)

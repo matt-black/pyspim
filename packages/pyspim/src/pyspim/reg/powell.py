@@ -307,9 +307,7 @@ def optimize_affine(
         res = opt_call()
     # calculate transform
     T = mat_fun(res.x, cx, cy, cz).reshape(4, 4)
-    # the transform calculated here is mapping mov into reference (the inverse)
-    # so spit out the inverse of it, which gives the forward transform
-    return numpy.linalg.inv(T), res
+    return T, res
 
 
 def _split_substrings(transform_str: str):
