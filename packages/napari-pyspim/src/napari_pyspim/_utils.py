@@ -5,9 +5,141 @@ Utility functions for the napari-pyspim plugin.
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 import numpy as np
+
+
+class AffineComponents(NamedTuple):
+    """Decomposed components of a 4x4 affine transformation matrix.
+
+    Attributes:
+        translation: 3-element array of translation offsets [tx, ty, tz].
+        rotation_matrix: 3x3 pure rotation matrix (det = +1).
+        euler_angles: 3-element array [alpha, beta, gamma] in radians,
+            using yaw-pitch-roll (ZYX intrinsic) convention.
+        scale: 3-element array of per-axis scale factors [sx, sy, sz].
+        shear: 3-element array of upper-triangular shear factors [h_xy, h_xz, h_yz].
+    """
+
+    translation: np.ndarray
+    rotation_matrix: np.ndarray
+    euler_angles: np.ndarray
+    scale: np.ndarray
+    shear: np.ndarray
+
+
+def decompose_affine_matrix(matrix: np.ndarray) -> AffineComponents:
+    """Decompose a 4x4 affine transformation matrix into translation, rotation, scale, and shear.
+
+    Uses Cholesky decomposition of the linear part to separate rotation, scale, and shear
+    components. Euler angles are extracted from the rotation matrix using the yaw-pitch-roll
+    (ZYX intrinsic) convention matching the existing pyspim matrix constructors.
+
+    Args:
+        matrix: A 4x4 affine transformation matrix (NumPy array).
+
+    Returns:
+        AffineComponents named tuple containing:
+            - translation: 3-element array of translation offsets [tx, ty, tz]
+            - rotation_matrix: 3x3 pure rotation matrix
+            - euler_angles: 3-element array [alpha, beta, gamma] in radians
+            - scale: 3-element array of per-axis scale factors [sx, sy, sz]
+            - shear: 3-element array of upper-triangular shear factors [h_xy, h_xz, h_yz]
+
+    Raises:
+        ValueError: If input is not a 4x4 matrix.
+        np.linalg.LinAlgError: If Cholesky decomposition fails
+            (matrix not positive definite).
+
+    Example:
+        >>> matrix = np.eye(4)
+        >>> comp = _decompose_affine_matrix(matrix)
+        >>> comp.translation
+        array([0., 0., 0.])
+        >>> comp.scale
+        array([1., 1., 1.])
+    """
+    if matrix.shape != (4, 4):
+        raise ValueError(
+            f"Expected a 4x4 affine matrix, got shape {matrix.shape}"
+        )
+
+    # Step 1: Extract translation from last column
+    translation = matrix[:3, 3].copy()
+
+    # Step 2: Extract the 3x3 linear part
+    RZS = matrix[:3, :3].copy()
+
+    # Step 3: Cholesky decomposition of RZS.T @ RZS
+    # RZS.T @ RZS is symmetric positive semi-definite for valid affine matrices
+    RZS_T_RZS = RZS.T @ RZS
+    ZS = np.linalg.cholesky(RZS_T_RZS).T  # Upper triangular
+
+    # Step 4: Extract scale (diagonal) and shear (off-diagonal)
+    scale = np.diag(ZS).copy()
+    shear_matrix = ZS / scale[:, np.newaxis]
+    shear = shear_matrix[np.triu(np.ones((3, 3)), 1).astype(bool)]
+
+    # Step 5: Compute rotation matrix
+    R = RZS @ np.linalg.inv(ZS)
+
+    # Step 6: Handle negative determinant (reflection)
+    if np.linalg.det(R) < 0:
+        scale[0] *= -1
+        ZS[0, :] *= -1
+        R = RZS @ np.linalg.inv(ZS)
+
+    # Step 7: Extract Euler angles (yaw-pitch-roll / ZYX intrinsic convention)
+    # Matches the convention in pyspim._matrix.rotation_matrix():
+    #   R = yaw(alpha) @ pitch(beta) @ roll(gamma)
+    # From the composition:
+    #   R[2,0] = -sin(beta)
+    #   R[1,0]/R[0,0] = tan(alpha)
+    #   R[2,1]/R[2,2] = tan(gamma)
+    euler_angles = _extract_euler_angles(R)
+
+    return AffineComponents(
+        translation=translation,
+        rotation_matrix=R,
+        euler_angles=euler_angles,
+        scale=scale,
+        shear=shear,
+    )
+
+
+def _extract_euler_angles(R: np.ndarray) -> np.ndarray:
+    """Extract yaw-pitch-roll Euler angles from a 3x3 rotation matrix.
+
+    Uses the ZYX intrinsic convention matching pyspim._matrix.rotation_matrix():
+        R = yaw(alpha) @ pitch(beta) @ roll(gamma)
+
+    Args:
+        R: 3x3 rotation matrix.
+
+    Returns:
+        3-element array [alpha, beta, gamma] in radians.
+    """
+    # beta from R[2, 0] = -sin(beta)
+    beta = -np.arcsin(np.clip(R[2, 0], -1.0, 1.0))
+
+    # Check for gimbal lock: |cos(beta)| near zero
+    cos_beta = np.cos(beta)
+    epsilon = 1e-12
+
+    if np.abs(cos_beta) < epsilon:
+        # Gimbal lock — beta ≈ ±π/2
+        # alpha is arbitrary; set to 0 and solve for gamma
+        alpha = 0.0
+        # When cos(beta) ≈ 0, R[0,1] = -sign(beta)*sin(gamma), R[0,2] = sign(beta)*cos(gamma)
+        sign_beta = -np.sign(R[2, 0])  # sin(beta) = -R[2,0]
+        gamma = np.arctan2(-sign_beta * R[0, 1], sign_beta * R[0, 2])
+    else:
+        # Normal case
+        alpha = np.arctan2(R[1, 0], R[0, 0])
+        gamma = np.arctan2(R[2, 1], R[2, 2])
+
+    return np.array([alpha, beta, gamma])
 
 
 def save_workflow_parameters(output_path: str, parameters: Dict[str, Any]) -> None:

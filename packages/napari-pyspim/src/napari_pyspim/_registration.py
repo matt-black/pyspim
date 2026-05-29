@@ -37,6 +37,7 @@ from qtpy.QtWidgets import (
 
 from ._remote_client import RemoteClient
 from ._sftp_browser import SftpBrowserDialog
+from ._utils import decompose_affine_matrix
 
 # Lazy imports to avoid CUDA compilation at module level
 # from pyspim.reg import pcc, powell
@@ -1738,6 +1739,59 @@ class RegistrationWidget(QWidget):
         finally:
             self._syncing_transforms = False
 
+    def _format_transform_details(self, transform_matrix, transform_type):
+        """Format the fitted transform components as an HTML string for display.
+
+        Uses ``decompose_affine_matrix`` to extract translation, rotation, scale,
+        and shear from the fitted registration matrix, then shows only the
+        components that are relevant for the selected transform type.
+
+        Args:
+            transform_matrix: 4x4 affine transformation matrix (NumPy array).
+            transform_type: One of "t", "t+r", "t+sh", "t+ssh", "t+r+s", "t+sh+s".
+
+        Returns:
+            HTML-formatted string with the relevant transform components.
+        """
+        try:
+            comp = decompose_affine_matrix(np.asarray(transform_matrix, dtype=float))
+        except (ValueError, np.linalg.LinAlgError):
+            return '<br><i>Could not decompose transform matrix.</i>'
+
+        lines = []
+
+        # Translation is always shown (in pixels)
+        tx, ty, tz = comp.translation
+        lines.append(
+            f'Translation (px): tx={tx:.2f}, ty={ty:.2f}, tz={tz:.2f}'
+        )
+
+        has_rotation = "r" in transform_type
+        has_shear = "sh" in transform_type
+        has_scale = transform_type.endswith("+s")
+
+        if has_rotation:
+            alpha_deg = np.degrees(comp.euler_angles[0])
+            beta_deg = np.degrees(comp.euler_angles[1])
+            gamma_deg = np.degrees(comp.euler_angles[2])
+            lines.append(
+                f'Rotation (deg): α={alpha_deg:.2f}, β={beta_deg:.2f}, γ={gamma_deg:.2f}'
+            )
+
+        if has_shear:
+            h_xy, h_xz, h_yz = comp.shear
+            lines.append(
+                f'Shear: h_xy={h_xy:.4f}, h_xz={h_xz:.4f}, h_yz={h_yz:.4f}'
+            )
+
+        if has_scale:
+            sx, sy, sz = comp.scale
+            lines.append(
+                f'Scale: sx={sx:.4f}, sy={sy:.4f}, sz={sz:.4f}'
+            )
+
+        return f"<br><b>Transform Details:</b><br>" + "<br>".join(lines)
+
     def _update_pre_reg_label(self):
         """Update the pre-reg transform label, displaying values in micrometers."""
         tz, ty, tx = self._pre_reg_transform
@@ -2063,10 +2117,14 @@ class RegistrationWidget(QWidget):
             f"Registration completed! A: {a_registered.shape}, B: {b_registered.shape}"
         )
 
+        transform_details = self._format_transform_details(
+            transform_matrix, result["transform_type"]
+        )
         results_text = f"""
         <b>Registration Results:</b><br>
         Metric: {cr:.3f}<br>
         Shape: {a_registered.shape}<br>
+        {transform_details}
         """
         self.results_label.setText(results_text)
 
@@ -2169,10 +2227,14 @@ class RegistrationWidget(QWidget):
         # Update status and results
         self.status_label.setText("Registration completed on remote server!")
 
+        transform_details = self._format_transform_details(
+            transform_matrix, self.transform_combo.currentText()
+        )
         results_text = f"""
         <b>Registration Results:</b><br>
         Metric: {cr:.3f}<br>
-        (Volumes remain on remote server)
+        (Volumes remain on remote server)<br>
+        {transform_details}
         """
         self.results_label.setText(results_text)
 
