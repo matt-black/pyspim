@@ -911,15 +911,23 @@ class RegistrationWidget(QWidget):
         self.projection_zy_a_reg_layer = None
         self.projection_xz_a_reg_layer = None
         # Crop shapes layer references (3 layers for YX, ZY, XZ projections)
+        # These are the "Apply" ROI layers used for output cropping
         self.shapes_yx_layer = None
         self.shapes_zy_layer = None
         self.shapes_xz_layer = None
+        # Registration-specific crop shapes layer references (3 layers for YX, ZY, XZ)
+        # These are the "Reg" ROI layers used only during registration
+        self.shapes_yx_reg_layer = None
+        self.shapes_zy_reg_layer = None
+        self.shapes_xz_reg_layer = None
         # Pre-registration transform state (stored in micrometers: [tz, ty, tx])
         self._pre_reg_transform = [0.0, 0.0, 0.0]
         # Flag to prevent recursive sync when programmatically updating layers
         self._syncing_transforms = False
-        # Flag to prevent recursive shape updates during cross-view sync
+        # Flag to prevent recursive shape updates during cross-view sync (Apply layers)
         self._syncing_shapes = False
+        # Flag to prevent recursive shape updates during cross-view sync (Reg layers)
+        self._syncing_reg_shapes = False
         # Store pixel size for layer scale
         self._pixel_size = None
         # Store registration results for saving
@@ -1358,13 +1366,20 @@ class RegistrationWidget(QWidget):
             layers_to_remove.append(self.projection_zy_a_reg_layer)
         if self.projection_xz_a_reg_layer:
             layers_to_remove.append(self.projection_xz_a_reg_layer)
-        # Crop shapes layers
+        # Crop shapes layers (Apply ROI)
         if self.shapes_yx_layer:
             layers_to_remove.append(self.shapes_yx_layer)
         if self.shapes_zy_layer:
             layers_to_remove.append(self.shapes_zy_layer)
         if self.shapes_xz_layer:
             layers_to_remove.append(self.shapes_xz_layer)
+        # Registration crop shapes layers (Reg ROI)
+        if self.shapes_yx_reg_layer:
+            layers_to_remove.append(self.shapes_yx_reg_layer)
+        if self.shapes_zy_reg_layer:
+            layers_to_remove.append(self.shapes_zy_reg_layer)
+        if self.shapes_xz_reg_layer:
+            layers_to_remove.append(self.shapes_xz_reg_layer)
 
         for layer in layers_to_remove:
             try:
@@ -1385,15 +1400,20 @@ class RegistrationWidget(QWidget):
         self.projection_yx_a_reg_layer = None
         self.projection_zy_a_reg_layer = None
         self.projection_xz_a_reg_layer = None
-        # Reset crop shapes layers
+        # Reset crop shapes layers (Apply ROI)
         self.shapes_yx_layer = None
         self.shapes_zy_layer = None
         self.shapes_xz_layer = None
+        # Reset registration crop shapes layers (Reg ROI)
+        self.shapes_yx_reg_layer = None
+        self.shapes_zy_reg_layer = None
+        self.shapes_xz_reg_layer = None
 
         # Reset pre-reg transform state
         self._pre_reg_transform = [0.0, 0.0, 0.0]
         self._syncing_transforms = False
         self._syncing_shapes = False
+        self._syncing_reg_shapes = False
         self._pixel_size = None
         self.reset_transform_button.setEnabled(False)
         self._update_pre_reg_label()
@@ -1638,9 +1658,58 @@ class RegistrationWidget(QWidget):
             )
 
             # --- Add crop shapes layers ---
-            # YX shapes layer: display (X, Y), row=X, col=Y
+            # Two sets of ROI layers:
+            # 1. "Reg" layers (orange) - used for registration cropping
+            # 2. Apply layers (lime) - used for output cropping in Apply
+            # Both start identical at full projection bounds.
+            # Reg ROI must always be within Apply ROI bounds.
+
+            # YX shapes layer (Reg ROI): display (X, Y), row=X, col=Y
             X, Y = yx_proj_a_t.shape
             yx_rect = [[(0, 0), (0, Y - 1), (X - 1, Y - 1), (X - 1, 0)]]
+            self.shapes_yx_reg_layer = self.viewer.add_shapes(
+                yx_rect,
+                shape_type="rectangle",
+                name="Reg. YX Crop ROI",
+                edge_color="orange",
+                face_color="transparent",
+                edge_width=2,
+                scale=(pixel_size, pixel_size),
+                translate=self.projection_yx_a_layer.translate,
+            )
+            self.shapes_yx_reg_layer.editable = True
+
+            # ZY shapes layer (Reg ROI): display (Z, Y), row=Z, col=Y
+            Z, Y_zy = zy_proj_a.shape
+            zy_rect = [[(0, 0), (0, Y_zy - 1), (Z - 1, Y_zy - 1), (Z - 1, 0)]]
+            self.shapes_zy_reg_layer = self.viewer.add_shapes(
+                zy_rect,
+                shape_type="rectangle",
+                name="Reg. ZY Crop ROI",
+                edge_color="orange",
+                face_color="transparent",
+                edge_width=2,
+                scale=(pixel_size, pixel_size),
+                translate=self.projection_zy_a_layer.translate,
+            )
+            self.shapes_zy_reg_layer.editable = True
+
+            # XZ shapes layer (Reg ROI): display (X, Z), row=X, col=Z
+            X_xz, Z_xz = xz_proj_a_t.shape
+            xz_rect = [[(0, 0), (0, Z_xz - 1), (X_xz - 1, Z_xz - 1), (X_xz - 1, 0)]]
+            self.shapes_xz_reg_layer = self.viewer.add_shapes(
+                xz_rect,
+                shape_type="rectangle",
+                name="Reg. XZ Crop ROI",
+                edge_color="orange",
+                face_color="transparent",
+                edge_width=2,
+                scale=(pixel_size, pixel_size),
+                translate=self.projection_xz_a_layer.translate,
+            )
+            self.shapes_xz_reg_layer.editable = True
+
+            # YX shapes layer (Apply ROI): display (X, Y), row=X, col=Y
             self.shapes_yx_layer = self.viewer.add_shapes(
                 yx_rect,
                 shape_type="rectangle",
@@ -1653,9 +1722,7 @@ class RegistrationWidget(QWidget):
             )
             self.shapes_yx_layer.editable = True
 
-            # ZY shapes layer: display (Z, Y), row=Z, col=Y
-            Z, Y_zy = zy_proj_a.shape
-            zy_rect = [[(0, 0), (0, Y_zy - 1), (Z - 1, Y_zy - 1), (Z - 1, 0)]]
+            # ZY shapes layer (Apply ROI): display (Z, Y), row=Z, col=Y
             self.shapes_zy_layer = self.viewer.add_shapes(
                 zy_rect,
                 shape_type="rectangle",
@@ -1668,9 +1735,7 @@ class RegistrationWidget(QWidget):
             )
             self.shapes_zy_layer.editable = True
 
-            # XZ shapes layer: display (X, Z), row=X, col=Z
-            X_xz, Z_xz = xz_proj_a_t.shape
-            xz_rect = [[(0, 0), (0, Z_xz - 1), (X_xz - 1, Z_xz - 1), (X_xz - 1, 0)]]
+            # XZ shapes layer (Apply ROI): display (X, Z), row=X, col=Z
             self.shapes_xz_layer = self.viewer.add_shapes(
                 xz_rect,
                 shape_type="rectangle",
@@ -1683,10 +1748,15 @@ class RegistrationWidget(QWidget):
             )
             self.shapes_xz_layer.editable = True
 
-            # Connect shapes data change events for cross-view sync
+            # Connect shapes data change events for cross-view sync (Apply layers)
             self.shapes_yx_layer.events.data.connect(self.on_yx_shapes_changed)
             self.shapes_zy_layer.events.data.connect(self.on_zy_shapes_changed)
             self.shapes_xz_layer.events.data.connect(self.on_xz_shapes_changed)
+
+            # Connect shapes data change events for cross-view sync (Reg layers)
+            self.shapes_yx_reg_layer.events.data.connect(self.on_yx_reg_shapes_changed)
+            self.shapes_zy_reg_layer.events.data.connect(self.on_zy_reg_shapes_changed)
+            self.shapes_xz_reg_layer.events.data.connect(self.on_xz_reg_shapes_changed)
 
             # Connect affine change events for View B layers
             # The Transform mode in napari updates layer.affine, not layer.translate
@@ -1855,6 +1925,7 @@ class RegistrationWidget(QWidget):
                     new_xz_corners.append([new_x, z])
                 self.shapes_xz_layer.data = [new_xz_corners]
         finally:
+            self._clamp_reg_to_apply()
             self._syncing_shapes = False
 
     def on_zy_shapes_changed(self):
@@ -1900,6 +1971,7 @@ class RegistrationWidget(QWidget):
                     new_xz_corners.append([x, new_z])
                 self.shapes_xz_layer.data = [new_xz_corners]
         finally:
+            self._clamp_reg_to_apply()
             self._syncing_shapes = False
 
     def on_xz_shapes_changed(self):
@@ -1945,10 +2017,257 @@ class RegistrationWidget(QWidget):
                     new_zy_corners.append([new_z, y])
                 self.shapes_zy_layer.data = [new_zy_corners]
         finally:
+            self._clamp_reg_to_apply()
             self._syncing_shapes = False
 
-    def _extract_crop_bounds(self) -> tuple:
-        """Extract 3D crop bounds from YX, ZY, and XZ shapes layers.
+    def on_yx_reg_shapes_changed(self):
+        """Handle changes to Reg YX shapes layer - sync Y to Reg ZY, X to Reg XZ.
+
+        YX display (X, Y): row=X, col=Y
+        ZY display (Z, Y): row=Z, col=Y  -> sync Y (col)
+        XZ display (X, Z): row=X, col=Z  -> sync X (row)
+        """
+        if self._syncing_reg_shapes:
+            return
+        self._syncing_reg_shapes = True
+        try:
+            if not self.shapes_yx_reg_layer or len(self.shapes_yx_reg_layer.data) == 0:
+                return
+            yx_corners = list(self.shapes_yx_reg_layer.data[0])
+            y_min = int(min(c[1] for c in yx_corners))
+            y_max = int(max(c[1] for c in yx_corners))
+            x_min = int(min(c[0] for c in yx_corners))
+            x_max = int(max(c[0] for c in yx_corners))
+
+            # Sync Y to Reg ZY layer (col = Y)
+            if self.shapes_zy_reg_layer and len(self.shapes_zy_reg_layer.data) > 0:
+                zy_corners = list(self.shapes_zy_reg_layer.data[0])
+                zy_y_min = min(c[1] for c in zy_corners)
+                zy_y_max = max(c[1] for c in zy_corners)
+                new_zy_corners = []
+                for corner in zy_corners:
+                    z, y = corner
+                    new_y = y_min if y == zy_y_min else y_max
+                    new_zy_corners.append([z, new_y])
+                self.shapes_zy_reg_layer.data = [new_zy_corners]
+
+            # Sync X to Reg XZ layer (row = X)
+            if self.shapes_xz_reg_layer and len(self.shapes_xz_reg_layer.data) > 0:
+                xz_corners = list(self.shapes_xz_reg_layer.data[0])
+                xz_x_min = min(c[0] for c in xz_corners)
+                xz_x_max = max(c[0] for c in xz_corners)
+                new_xz_corners = []
+                for corner in xz_corners:
+                    x, z = corner
+                    new_x = x_min if x == xz_x_min else x_max
+                    new_xz_corners.append([new_x, z])
+                self.shapes_xz_reg_layer.data = [new_xz_corners]
+        finally:
+            self._clamp_reg_to_apply()
+            self._syncing_reg_shapes = False
+
+    def on_zy_reg_shapes_changed(self):
+        """Handle changes to Reg ZY shapes layer - sync Y to Reg YX, Z to Reg XZ.
+
+        ZY display (Z, Y): row=Z, col=Y
+        YX display (X, Y): row=X, col=Y  -> sync Y (col)
+        XZ display (X, Z): row=X, col=Z  -> sync Z (col)
+        """
+        if self._syncing_reg_shapes:
+            return
+        self._syncing_reg_shapes = True
+        try:
+            if not self.shapes_zy_reg_layer or len(self.shapes_zy_reg_layer.data) == 0:
+                return
+            zy_corners = list(self.shapes_zy_reg_layer.data[0])
+            y_min = int(min(c[1] for c in zy_corners))
+            y_max = int(max(c[1] for c in zy_corners))
+            z_min = int(min(c[0] for c in zy_corners))
+            z_max = int(max(c[0] for c in zy_corners))
+
+            # Sync Y to Reg YX layer (col = Y)
+            if self.shapes_yx_reg_layer and len(self.shapes_yx_reg_layer.data) > 0:
+                yx_corners = list(self.shapes_yx_reg_layer.data[0])
+                yx_y_min = min(c[1] for c in yx_corners)
+                yx_y_max = max(c[1] for c in yx_corners)
+                new_yx_corners = []
+                for corner in yx_corners:
+                    x, y = corner
+                    new_y = y_min if y == yx_y_min else y_max
+                    new_yx_corners.append([x, new_y])
+                self.shapes_yx_reg_layer.data = [new_yx_corners]
+
+            # Sync Z to Reg XZ layer (col = Z)
+            if self.shapes_xz_reg_layer and len(self.shapes_xz_reg_layer.data) > 0:
+                xz_corners = list(self.shapes_xz_reg_layer.data[0])
+                xz_z_min = min(c[1] for c in xz_corners)
+                xz_z_max = max(c[1] for c in xz_corners)
+                new_xz_corners = []
+                for corner in xz_corners:
+                    x, z = corner
+                    new_z = z_min if z == xz_z_min else z_max
+                    new_xz_corners.append([x, new_z])
+                self.shapes_xz_reg_layer.data = [new_xz_corners]
+        finally:
+            self._clamp_reg_to_apply()
+            self._syncing_reg_shapes = False
+
+    def on_xz_reg_shapes_changed(self):
+        """Handle changes to Reg XZ shapes layer - sync X to Reg YX, Z to Reg ZY.
+
+        XZ display (X, Z): row=X, col=Z
+        YX display (X, Y): row=X, col=Y  -> sync X (row)
+        ZY display (Z, Y): row=Z, col=Y  -> sync Z (row)
+        """
+        if self._syncing_reg_shapes:
+            return
+        self._syncing_reg_shapes = True
+        try:
+            if not self.shapes_xz_reg_layer or len(self.shapes_xz_reg_layer.data) == 0:
+                return
+            xz_corners = list(self.shapes_xz_reg_layer.data[0])
+            x_min = int(min(c[0] for c in xz_corners))
+            x_max = int(max(c[0] for c in xz_corners))
+            z_min = int(min(c[1] for c in xz_corners))
+            z_max = int(max(c[1] for c in xz_corners))
+
+            # Sync X to Reg YX layer (row = X)
+            if self.shapes_yx_reg_layer and len(self.shapes_yx_reg_layer.data) > 0:
+                yx_corners = list(self.shapes_yx_reg_layer.data[0])
+                yx_x_min = min(c[0] for c in yx_corners)
+                yx_x_max = max(c[0] for c in yx_corners)
+                new_yx_corners = []
+                for corner in yx_corners:
+                    x, y = corner
+                    new_x = x_min if x == yx_x_min else x_max
+                    new_yx_corners.append([new_x, y])
+                self.shapes_yx_reg_layer.data = [new_yx_corners]
+
+            # Sync Z to Reg ZY layer (row = Z)
+            if self.shapes_zy_reg_layer and len(self.shapes_zy_reg_layer.data) > 0:
+                zy_corners = list(self.shapes_zy_reg_layer.data[0])
+                zy_z_min = min(c[0] for c in zy_corners)
+                zy_z_max = max(c[0] for c in zy_corners)
+                new_zy_corners = []
+                for corner in zy_corners:
+                    z, y = corner
+                    new_z = z_min if z == zy_z_min else z_max
+                    new_zy_corners.append([new_z, y])
+                self.shapes_zy_reg_layer.data = [new_zy_corners]
+        finally:
+            self._clamp_reg_to_apply()
+            self._syncing_reg_shapes = False
+
+    def _clamp_reg_to_apply(self):
+        """Clamp Reg ROI layers to fit within Apply ROI bounds.
+
+        After the user modifies either set of ROIs, this ensures the Reg ROI
+        is always within the Apply ROI. If Apply shrinks, Reg is clamped.
+        If Apply grows, Reg stays where it is (unless already outside).
+        """
+        # Guard against layers not yet created
+        if (self.shapes_yx_layer is None or self.shapes_yx_reg_layer is None or
+                self.shapes_zy_layer is None or self.shapes_zy_reg_layer is None or
+                self.shapes_xz_layer is None or self.shapes_xz_reg_layer is None):
+            return
+        if (len(self.shapes_yx_layer.data) == 0 or
+                len(self.shapes_yx_reg_layer.data) == 0):
+            return
+
+        # Prevent recursive updates in both sync systems
+        self._syncing_reg_shapes = True
+        try:
+            # Extract Apply bounds
+            apply_yx = list(self.shapes_yx_layer.data[0])
+            apply_y_min = int(min(c[1] for c in apply_yx))
+            apply_y_max = int(max(c[1] for c in apply_yx))
+            apply_x_min = int(min(c[0] for c in apply_yx))
+            apply_x_max = int(max(c[0] for c in apply_yx))
+
+            apply_zy = list(self.shapes_zy_layer.data[0])
+            apply_z_min = int(min(c[0] for c in apply_zy))
+            apply_z_max = int(max(c[0] for c in apply_zy))
+
+            changed = False
+
+            # Clamp Reg YX layer
+            reg_yx = list(self.shapes_yx_reg_layer.data[0])
+            reg_y_min = int(min(c[1] for c in reg_yx))
+            reg_y_max = int(max(c[1] for c in reg_yx))
+            reg_x_min = int(min(c[0] for c in reg_yx))
+            reg_x_max = int(max(c[0] for c in reg_yx))
+
+            new_reg_y_min = max(reg_y_min, apply_y_min)
+            new_reg_y_max = min(reg_y_max, apply_y_max)
+            new_reg_x_min = max(reg_x_min, apply_x_min)
+            new_reg_x_max = min(reg_x_max, apply_x_max)
+
+            if (new_reg_y_min != reg_y_min or new_reg_y_max != reg_y_max or
+                    new_reg_x_min != reg_x_min or new_reg_x_max != reg_x_max):
+                new_corners = []
+                for corner in reg_yx:
+                    x, y = corner
+                    new_x = new_reg_x_min if x == reg_x_min else new_reg_x_max
+                    new_y = new_reg_y_min if y == reg_y_min else new_reg_y_max
+                    new_corners.append([new_x, new_y])
+                self.shapes_yx_reg_layer.data = [new_corners]
+                changed = True
+
+            # Clamp Reg ZY layer
+            reg_zy = list(self.shapes_zy_reg_layer.data[0])
+            reg_zy_y_min = int(min(c[1] for c in reg_zy))
+            reg_zy_y_max = int(max(c[1] for c in reg_zy))
+            reg_z_min = int(min(c[0] for c in reg_zy))
+            reg_z_max = int(max(c[0] for c in reg_zy))
+
+            new_reg_zy_y_min = max(reg_zy_y_min, apply_y_min)
+            new_reg_zy_y_max = min(reg_zy_y_max, apply_y_max)
+            new_reg_z_min = max(reg_z_min, apply_z_min)
+            new_reg_z_max = min(reg_z_max, apply_z_max)
+
+            if (new_reg_zy_y_min != reg_zy_y_min or new_reg_zy_y_max != reg_zy_y_max or
+                    new_reg_z_min != reg_z_min or new_reg_z_max != reg_z_max):
+                new_corners = []
+                for corner in reg_zy:
+                    z, y = corner
+                    new_z = new_reg_z_min if z == reg_z_min else new_reg_z_max
+                    new_y = new_reg_zy_y_min if y == reg_zy_y_min else new_reg_zy_y_max
+                    new_corners.append([new_z, new_y])
+                self.shapes_zy_reg_layer.data = [new_corners]
+                changed = True
+
+            # Clamp Reg XZ layer
+            reg_xz = list(self.shapes_xz_reg_layer.data[0])
+            reg_xz_x_min = int(min(c[0] for c in reg_xz))
+            reg_xz_x_max = int(max(c[0] for c in reg_xz))
+            reg_xz_z_min = int(min(c[1] for c in reg_xz))
+            reg_xz_z_max = int(max(c[1] for c in reg_xz))
+
+            new_reg_xz_x_min = max(reg_xz_x_min, apply_x_min)
+            new_reg_xz_x_max = min(reg_xz_x_max, apply_x_max)
+            new_reg_xz_z_min = max(reg_xz_z_min, apply_z_min)
+            new_reg_xz_z_max = min(reg_xz_z_max, apply_z_max)
+
+            if (new_reg_xz_x_min != reg_xz_x_min or new_reg_xz_x_max != reg_xz_x_max or
+                    new_reg_xz_z_min != reg_xz_z_min or new_reg_xz_z_max != reg_xz_z_max):
+                new_corners = []
+                for corner in reg_xz:
+                    x, z = corner
+                    new_x = new_reg_xz_x_min if x == reg_xz_x_min else new_reg_xz_x_max
+                    new_z = new_reg_xz_z_min if z == reg_xz_z_min else new_reg_xz_z_max
+                    new_corners.append([new_x, new_z])
+                self.shapes_xz_reg_layer.data = [new_corners]
+                changed = True
+        finally:
+            self._syncing_reg_shapes = False
+
+    def _extract_crop_bounds(self, for_registration: bool = False) -> tuple:
+        """Extract 3D crop bounds from shapes layers.
+
+        Parameters
+        ----------
+        for_registration : bool
+            If True, extract from Reg layers. If False, extract from Apply layers.
 
         Returns
         -------
@@ -1956,20 +2275,29 @@ class RegistrationWidget(QWidget):
             (z_start, z_end, y_start, y_end, x_start, x_end) in pixel units
             relative to deskewed View A coordinates.
         """
+        if for_registration:
+            yx_layer = self.shapes_yx_reg_layer
+            zy_layer = self.shapes_zy_reg_layer
+            xz_layer = self.shapes_xz_reg_layer
+        else:
+            yx_layer = self.shapes_yx_layer
+            zy_layer = self.shapes_zy_layer
+            xz_layer = self.shapes_xz_layer
+
         # Commit pending interactive edits
-        self._commit_shape_edits(self.shapes_yx_layer)
-        self._commit_shape_edits(self.shapes_zy_layer)
-        self._commit_shape_edits(self.shapes_xz_layer)
+        self._commit_shape_edits(yx_layer)
+        self._commit_shape_edits(zy_layer)
+        self._commit_shape_edits(xz_layer)
 
         # Extract from YX (display: X, Y) -> row=X, col=Y
-        yx_corners = list(self.shapes_yx_layer.data[0])
+        yx_corners = list(yx_layer.data[0])
         x_start = int(min(c[0] for c in yx_corners))
         x_end = int(max(c[0] for c in yx_corners)) + 1
         y_start = int(min(c[1] for c in yx_corners))
         y_end = int(max(c[1] for c in yx_corners)) + 1
 
         # Extract from ZY (display: Z, Y) -> row=Z, col=Y
-        zy_corners = list(self.shapes_zy_layer.data[0])
+        zy_corners = list(zy_layer.data[0])
         z_start = int(min(c[0] for c in zy_corners))
         z_end = int(max(c[0] for c in zy_corners)) + 1
 
@@ -2098,8 +2426,8 @@ class RegistrationWidget(QWidget):
         t0 = [t / pixel_size for t in self._pre_reg_transform]
         tz, ty, tx = t0
 
-        # Extract crop bounds from shapes layers
-        z_start, z_end, y_start, y_end, x_start, x_end = self._extract_crop_bounds()
+        # Extract crop bounds from Reg shapes layers (for registration)
+        z_start, z_end, y_start, y_end, x_start, x_end = self._extract_crop_bounds(for_registration=True)
 
         # Crop View A to crop region
         crop_slices_a = (
@@ -2206,8 +2534,8 @@ class RegistrationWidget(QWidget):
         }
         interp_method = interp_method_map.get(self.interp_method_combo.currentText(), "cubspl")
 
-        # Extract crop bounds from shapes layers
-        z_start, z_end, y_start, y_end, x_start, x_end = self._extract_crop_bounds()
+        # Extract crop bounds from Reg shapes layers (for registration)
+        z_start, z_end, y_start, y_end, x_start, x_end = self._extract_crop_bounds(for_registration=True)
 
         params = {
             "session_id": self._session_id,
@@ -2591,6 +2919,14 @@ class RegistrationWidget(QWidget):
             "Cubic Spline": "cubspl",
         }
 
+        # Extract Apply crop bounds (for output cropping in Apply)
+        (apply_z_start, apply_z_end, apply_y_start, apply_y_end,
+         apply_x_start, apply_x_end) = self._extract_crop_bounds(for_registration=False)
+
+        # Extract Reg crop bounds (used during registration)
+        (reg_z_start, reg_z_end, reg_y_start, reg_y_end,
+         reg_x_start, reg_x_end) = self._extract_crop_bounds(for_registration=True)
+
         return {
             "deskewing_parameters": {
                 "method": self.method_combo.currentText(),
@@ -2619,6 +2955,22 @@ class RegistrationWidget(QWidget):
             },
             "affine_registration_matrix": self.registration_matrix.tolist() if hasattr(self.registration_matrix, "tolist") else self.registration_matrix,
             "correlation_ratio": self.correlation_ratio,
+            "crop_bounds": {
+                "z_start": apply_z_start,
+                "z_end": apply_z_end,
+                "y_start": apply_y_start,
+                "y_end": apply_y_end,
+                "x_start": apply_x_start,
+                "x_end": apply_x_end,
+            },
+            "reg_crop_bounds": {
+                "z_start": reg_z_start,
+                "z_end": reg_z_end,
+                "y_start": reg_y_start,
+                "y_end": reg_y_end,
+                "x_start": reg_x_start,
+                "x_end": reg_x_end,
+            },
         }
 
     def _save_params_local(self, data_path: str, params_dict: dict):
