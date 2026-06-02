@@ -1104,7 +1104,7 @@ class RegistrationWidget(QWidget):
         params_layout.addRow("Interpolation Method:", self.interp_method_combo)
 
         self.opt_method_combo = QComboBox()
-        self.opt_method_combo.addItems(["Powell", "L-BFGS-B", "COBYLA", "Nelder-Mead", "TNC"])
+        self.opt_method_combo.addItems(["Powell", "L-BFGS-B", "COBYLA", "COBYQA", "Nelder-Mead", "TNC"])
         self.opt_method_combo.setCurrentText("Powell")
         params_layout.addRow("Optimization Method:", self.opt_method_combo)
 

@@ -51,7 +51,7 @@ def optimize_affine(
     :param bounds: bounds for parameters
     :type bounds: list
     :param opt_method: optimization method for scipy.optimize.minimize
-        supported: 'powell' (default), 'L-BFGS-B', 'Nelder-Mead', 'TNC', 'COBYLA'
+        supported: 'powell' (default), 'L-BFGS-B', 'Nelder-Mead', 'TNC', 'COBYLA', 'COBYQA'
     :type opt_method: str
     :param verbose: show intermediate results with tqdm progress bar
     :type verbose: bool
