@@ -68,7 +68,7 @@ class LoadDeskewWorker(QThread):
     ):
         super().__init__()
         self.data_path = data_path
-        self.channel = channel  # 0-indexed
+        self.channel = channel
         self.projection_type = projection_type
         self.pixel_size = pixel_size
         self.step_size = step_size
@@ -527,7 +527,7 @@ class ApplyWorker(QThread):
         data_path: str,
         params_path: str,
         time_range: tuple,
-        channel_range: tuple,  # 1-indexed
+        channel_range: tuple,
         multi_pos: bool,
         position: int,
         output_folder: str,
@@ -638,9 +638,9 @@ class ApplyWorker(QThread):
             os.makedirs(self.output_folder, exist_ok=True)
             print(f"[ApplyWorker] Output folder created: {self.output_folder}")
 
-            # Determine channel indices (0-indexed)
-            chan_start = self.channel_range[0] - 1
-            chan_end = self.channel_range[1] - 1
+            # Determine channel indices (already 0-indexed)
+            chan_start = self.channel_range[0]
+            chan_end = self.channel_range[1]
             channels = list(range(chan_start, chan_end + 1))
             n_channels = len(channels)
 
@@ -753,7 +753,7 @@ class ApplyWorker(QThread):
                 current_item += 1
                 percentage = int((current_item / total_items) * 100)
                 self.progress_updated.emit(
-                    f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage
+                    f"Time {t}, Channel {first_chan} done ({percentage}%)", percentage
                 )
 
                 # Helper to save TIFF after all channels are written
@@ -859,7 +859,7 @@ class ApplyWorker(QThread):
                     current_item += 1
                     percentage = int((current_item / total_items) * 100)
                     self.progress_updated.emit(
-                        f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage
+                        f"Time {t}, Channel {chan_idx} done ({percentage}%)", percentage
                     )
 
                 # Save TIFF files after all channels for this timepoint are written
@@ -964,10 +964,10 @@ class RegistrationWidget(QWidget):
 
         path_layout.addRow("Data Path:", path_row)
 
-        # Channel selection (1-indexed)
+        # Channel selection
         self.channel_spin = QSpinBox()
-        self.channel_spin.setRange(1, 20)
-        self.channel_spin.setValue(1)
+        self.channel_spin.setRange(0, 19)
+        self.channel_spin.setValue(0)
         path_layout.addRow("Channel:", self.channel_spin)
 
         # Multi-Position checkbox
@@ -1193,11 +1193,11 @@ class RegistrationWidget(QWidget):
         chan_row = QHBoxLayout()
         chan_row.addWidget(QLabel("Channel:"))
         self.channel_min_spin = QSpinBox()
-        self.channel_min_spin.setRange(1, 20)
-        self.channel_min_spin.setValue(1)
+        self.channel_min_spin.setRange(0, 19)
+        self.channel_min_spin.setValue(0)
         self.channel_max_spin = QSpinBox()
-        self.channel_max_spin.setRange(1, 20)
-        self.channel_max_spin.setValue(1)
+        self.channel_max_spin.setRange(0, 19)
+        self.channel_max_spin.setValue(0)
         chan_row.addWidget(self.channel_min_spin)
         chan_row.addWidget(QLabel("-"))
         chan_row.addWidget(self.channel_max_spin)
@@ -1429,7 +1429,7 @@ class RegistrationWidget(QWidget):
         otherwise falls back to local execution.
         """
         data_path = self.path_edit.text()
-        channel = self.channel_spin.value() - 1  # Convert to 0-indexed
+        channel = self.channel_spin.value()
         projection_type = self.projection_combo.currentText()
         multi_pos = self.multi_pos_checkbox.isChecked()
         time = self.time_spin.value()
@@ -3087,10 +3087,10 @@ class RegistrationWidget(QWidget):
             self.time_max_spin.setRange(0, max(0, n_time - 1))
             self.time_min_spin.setValue(0)
             self.time_max_spin.setValue(n_time - 1)
-            self.channel_min_spin.setRange(1, max(1, n_chan))
-            self.channel_max_spin.setRange(1, max(1, n_chan))
-            self.channel_min_spin.setValue(1)
-            self.channel_max_spin.setValue(n_chan)
+            self.channel_min_spin.setRange(0, max(0, n_chan - 1))
+            self.channel_max_spin.setRange(0, max(0, n_chan - 1))
+            self.channel_min_spin.setValue(0)
+            self.channel_max_spin.setValue(n_chan - 1)
             self._set_apply_enabled(True)
         else:
             self._set_apply_enabled(False)

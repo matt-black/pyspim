@@ -193,10 +193,10 @@ class RoiDetectionWidget(QWidget):
 
         path_layout.addRow("Data Path:", path_row)
 
-        # Channel selection (1-indexed)
+        # Channel selection (0-indexed)
         self.channel_spin = QSpinBox()
-        self.channel_spin.setRange(1, 20)
-        self.channel_spin.setValue(1)
+        self.channel_spin.setRange(0, 19)
+        self.channel_spin.setValue(0)
         path_layout.addRow("Channel:", self.channel_spin)
 
         # Multi-Position checkbox
@@ -384,7 +384,7 @@ class RoiDetectionWidget(QWidget):
         otherwise falls back to local execution.
         """
         data_path = self.path_edit.text()
-        channel = self.channel_spin.value() - 1  # Convert to 0-indexed
+        channel = self.channel_spin.value()
         projection_type = self.projection_combo.currentText()
         multi_pos = self.multi_pos_checkbox.isChecked()
         time = self.time_spin.value()

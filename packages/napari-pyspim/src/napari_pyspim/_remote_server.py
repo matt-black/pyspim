@@ -1102,7 +1102,7 @@ def handle_apply_registration(params: dict) -> dict:
         time_range : tuple
             (time_min, time_max) inclusive range of timepoints.
         channel_range : tuple
-            (chan_min, chan_max) 1-indexed inclusive range of channels.
+            (chan_min, chan_max) 0-indexed inclusive range of channels.
         multi_pos : bool
             Whether this is a multi-position acquisition.
         position : int
@@ -1188,9 +1188,9 @@ def handle_apply_registration(params: dict) -> dict:
         shutil.rmtree(output_folder)
     os.makedirs(output_folder, exist_ok=True)
 
-    # Determine channel indices (0-indexed)
-    chan_start = channel_range[0] - 1
-    chan_end = channel_range[1] - 1
+    # Determine channel indices
+    chan_start = channel_range[0]
+    chan_end = channel_range[1]
     channels = list(range(chan_start, chan_end + 1))
     n_channels = len(channels)
 
@@ -1295,7 +1295,7 @@ def handle_apply_registration(params: dict) -> dict:
         percentage = int((current_item / total_items) * 100)
         send_progress(
             sys.stdout, request_id,
-            f"Time {t}, Channel {first_chan + 1} done ({percentage}%)", percentage,
+            f"Time {t}, Channel {first_chan} done ({percentage}%)", percentage,
         )
 
         # Helper to save TIFF after all channels are written
@@ -1391,7 +1391,7 @@ def handle_apply_registration(params: dict) -> dict:
             percentage = int((current_item / total_items) * 100)
             send_progress(
                 sys.stdout, request_id,
-                f"Time {t}, Channel {chan_idx + 1} done ({percentage}%)", percentage,
+                f"Time {t}, Channel {chan_idx} done ({percentage}%)", percentage,
             )
 
         # Save TIFF files after all channels for this timepoint are written
