@@ -1,4 +1,4 @@
-import itertools
+from itertools import product
 from typing import Optional, Tuple
 
 import cupy
@@ -171,8 +171,8 @@ def calculate_conv_chunks(
     z: int,
     r: int,
     c: int,
-    chunk_shape: int | Tuple[int, int, int],
-    overlap: int | Tuple[int, int, int],
+    chunk_shape: tuple[int, int, int],
+    overlap: tuple[int, int, int],
     channel_slice: slice | None,
 ) -> dict[int, ChunkProps]:
     """Compute how an array to be convolved should be chunked into parts for chunkwise convolution.
@@ -181,32 +181,14 @@ def calculate_conv_chunks(
         z (int): linear shape of volume, in z-direction
         r (int): linear shape of volume, in r-direction (# rows)
         c (int): linear shape of volume, in c-direction (# columns)
-        chunk_shape (int | Tuple[int,int,int]): shape of chunk. If ``int``, chunks are assumed cubic, otherwise a tuple with int for each dimension.
-        overlap (int | Tuple[int,int,int]): amount of overlap (in pixels) between chunks.
+        chunk_shape (int | tuple[int,int,int]): shape of chunk. If ``int``, chunks are assumed cubic, otherwise a tuple with int for each dimension.
+        overlap (int | tuple[int,int,int]): amount of overlap (in pixels) between chunks.
         channel_slice (slice | None): how to slice channels in output. If ``None``, all channels are taken.
 
     Returns:
         dict[int,ChunkProps]
     """
     shape = tuple([z, r, c])
-    if isinstance(chunk_shape, int):
-        chunk_shape = tuple(
-            [
-                chunk_shape,
-            ]
-            * 3
-        )
-    else:
-        chunk_shape = chunk_shape
-    if isinstance(overlap, int):
-        overlap = tuple(
-            [
-                overlap,
-            ]
-            * 3
-        )
-    else:
-        overlap = overlap
     # determine padding & resulting shape
     pad_size = [_pad_amount(d, cd) for d, cd in zip(shape, chunk_shape)]
     pads = [_pad_splits(p) for p in pad_size]
@@ -218,7 +200,7 @@ def calculate_conv_chunks(
     assert all([n * c == s for n, c, s in zip(n_chunk, chunk_shape, padded_shape)]), (
         "padding didnt ensure correct division"
     )
-    chunk_mults = itertools.product(*[range(n) for n in n_chunk])
+    chunk_mults = product(*[range(n) for n in n_chunk])
     chunk_windows = {}
     for chunk_idx, chunk_mult in enumerate(chunk_mults):
         # these indices represent where in the padded data we are reading from
@@ -228,34 +210,23 @@ def calculate_conv_chunks(
         # now figure out where in the actual data this corresponds to
         data_idxs, pad_amts, read_idxs, out_idxs = [], [], [], []
         for dim_idx, (i0, i1) in enumerate(pad_idxs):
+            # map chunk boundaries from padded-space to original data coordinates
             i0d, i1d = i0 - pads[dim_idx][0], i1 - pads[dim_idx][0]
-            # figure out conditions for "left" index
-            if i0d < 0:  # we're not starting at data, in the "pad"
-                left_data, left_read = 0, 0
-                left_pad = pads[dim_idx][0]
-                left_out = pads[dim_idx][0]
-            else:  # i0d >= 0 -- we're in the data
-                left_data = i0d
-                left_read = max(i0d - overlap[dim_idx], 0)
-                if left_read == 0:  # cant read full overlap in the data
-                    left_pad = pads[dim_idx][0] - (overlap[dim_idx] - i0d)
-                else:  # overlap region fully contained in data
-                    left_pad = 0
-                left_out = (left_data - left_read) + left_pad
-            # figure out conditions for "right" index
-            if i1d > shape[dim_idx]:  # we're outside of the data on the rhs
-                right_data, right_read = shape[dim_idx], shape[dim_idx]
-                right_pad = i1 - padded_shape[dim_idx]
-            else:
-                right_data = i1d
-                right_read = right_data + overlap[dim_idx]
-                if right_read > shape[dim_idx]:
-                    over_size = right_read - shape[dim_idx]
-                    right_read = shape[dim_idx]
-                    right_pad = overlap[dim_idx] - over_size
-                else:
-                    right_pad = 0
-            right_out = left_out + (right_data - left_data)
+            # data region owned by this chunk (clamped to original data bounds)
+            left_data = max(i0d, 0)
+            right_data = min(i1d, shape[dim_idx])
+            # read region: expand data region by overlap, clamped to data bounds
+            left_read = max(left_data - overlap[dim_idx], 0)
+            right_read = min(right_data + overlap[dim_idx], shape[dim_idx])
+            # artificial padding: how much the read region is smaller than
+            # (data region + overlap) on each side — i.e., where we hit
+            # the data boundary and couldn't read the full overlap
+            left_pad = left_data - left_read  # always >= 0
+            right_pad = right_read - right_data  # always >= 0
+            # output window: select from the processed output (same shape as
+            # read region) the region corresponding to the data region
+            left_out = left_pad
+            right_out = left_pad + (right_data - left_data)
             data_idxs.append((left_data, right_data))
             pad_amts.append((left_pad, right_pad))
             read_idxs.append((left_read, right_read))
@@ -274,6 +245,7 @@ def calculate_conv_chunks(
             out_window.insert(0, channel_slice)
             pad_amts.insert(0, (0, 0))
         chunk_windows[chunk_idx] = ChunkProps(
-            tuple(data_window), tuple(read_window), pad_amts, tuple(out_window)
+            tuple(data_window), tuple(read_window), 
+            tuple(pad_amts), tuple(out_window)
         )
     return chunk_windows
