@@ -107,7 +107,7 @@ def _deconvolve_uncorrected(
     if verbose:
         pbar = tqdm(total=num_iter, desc="Deconvolution")
     else:
-        pbar = nullcontext
+        pbar = nullcontext()
     with pbar:
         for _ in range(num_iter):
             con = convolve_3d(est_i, psf_z, psf_y, psf_x)

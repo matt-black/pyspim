@@ -18,7 +18,7 @@ from ..interp.affine import (
     meanblend_into_existing,
     output_shape_for_transform,
 )
-from ..reg import pcc, powell
+from ..reg import pcc, opt
 from ..typing import (
     CuLaunchParameters,
     NDArray,
@@ -43,20 +43,20 @@ def register_pair(
     verbose: bool,
     **opt_kwargs,
 ):
-    _, _, par0 = powell.parse_transform_string(transform)
+    _, _, par0 = opt.parse_transform_string(transform)
     if pcc_prereg:
         t0 = list(pcc.translation_for_volumes(vol0, vol1))
     else:
         t0 = [
             0,
         ] * 3
-    _, _, par0 = powell.parse_transform_string(transform)
+    _, _, par0 = opt.parse_transform_string(transform)
     par0[:3] = t0
     # do the registration
     if piecewise:
-        reg_fun = powell.optimize_affine_piecewise
+        reg_fun = opt.optimize_affine_piecewise
     else:
-        reg_fun = powell.optimize_affine
+        reg_fun = opt.optimize_affine
     return reg_fun(
         vol0,
         vol1,
