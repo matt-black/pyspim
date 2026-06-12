@@ -135,16 +135,21 @@ def _distributed_fft_convolve(
     The kernel's FFT is pre-computed on the full global volume shape and
     replicated on all ranks. The operand is distributed across processes.
 
+    Note: nvmath.distributed.fft only supports C2C (complex-to-complex)
+    transforms. Real-valued operands are cast to complex64 before FFT,
+    and the real part is extracted after IFFT.
+
     Args:
         kernel_fft: Pre-computed FFT of the kernel, shape = global volume shape.
-            Replicated on all ranks, lives on local GPU memory.
+            Replicated on all ranks, lives on local GPU memory. Must be complex.
         operand: Distributed operand on NVSHMEM symmetric heap, distributed
-            according to `distribution`.
+            according to `distribution`. Can be real or complex.
         distribution: Slab distribution of the input operand (e.g., Slab.X).
         stream: Optional CUDA stream for async execution.
 
     Returns:
         Distributed CuPy ndarray with the same distribution as the input operand.
+        If input was real, output is real; if input was complex, output is complex.
 
     Note:
         For Slab.X input: FFT changes to Slab.Y, element-wise multiply preserves
@@ -156,20 +161,27 @@ def _distributed_fft_convolve(
     # Slab.X -> Slab.Y, Slab.Y -> Slab.X
     partition_dim = distribution.partition_dim
     if partition_dim == 0:
-        output_dist_after_fft = _nvmath_slab.Y
         inverse_dist = _nvmath_slab.Y
     elif partition_dim == 1:
-        output_dist_after_fft = _nvmath_slab.X
         inverse_dist = _nvmath_slab.X
     else:
-        # For Slab.Z or other dimensions, we need to handle differently
-        # For now, default to reshaping back
-        output_dist_after_fft = distribution
         inverse_dist = distribution
 
     fft_options = {"reshape": False}
     if stream is not None:
         fft_options["stream"] = stream
+
+    # nvmath.distributed.fft() only supports C2C (complex-to-complex).
+    # Cast real operands to complex for FFT, then extract real part after IFFT.
+    was_real = not cupy.issubdtype(operand.dtype, cupy.complexfloating)
+    if was_real:
+        # Determine corresponding complex dtype
+        if operand.dtype == cupy.float32:
+            operand = operand.astype(cupy.complex64, copy=False)
+        elif operand.dtype == cupy.float64:
+            operand = operand.astype(cupy.complex128, copy=False)
+        else:
+            operand = operand.astype(cupy.complex64)
 
     # Step 1: Forward FFT of distributed operand
     # Slab.X -> Slab.Y (or complementary)
@@ -186,6 +198,10 @@ def _distributed_fft_convolve(
     result = _nvmath_fft.ifft(
         product, distribution=inverse_dist, options=fft_options
     )
+
+    # Extract real part if input was real
+    if was_real:
+        result = cupy.real(result)
 
     return result
 

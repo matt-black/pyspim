@@ -12,6 +12,7 @@ Run:
 import sys
 
 import cupy as cp
+import nvmath.distributed
 import numpy as np
 from mpi4py import MPI
 
@@ -122,5 +123,3 @@ if rank == 0:
 # Cleanup
 nvmath.distributed.free_symmetric_memory(operand)
 finalize_distributed()
-
-import nvmath.distributed
