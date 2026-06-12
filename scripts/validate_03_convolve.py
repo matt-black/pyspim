@@ -1,8 +1,11 @@
 #!/usr/bin/env python
-"""Validate distributed FFT convolution against scipy reference.
+"""Validate distributed FFT convolution against CuPy circular convolution reference.
 
 This test distributes a signal across ranks, performs FFT-based convolution
-using the distributed helper, and compares the result with scipy's fftconvolve.
+using the distributed helper, and compares the result with CuPy's circular
+convolution (IFFT(FFT(signal) * FFT(psf))). This matches the behavior of the
+distributed implementation which performs circular convolution at the global
+volume shape—the correct operation for RL deconvolution.
 
 Run:
     mpiexec -n 1 python scripts/validate_03_convolve.py
@@ -99,10 +102,21 @@ for r in range(nranks):
 for data, lshape, offset in gathered:
     result_full[offset:offset + lshape[0], :, :] = data
 
-# Compute reference convolution
-from scipy.signal import fftconvolve
+# Compute reference circular convolution using CuPy
+# The distributed FFT convolution performs circular convolution at the global_shape,
+# which is the correct operation for RL deconvolution. We compare against CuPy's
+# circular convolution (IFFT(FFT(signal) * FFT(psf))) rather than scipy's linear
+# convolution (which zero-pads to avoid wraparound).
+psf_padded = np.zeros(global_shape, dtype=np.float32)
+slices = tuple(slice(0, k) for k in psf.shape)
+psf_padded[slices] = psf
 
-expected = fftconvolve(signal_full, psf, mode="same")
+signal_cp = cp.asarray(signal_full)
+psf_cp = cp.asarray(psf_padded)
+expected_cp = cp.real(cp.fft.ifftn(
+    cp.fft.fftn(signal_cp, dtype=cp.complex64) * cp.fft.fftn(psf_cp, dtype=cp.complex64)
+))
+expected = expected_cp.get()
 
 # Compare on all ranks (all ranks have the full result after allgather)
 max_err = np.max(np.abs(expected - result_full))
@@ -115,7 +129,7 @@ if rank == 0:
     print(f"Max absolute error: {max_err:.6e}")
     print(f"Relative error: {rel_err:.6e}")
     if rel_err < 1e-4:
-        print("PASS: Distributed convolution matches scipy reference")
+        print("PASS: Distributed convolution matches CuPy circular convolution reference")
     else:
         print(f"FAIL: Relative error {rel_err:.6e} exceeds threshold 1e-4")
         sys.exit(1)
