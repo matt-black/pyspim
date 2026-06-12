@@ -61,8 +61,11 @@ if rank == 0:
     print(f"  PSF shapes: {psf_a_np.shape}, {psf_b_np.shape}")
     print(f"  Num iterations: {num_iter}")
 
+# Compute explicit initial estimate for reference
+est_i_ref = cp.asarray((view_a_np + view_b_np) / 2.0, dtype=cp.float32)
+
 ref_result = reference_joint_rl_dispim(
-    cp.asarray(view_a_np), cp.asarray(view_b_np), None,
+    cp.asarray(view_a_np), cp.asarray(view_b_np), est_i_ref,
     cp.asarray(psf_a_np), cp.asarray(psf_b_np),
     num_iter=num_iter, boundary_correction=False,
 )

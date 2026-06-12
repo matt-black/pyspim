@@ -326,7 +326,7 @@ def joint_rl_dispim(
 def _joint_rl_dispim_uncorr(
     view_a: NDArray,
     view_b: NDArray,
-    est_i: NDArray,
+    est_i: Optional[NDArray],
     psf_a: NDArray,
     psf_b: NDArray,
     backproj_a: Optional[NDArray] = None,
@@ -349,6 +349,9 @@ def _joint_rl_dispim_uncorr(
         backproj_a = xp.ascontiguousarray(psf_a[::-1, ::-1, ::-1])
     if backproj_b is None:
         backproj_b = xp.ascontiguousarray(psf_b[::-1, ::-1, ::-1])
+    # Initialize estimate if not provided
+    if est_i is None:
+        est_i = (view_a + view_b) / 2
     # utility function for doing convolution
     # NOTE: by default `fftconvolve` wants the larger array as first arg
     # but for clarity, I like specifying the PSF first
