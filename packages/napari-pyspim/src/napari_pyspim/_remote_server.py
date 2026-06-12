@@ -902,13 +902,13 @@ def handle_deconvolve(params: dict) -> dict:
 
             # Compute overlap from PSF size
             psf_overlap = max(s // 2 for s in psf_a.shape)
-
+            overlap = tuple([max(o, psf_overlap) for o in overlap])
             deconvolve_chunkwise(
                 zarr_a,
                 zarr_b,
                 out,
                 chunk_size,
-                psf_overlap,
+                overlap,
                 psf_a,
                 psf_b,
                 bp_a,
