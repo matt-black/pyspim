@@ -160,8 +160,8 @@ def _distributed_fft_convolve(
         If input was real, output is real; if input was complex, output is complex.
 
     Note:
-        For Slab.X input: FFT changes to Slab.Y, element-wise multiply preserves
-        Slab.Y, IFFT changes back to Slab.X.
+        Uses reshape=True to keep Slab distribution consistent between FFT and IFFT,
+        avoiding stride mismatches that occur with reshape=False.
     """
     _import_nvmath()
 
@@ -170,17 +170,11 @@ def _distributed_fft_convolve(
         global_shape = kernel_fft.shape
     n_elements = cupy.prod(cupy.asarray(global_shape, dtype=cupy.float64))
 
-    # Determine complementary distribution for the inverse FFT.
-    # Slab.X -> Slab.Y, Slab.Y -> Slab.X
-    partition_dim = distribution.partition_dim
-    if partition_dim == 0:
-        inverse_dist = _nvmath_slab.Y
-    elif partition_dim == 1:
-        inverse_dist = _nvmath_slab.X
-    else:
-        inverse_dist = distribution
-
-    fft_options = {"reshape": False}
+    # Use reshape=True so both FFT and IFFT keep the same distribution.
+    # With reshape=False, FFT changes Slab.X -> Slab.Y (different strides), and
+    # the element-wise product array would have C-order strides that don't match
+    # the Slab.Y layout expected by IFFT, causing numerical corruption.
+    fft_options = {"reshape": True}
     if stream is not None:
         fft_options["stream"] = stream
 
@@ -188,6 +182,8 @@ def _distributed_fft_convolve(
     # operand on symmetric memory. cupy.astype() does NOT preserve symmetric memory,
     # so we need to explicitly allocate complex symmetric memory and copy.
     was_real = not cupy.issubdtype(operand.dtype, cupy.complexfloating)
+    fft_operand = operand
+    temp_buf = None
 
     if was_real:
         # Allocate complex symmetric memory and copy real data into it
@@ -201,31 +197,21 @@ def _distributed_fft_convolve(
         )
         temp_buf[:] = operand
         fft_operand = temp_buf
-    else:
-        # Operand is already complex on symmetric heap
-        fft_operand = operand
 
     # Step 1: Forward FFT of distributed operand (in-place on symmetric memory)
-    # Slab.X -> Slab.Y (or complementary)
+    # With reshape=True, output keeps the same Slab distribution
     operand_fft = _nvmath_fft.fft(
         fft_operand, distribution=distribution, options=fft_options
     )
 
-    # Step 2: Element-wise multiply with replicated kernel FFT
-    # kernel_fft is replicated (broadcast automatically)
-    product = operand_fft * kernel_fft
+    # Step 2: Element-wise multiply with replicated kernel FFT, writing back
+    # into the same symmetric buffer to preserve correct strides for IFFT.
+    fft_operand[:] = operand_fft * kernel_fft
 
-    # The product is a regular cupy array (not on symmetric heap).
-    # We need to allocate symmetric memory for the IFFT.
-    product_sym = _nvmath_distributed.allocate_symmetric_memory(
-        product.shape, cupy, dtype=product.dtype
-    )
-    product_sym[:] = product
-
-    # Step 3: Inverse FFT to get convolution result (in-place on symmetric memory)
-    # Slab.Y -> Slab.X (back to original distribution)
+    # Step 3: Inverse FFT to get convolution result (in-place on same symmetric memory)
+    # With reshape=True, output keeps the same Slab distribution
     result = _nvmath_fft.ifft(
-        product_sym, distribution=inverse_dist, options=fft_options
+        fft_operand, distribution=distribution, options=fft_options
     )
 
     # Step 4: Apply 1/N normalization to match scipy.signal.fftconvolve convention
@@ -233,8 +219,7 @@ def _distributed_fft_convolve(
     result = result / n_elements
 
     # Free temporary symmetric memory
-    _nvmath_distributed.free_symmetric_memory(product_sym)
-    if was_real:
+    if temp_buf is not None:
         _nvmath_distributed.free_symmetric_memory(temp_buf)
 
     # Extract real part if input was real
