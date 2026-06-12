@@ -133,11 +133,12 @@ def _distributed_fft_convolve(
     Uses the convolution theorem: IFFT(FFT(kernel) * FFT(operand))
 
     The kernel's FFT is pre-computed on the full global volume shape and
-    replicated on all ranks. The operand is distributed across processes.
+    replicated on all ranks. The operand is distributed across processes
+    on NVSHMEM symmetric heap.
 
-    Note: nvmath.distributed.fft only supports C2C (complex-to-complex)
-    transforms. Real-valued operands are cast to complex64 before FFT,
-    and the real part is extracted after IFFT.
+    Note: nvmath.distributed.fft() only supports C2C (complex-to-complex)
+    transforms and requires GPU operand on symmetric memory. For real-valued
+    input, a temporary complex symmetric buffer is allocated.
 
     Args:
         kernel_fft: Pre-computed FFT of the kernel, shape = global volume shape.
@@ -171,33 +172,54 @@ def _distributed_fft_convolve(
     if stream is not None:
         fft_options["stream"] = stream
 
-    # nvmath.distributed.fft() only supports C2C (complex-to-complex).
-    # Cast real operands to complex for FFT, then extract real part after IFFT.
+    # nvmath.distributed.fft() only supports C2C (complex-to-complex) and requires
+    # operand on symmetric memory. cupy.astype() does NOT preserve symmetric memory,
+    # so we need to explicitly allocate complex symmetric memory and copy.
     was_real = not cupy.issubdtype(operand.dtype, cupy.complexfloating)
-    if was_real:
-        # Determine corresponding complex dtype
-        if operand.dtype == cupy.float32:
-            operand = operand.astype(cupy.complex64, copy=False)
-        elif operand.dtype == cupy.float64:
-            operand = operand.astype(cupy.complex128, copy=False)
-        else:
-            operand = operand.astype(cupy.complex64)
 
-    # Step 1: Forward FFT of distributed operand
+    if was_real:
+        # Allocate complex symmetric memory and copy real data into it
+        if operand.dtype == cupy.float32:
+            complex_dtype = cupy.complex64
+        else:
+            complex_dtype = cupy.complex128
+
+        temp_buf = _nvmath_distributed.allocate_symmetric_memory(
+            operand.shape, cupy, dtype=complex_dtype
+        )
+        temp_buf[:] = operand
+        fft_operand = temp_buf
+    else:
+        # Operand is already complex on symmetric heap
+        fft_operand = operand
+
+    # Step 1: Forward FFT of distributed operand (in-place on symmetric memory)
     # Slab.X -> Slab.Y (or complementary)
     operand_fft = _nvmath_fft.fft(
-        operand, distribution=distribution, options=fft_options
+        fft_operand, distribution=distribution, options=fft_options
     )
 
     # Step 2: Element-wise multiply with replicated kernel FFT
     # kernel_fft is replicated (broadcast automatically)
     product = operand_fft * kernel_fft
 
-    # Step 3: Inverse FFT to get convolution result
+    # The product is a regular cupy array (not on symmetric heap).
+    # We need to allocate symmetric memory for the IFFT.
+    product_sym = _nvmath_distributed.allocate_symmetric_memory(
+        product.shape, cupy, dtype=product.dtype
+    )
+    product_sym[:] = product
+
+    # Step 3: Inverse FFT to get convolution result (in-place on symmetric memory)
     # Slab.Y -> Slab.X (back to original distribution)
     result = _nvmath_fft.ifft(
-        product, distribution=inverse_dist, options=fft_options
+        product_sym, distribution=inverse_dist, options=fft_options
     )
+
+    # Free temporary symmetric memory
+    _nvmath_distributed.free_symmetric_memory(product_sym)
+    if was_real:
+        _nvmath_distributed.free_symmetric_memory(temp_buf)
 
     # Extract real part if input was real
     if was_real:
