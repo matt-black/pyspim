@@ -20,8 +20,7 @@ from typing import Optional, Tuple
 
 import cupy
 import numpy
-from cupyx.scipy.signal import fftconvolve as fftconv_gpu
-from scipy.signal import fftconvolve as fftconv_cpu
+from cupyx.scipy.signal import fftconvolve
 
 from ..._util import supported_float_type
 from ...typing import NDArray, PadType
@@ -315,10 +314,13 @@ def _distributed_efficient_bayesian_backprojectors(
     flp_b = cupy.ascontiguousarray(psf_b[::-1, ::-1, ::-1])
 
     # Compound backprojectors: bp_a = flp_a * conv(conv(flp_a, psf_b), flp_b)
-    conv_ab = fftconv_gpu(fftconv_gpu(flp_a, psf_b, mode="same"), flp_b, mode="same")
+    # Note: fftconvolve expects the larger array as the first argument for efficiency.
+    # Here the inner result (convolved PSF-sized volume) is the larger operand,
+    # while the outer kernel (flp_b) is the smaller PSF.
+    conv_ab = fftconvolve(fftconvolve(psf_b, flp_a, mode="same"), flp_b, mode="same")
     bp_a = flp_a * conv_ab
 
-    conv_ba = fftconv_gpu(fftconv_gpu(flp_b, psf_a, mode="same"), flp_a, mode="same")
+    conv_ba = fftconvolve(fftconvolve(psf_a, flp_b, mode="same"), flp_a, mode="same")
     bp_b = flp_b * conv_ba
 
     return bp_a, bp_b
