@@ -126,11 +126,12 @@ def _distributed_fft_convolve(
     kernel_fft: cupy.ndarray,
     operand: cupy.ndarray,
     distribution: Slab,
+    global_shape: Tuple[int, ...] | None = None,
     stream=None,
 ) -> cupy.ndarray:
     """Compute conv(kernel, operand, mode='same') using distributed FFT.
 
-    Uses the convolution theorem: IFFT(FFT(kernel) * FFT(operand))
+    Uses the convolution theorem: IFFT(FFT(kernel) * FFT(operand)) / N
 
     The kernel's FFT is pre-computed on the full global volume shape and
     replicated on all ranks. The operand is distributed across processes
@@ -140,12 +141,18 @@ def _distributed_fft_convolve(
     transforms and requires GPU operand on symmetric memory. For real-valued
     input, a temporary complex symmetric buffer is allocated.
 
+    Note: cuFFT (which nvmath wraps) follows the unnormalized convention
+    where ifft() does NOT apply 1/N. We apply this normalization manually
+    to match scipy.signal.fftconvolve convention.
+
     Args:
         kernel_fft: Pre-computed FFT of the kernel, shape = global volume shape.
             Replicated on all ranks, lives on local GPU memory. Must be complex.
         operand: Distributed operand on NVSHMEM symmetric heap, distributed
             according to `distribution`. Can be real or complex.
         distribution: Slab distribution of the input operand (e.g., Slab.X).
+        global_shape: Global shape of the distributed operand. Required for
+            normalization. If None, will be inferred from kernel_fft.shape.
         stream: Optional CUDA stream for async execution.
 
     Returns:
@@ -157,6 +164,11 @@ def _distributed_fft_convolve(
         Slab.Y, IFFT changes back to Slab.X.
     """
     _import_nvmath()
+
+    # Determine global shape for normalization
+    if global_shape is None:
+        global_shape = kernel_fft.shape
+    n_elements = cupy.prod(cupy.asarray(global_shape, dtype=cupy.float64))
 
     # Determine complementary distribution for the inverse FFT.
     # Slab.X -> Slab.Y, Slab.Y -> Slab.X
@@ -215,6 +227,10 @@ def _distributed_fft_convolve(
     result = _nvmath_fft.ifft(
         product_sym, distribution=inverse_dist, options=fft_options
     )
+
+    # Step 4: Apply 1/N normalization to match scipy.signal.fftconvolve convention
+    # cuFFT's IFFT does NOT apply 1/N, so we do it here
+    result = result / n_elements
 
     # Free temporary symmetric memory
     _nvmath_distributed.free_symmetric_memory(product_sym)
