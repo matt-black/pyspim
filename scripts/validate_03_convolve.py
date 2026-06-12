@@ -111,10 +111,10 @@ psf_padded = np.zeros(global_shape, dtype=np.float32)
 slices = tuple(slice(0, k) for k in psf.shape)
 psf_padded[slices] = psf
 
-signal_cp = cp.asarray(signal_full)
-psf_cp = cp.asarray(psf_padded)
+signal_cp = cp.asarray(signal_full, dtype=cp.complex64)
+psf_cp = cp.asarray(psf_padded, dtype=cp.complex64)
 expected_cp = cp.real(cp.fft.ifftn(
-    cp.fft.fftn(signal_cp, dtype=cp.complex64) * cp.fft.fftn(psf_cp, dtype=cp.complex64)
+    cp.fft.fftn(signal_cp) * cp.fft.fftn(psf_cp)
 ))
 expected = expected_cp.get()
 
