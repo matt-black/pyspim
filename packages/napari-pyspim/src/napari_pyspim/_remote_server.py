@@ -815,6 +815,11 @@ def handle_deconvolve(params: dict) -> dict:
     # Open input zarr arrays
     zarr_a = zarr.open(a_path, mode="r")
     zarr_b = zarr.open(b_path, mode="r")
+    logger.info(
+        "[handle_deconvolve] zarr_a.shape=%s, zarr_b.shape=%s, "
+        "zarr_a.dtype=%s, zarr_b.dtype=%s",
+        zarr_a.shape, zarr_b.shape, zarr_a.dtype, zarr_b.dtype,
+    )
 
     _progress("Generating PSF...", 10)
 
@@ -893,6 +898,11 @@ def handle_deconvolve(params: dict) -> dict:
     # Import deconvolution functions
     from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
 
+    logger.info(
+        "[handle_deconvolve] chunkwise=%s, chunk_size=%s, overlap=%s",
+        chunkwise, chunk_size, overlap,
+    )
+
     if chunkwise:
         _progress("Running chunkwise deconvolution...", 20)
         # Use temporary zarr for chunkwise output
@@ -925,6 +935,10 @@ def handle_deconvolve(params: dict) -> dict:
             )
 
             _progress("Saving output...", 90)
+            logger.info(
+                "[handle_deconvolve] chunkwise out.shape=%s, zarr_a.shape=%s",
+                out.shape, zarr_a.shape,
+            )
             output_path = _save_decon_result(out, save_path, output_format, zarr_a.shape)
     else:
         _progress("Running full deconvolution...", 20)
@@ -961,6 +975,12 @@ def handle_deconvolve(params: dict) -> dict:
 
         result = result_cp.get().astype(np.float32)
 
+        logger.info(
+            "[handle_deconvolve] non-chunkwise result.shape=%s, zarr_a.shape=%s, "
+            "len(result.shape)=%d",
+            result.shape, zarr_a.shape, len(result.shape),
+        )
+
         _progress("Saving output...", 90)
         output_path = _save_decon_result_array(result, save_path, output_format, zarr_a.shape)
 
@@ -996,8 +1016,16 @@ def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, sh
     import os
     import shutil
 
+    logger.info(
+        "[_save_decon_result] out.shape=%s, passed shape=%s, output_format=%s",
+        out.shape, shape, output_format,
+    )
     is_multichannel = len(shape) > 3
     axes = "CZYX" if is_multichannel else "ZYX"
+    logger.info(
+        "[_save_decon_result] is_multichannel=%s, axes=%s",
+        is_multichannel, axes,
+    )
 
     if output_format == "Zarr":
         # Ensure path ends with .zarr
@@ -1056,8 +1084,17 @@ def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format
     """Save deconvolution result from a numpy array to the specified format."""
     import zarr
 
+    logger.info(
+        "[_save_decon_result_array] result.shape=%s, passed shape=%s, "
+        "output_format=%s, result.ndim=%d",
+        result.shape, shape, output_format, result.ndim,
+    )
     is_multichannel = len(shape) > 3
     axes = "CZYX" if is_multichannel else "ZYX"
+    logger.info(
+        "[_save_decon_result_array] is_multichannel=%s, axes=%s",
+        is_multichannel, axes,
+    )
 
     if output_format == "Zarr":
         if not save_path.endswith(".zarr"):
@@ -1578,25 +1615,94 @@ def handle_submit_batch_registration(params: dict) -> dict:
     }
 
 
+def _map_sacct_state(raw_state: str) -> str:
+    """Map a raw sacct state string to a canonical job status.
+
+    Sacct state codes include short abbreviations and optional suffixes
+    like ``<PLUGIN>`` that are stripped before lookup.
+
+    Sacct states:
+    - PENDING / PD         -> PENDING
+    - RUNNING / R          -> RUNNING
+    - COMPLETED / CD       -> COMPLETED
+    - FAILED / F           -> FAILED
+    - CANCELLED / CA       -> CANCELLED
+    - TIMEOUT / TO         -> FAILED
+    - NODE_FAIL / NF       -> FAILED
+    - OUT_OF_MEMORY / OOM  -> FAILED
+    - SUSPENDED / S        -> RUNNING  (still active, just paused)
+    - PREEMPTED / PR       -> CANCELLED
+    """
+    state_map = {
+        "PENDING": "PENDING",
+        "PD": "PENDING",
+        "RUNNING": "RUNNING",
+        "R": "RUNNING",
+        "COMPLETED": "COMPLETED",
+        "CD": "COMPLETED",
+        "FAILED": "FAILED",
+        "F": "FAILED",
+        "CANCELLED": "CANCELLED",
+        "CA": "CANCELLED",
+        "TIMEOUT": "FAILED",
+        "TO": "FAILED",
+        "NODE_FAIL": "FAILED",
+        "NF": "FAILED",
+        "OUT_OF_MEMORY": "FAILED",
+        "OOM": "FAILED",
+        "SUSPENDED": "RUNNING",
+        "S": "RUNNING",
+        "BOOT_FAIL": "FAILED",
+        "BO": "FAILED",
+        "PREEMPTED": "CANCELLED",
+        "PR": "CANCELLED",
+        "DEADLINE": "FAILED",
+        "DL": "FAILED",
+        "UNKNOWN": "NOT_FOUND",
+        "UK": "NOT_FOUND",
+    }
+    return state_map.get(raw_state, "NOT_FOUND")
+
+
 def handle_check_job_status(params: dict) -> dict:
-    """Check the status of a SLURM job using squeue."""
+    """Check the status of a SLURM job using sacct.
+
+    Uses ``sacct`` instead of ``squeue`` because sacct queries the
+    accounting database and can report on completed jobs, whereas
+    squeue only shows jobs currently in the scheduler queue.
+    """
     import subprocess
 
     job_id = params["job_id"]
     try:
         result = subprocess.run(
-            ["squeue", "--job", job_id, "--noheader", "--format", "%T"],
+            [
+                "sacct",
+                "-j", job_id,
+                "--noheader",
+                "--format", "State",
+                "--parsable2",
+            ],
             capture_output=True, text=True, timeout=15,
         )
-        if result.returncode != 0:
-            # squeue returns non-zero if job not found
+        if result.returncode != 0 or not result.stdout.strip():
+            # sacct returns non-zero or empty if job not found
             return {"status": "NOT_FOUND"}
-        status = result.stdout.strip()
+
+        # sacct may return multiple lines (for job steps). Take the first
+        # line which corresponds to the main job.
+        raw_state = result.stdout.strip().split("\n")[0].strip()
+
+        # Strip suffixes like <PLUGIN>, <EXT_BATCH_JOB>, etc.
+        base_state = raw_state.split("<")[0].strip().upper()
+
+        status = _map_sacct_state(base_state)
         return {"status": status}
+
     except subprocess.TimeoutExpired:
         return {"status": "NOT_FOUND"}
     except FileNotFoundError:
-        return {"status": "NOT_FOUND", "error": "squeue not found"}
+        return {"status": "NOT_FOUND", "error": "sacct not found"}
 
 
 def handle_read_batch_results(params: dict) -> dict:
