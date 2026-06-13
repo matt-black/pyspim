@@ -52,6 +52,8 @@ def generate_batch_script(
     """
     python_bin = os.path.join(remote_venv, "bin", "python")
     job_name = f"pyspim_{command_type}"
+    root_dir, _ = os.path.split(remote_venv)
+    log_dir = os.path.abspath(os.path.join(root_dir, "logs"))
 
     # Build GPU directive (omit if 0)
     gpu_directive = f"#SBATCH --gres=gpu:{gpus}\n" if gpus > 0 else ""
@@ -63,8 +65,8 @@ def generate_batch_script(
 #SBATCH --time={time_string}
 #SBATCH --cpus-per-task={ntasks}
 #SBATCH --mem={memory_gb}G
-{gpu_directive}#SBATCH --output=/tmp/pyspim_batch_%j.out
-#SBATCH --error=/tmp/pyspim_batch_%j.err
+{gpu_directive}#SBATCH --output={log_dir:s}/pyspim_batch_%j.out
+#SBATCH --error={log_dir:s}/pyspim_batch_%j.err
 
 # Activate virtual environment
 source {remote_venv}/bin/activate
