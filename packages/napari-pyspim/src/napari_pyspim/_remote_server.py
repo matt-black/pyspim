@@ -1417,25 +1417,6 @@ def handle_cleanup_zarr(params: dict) -> dict:
     raise NotImplementedError("cleanup_zarr not yet implemented")
 
 
-COMMAND_HANDLERS = {
-    "ping": handle_ping,
-    "compute": handle_compute,
-    "compute_projections": handle_compute_projections,
-    "query_positions": handle_query_positions,
-    "load_deskew": handle_load_deskew,
-    "register": handle_register,
-    "save_params": handle_save_params,
-    "deconvolve": handle_deconvolve,
-    "apply_registration": handle_apply_registration,
-    "save_zarr": handle_save_zarr,
-    "cleanup_zarr": handle_cleanup_zarr,
-    "submit_batch_deconvolution": handle_submit_batch_deconvolution,
-    "submit_batch_registration": handle_submit_batch_registration,
-    "check_job_status": handle_check_job_status,
-    "read_batch_results": handle_read_batch_results,
-}
-
-
 # ---------------------------------------------------------------------------
 # Batch job handlers
 # ---------------------------------------------------------------------------
@@ -1654,6 +1635,25 @@ def _move_batch_logs_to_logdir(result_path: str, log_dir: str):
         shutil.move(result_path, dest)
     except (shutil.Error, OSError):
         pass
+
+
+COMMAND_HANDLERS = {
+    "ping": handle_ping,
+    "compute": handle_compute,
+    "compute_projections": handle_compute_projections,
+    "query_positions": handle_query_positions,
+    "load_deskew": handle_load_deskew,
+    "register": handle_register,
+    "save_params": handle_save_params,
+    "deconvolve": handle_deconvolve,
+    "apply_registration": handle_apply_registration,
+    "save_zarr": handle_save_zarr,
+    "cleanup_zarr": handle_cleanup_zarr,
+    "submit_batch_deconvolution": handle_submit_batch_deconvolution,
+    "submit_batch_registration": handle_submit_batch_registration,
+    "check_job_status": handle_check_job_status,
+    "read_batch_results": handle_read_batch_results,
+}
 
 
 # ---------------------------------------------------------------------------
