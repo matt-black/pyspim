@@ -1429,7 +1429,6 @@ def handle_submit_batch_deconvolution(params: dict) -> dict:
     and returns the job_id and paths.
     """
     import subprocess
-    import shutil
 
     batch_cfg = params.pop("batch_config", {})
     time_string = batch_cfg.get("time_string", "01:00:00")
@@ -1444,7 +1443,7 @@ def handle_submit_batch_deconvolution(params: dict) -> dict:
         # Try to find venv from sys.prefix
         remote_venv = sys.prefix
 
-    from ._batch_utils import (
+    from napari_pyspim._batch_utils import (
         generate_batch_script,
         generate_params_json,
         get_unique_paths,
@@ -1506,7 +1505,7 @@ def handle_submit_batch_registration(params: dict) -> dict:
 
     remote_venv = os.environ.get("VIRTUAL_ENV", "") or sys.prefix
 
-    from ._batch_utils import (
+    from napari_pyspim._batch_utils import (
         generate_batch_script,
         generate_params_json,
         get_unique_paths,
