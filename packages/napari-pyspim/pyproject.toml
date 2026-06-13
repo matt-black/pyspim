@@ -44,6 +44,7 @@ dependencies = [
     "tifffile>=2021.0.0,<=2025.5.10",
     "zarr>=2.10.0,<=2.18.3",
     "dask>=2025.7.0",
+    "numcodecs<0.16",
 ]
 
 [project.scripts]
