@@ -54,14 +54,16 @@ def generate_batch_script(
     job_name = f"pyspim_{command_type}"
 
     # Build GPU directive (omit if 0)
-    gpu_directive = f"#SBATCH --gpus={gpus}\n" if gpus > 0 else ""
+    gpu_directive = f"#SBATCH --gres=gpu:{gpus}\n" if gpus > 0 else ""
 
     script = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --time={time_string}
+#SBATCH --cpus-per-task{ntasks}
 #SBATCH --mem={memory_gb}G
-{gpu_directive}#SBATCH --ntasks={ntasks}
-#SBATCH --output=/tmp/pyspim_batch_%j.out
+{gpu_directive}#SBATCH --output=/tmp/pyspim_batch_%j.out
 #SBATCH --error=/tmp/pyspim_batch_%j.err
 
 # Activate virtual environment
