@@ -61,7 +61,7 @@ def generate_batch_script(
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --time={time_string}
-#SBATCH --cpus-per-task{ntasks}
+#SBATCH --cpus-per-task={ntasks}
 #SBATCH --mem={memory_gb}G
 {gpu_directive}#SBATCH --output=/tmp/pyspim_batch_%j.out
 #SBATCH --error=/tmp/pyspim_batch_%j.err
