@@ -1443,6 +1443,11 @@ def handle_submit_batch_deconvolution(params: dict) -> dict:
         # Try to find venv from sys.prefix
         remote_venv = sys.prefix
 
+    # Use persistent logs directory on shared filesystem instead of /tmp
+    root_dir = os.path.dirname(remote_venv)
+    batch_dir = os.path.join(root_dir, "logs")
+    os.makedirs(batch_dir, exist_ok=True)
+
     from napari_pyspim._batch_utils import (
         generate_batch_script,
         generate_params_json,
@@ -1450,7 +1455,7 @@ def handle_submit_batch_deconvolution(params: dict) -> dict:
         get_batch_runner_path,
     )
 
-    script_path, params_json_path, result_path = get_unique_paths("/tmp", "deconvolution")
+    script_path, params_json_path, result_path = get_unique_paths(batch_dir, "deconvolution")
     batch_runner_path = get_batch_runner_path(remote_venv)
 
     # Write params JSON
@@ -1505,6 +1510,11 @@ def handle_submit_batch_registration(params: dict) -> dict:
 
     remote_venv = os.environ.get("VIRTUAL_ENV", "") or sys.prefix
 
+    # Use persistent logs directory on shared filesystem instead of /tmp
+    root_dir = os.path.dirname(remote_venv)
+    batch_dir = os.path.join(root_dir, "logs")
+    os.makedirs(batch_dir, exist_ok=True)
+
     from napari_pyspim._batch_utils import (
         generate_batch_script,
         generate_params_json,
@@ -1517,9 +1527,9 @@ def handle_submit_batch_registration(params: dict) -> dict:
     if session is None:
         raise KeyError(f"Session '{session_id}' not found on server")
 
-    # Write deskewed volumes to temporary zarr paths
+    # Write deskewed volumes to zarr in persistent directory
     import zarr
-    script_path, params_json_path, result_path = get_unique_paths("/tmp", "registration")
+    script_path, params_json_path, result_path = get_unique_paths(batch_dir, "registration")
 
     a_zarr_path = params_json_path.replace("_params.json", "_a.zarr")
     b_zarr_path = params_json_path.replace("_params.json", "_b.zarr")
