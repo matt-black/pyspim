@@ -41,7 +41,7 @@ dependencies = [
     "sshfs>=2025.11.0",
     "numpy>=1.20.0",
     "scipy>=1.7.0",
-    "tifffile>=2021.0.0",
+    "tifffile>=2021.0.0,<2025.7.0",
     "zarr>=2.10.0",
     "dask>=2025.7.0",
 ]
