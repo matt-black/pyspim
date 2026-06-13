@@ -1445,7 +1445,7 @@ def handle_submit_batch_deconvolution(params: dict) -> dict:
 
     # Use persistent logs directory on shared filesystem instead of /tmp
     root_dir = os.path.dirname(remote_venv)
-    batch_dir = os.path.join(root_dir, "logs")
+    batch_dir = os.path.join(root_dir, "logs", "batch_jobs")
     os.makedirs(batch_dir, exist_ok=True)
 
     from napari_pyspim._batch_utils import (

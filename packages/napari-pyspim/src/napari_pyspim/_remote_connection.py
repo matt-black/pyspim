@@ -185,20 +185,20 @@ class RemoteConnectionWidget(QWidget):
         slurm_layout.addRow("", memory_row)
 
         # GPUs + Tasks on one row
-        gpu_task_row = QHBoxLayout()
-        gpu_task_row.addWidget(QLabel("GPUs:"))
+        gpus_cpus_row = QHBoxLayout()
+        gpus_cpus_row.addWidget(QLabel("GPUs:"))
         self.slurm_gpus_spin = QSpinBox()
         self.slurm_gpus_spin.setRange(0, 16)
         self.slurm_gpus_spin.setValue(1)
-        gpu_task_row.addWidget(self.slurm_gpus_spin)
-        gpu_task_row.addSpacing(20)
-        gpu_task_row.addWidget(QLabel("Tasks:"))
-        self.slurm_ntasks_spin = QSpinBox()
-        self.slurm_ntasks_spin.setRange(1, 64)
-        self.slurm_ntasks_spin.setValue(1)
-        gpu_task_row.addWidget(self.slurm_ntasks_spin)
-        gpu_task_row.addStretch()
-        slurm_layout.addRow("", gpu_task_row)
+        gpus_cpus_row.addWidget(self.slurm_gpus_spin)
+        gpus_cpus_row.addSpacing(20)
+        gpus_cpus_row.addWidget(QLabel("CPUs:"))
+        self.slurm_ncpus_spin = QSpinBox()
+        self.slurm_ncpus_spin.setRange(1, 64)
+        self.slurm_ncpus_spin.setValue(1)
+        gpus_cpus_row.addWidget(self.slurm_ncpus_spin)
+        gpus_cpus_row.addStretch()
+        slurm_layout.addRow("", gpus_cpus_row)
 
         # Polling Interval
         polling_row = QHBoxLayout()
@@ -310,7 +310,7 @@ class RemoteConnectionWidget(QWidget):
             self.slurm_time_minutes_spin.setValue(data.get("slurm_time_minutes", 0))
             self.slurm_memory_spin.setValue(data.get("slurm_memory_gb", 64))
             self.slurm_gpus_spin.setValue(data.get("slurm_gpus", 1))
-            self.slurm_ntasks_spin.setValue(data.get("slurm_ntasks", 1))
+            self.slurm_ncpus_spin.setValue(data.get("slurm_ntasks", 1))
             self.slurm_polling_spin.setValue(data.get("slurm_polling_interval", 10))
         except (json.JSONDecodeError, OSError):
             pass
@@ -333,7 +333,7 @@ class RemoteConnectionWidget(QWidget):
             "slurm_time_minutes": self.slurm_time_minutes_spin.value(),
             "slurm_memory_gb": self.slurm_memory_spin.value(),
             "slurm_gpus": self.slurm_gpus_spin.value(),
-            "slurm_ntasks": self.slurm_ntasks_spin.value(),
+            "slurm_ntasks": self.slurm_ncpus_spin.value(),
             "slurm_polling_interval": self.slurm_polling_spin.value(),
         }
         cfg.write_text(json.dumps(data, indent=2))
@@ -523,7 +523,7 @@ class RemoteConnectionWidget(QWidget):
             time_minutes=self.slurm_time_minutes_spin.value(),
             memory_gb=self.slurm_memory_spin.value(),
             gpus=self.slurm_gpus_spin.value(),
-            ntasks=self.slurm_ntasks_spin.value(),
+            ntasks=self.slurm_ncpus_spin.value(),
             polling_interval=self.slurm_polling_spin.value(),
         )
 
