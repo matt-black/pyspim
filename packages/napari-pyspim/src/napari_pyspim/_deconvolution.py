@@ -85,6 +85,60 @@ def make_gaussian_psf_volume(
     return psf_volume
 
 
+def estimate_chunk_gpu_memory_mb(
+    chunk_size: Tuple[int, int, int],
+    overlap: Tuple[int, int, int],
+    psf_shape_a: Tuple[int, int, int],
+    psf_shape_b: Tuple[int, int, int],
+    bp_shape_a: Tuple[int, int, int],
+    bp_shape_b: Tuple[int, int, int],
+    boundary_correction: bool = True,
+    safety_margin: float = 1.3,
+) -> float:
+    """Estimate peak GPU memory usage (in MB) for a single deconvolution chunk.
+
+    Uses formulas derived from analyzing fftconvolve memory allocation patterns:
+    - With boundary correction:  480 * C_eff + 8 * (P + Q)  bytes
+    - Without boundary correction: 44 * C_eff + 8 * (P + Q)  bytes
+
+    where C_eff = effective chunk size in pixels (with overlap),
+    P = total PSF pixels (view A + view B),
+    Q = total backprojector pixels (view A + view B).
+
+    Args:
+        chunk_size: (Z, Y, X) chunk dimensions.
+        overlap: (Z, Y, X) overlap in pixels between adjacent chunks.
+        psf_shape_a: Shape of PSF for view A.
+        psf_shape_b: Shape of PSF for view B.
+        bp_shape_a: Shape of backprojector for view A.
+        bp_shape_b: Shape of backprojector for view B.
+        boundary_correction: Whether boundary correction is enabled.
+        safety_margin: Multiplier for CUDA/cuFFT workspace overhead (default 1.3).
+
+    Returns:
+        Estimated peak GPU memory in megabytes.
+    """
+    # Effective chunk dimensions after adding overlap
+    cz_eff = chunk_size[0] + 2 * overlap[0]
+    cy_eff = chunk_size[1] + 2 * overlap[1]
+    cx_eff = chunk_size[2] + 2 * overlap[2]
+    c_eff = cz_eff * cy_eff * cx_eff
+
+    # PSF and backprojector pixel counts
+    p = psf_shape_a[0] * psf_shape_a[1] * psf_shape_a[2] + psf_shape_b[0] * psf_shape_b[1] * psf_shape_b[2]
+    q = bp_shape_a[0] * bp_shape_a[1] * bp_shape_a[2] + bp_shape_b[0] * bp_shape_b[1] * bp_shape_b[2]
+
+    # Peak memory in bytes
+    if boundary_correction:
+        peak_bytes = 480 * c_eff + 8 * (p + q)
+    else:
+        peak_bytes = 44 * c_eff + 8 * (p + q)
+
+    peak_bytes *= safety_margin
+
+    return peak_bytes / (1024 * 1024)
+
+
 class DeconvolutionWorker(QThread):
     """Worker thread for deconvolution."""
 
@@ -662,6 +716,13 @@ class DeconvolutionWidget(QWidget):
 
         chunk_params_layout.addRow("Chunk Size:", chunk_size_layout)
         chunk_params_layout.addRow("Overlap:", overlap_layout)
+
+        # Estimate Memory Usage button
+        self.estimate_memory_button = QPushButton("Estimate Memory Usage")
+        self.estimate_memory_button.setEnabled(False)
+        self.estimate_memory_button.clicked.connect(self.on_estimate_memory)
+        chunk_params_layout.addRow("", self.estimate_memory_button)
+
         self.chunkwise_params_widget.setLayout(chunk_params_layout)
         chunkwise_layout.addWidget(self.chunkwise_params_widget)
         chunkwise_group.setLayout(chunkwise_layout)
@@ -782,6 +843,90 @@ class DeconvolutionWidget(QWidget):
         self.overlap_z.setEnabled(checked)
         self.overlap_y.setEnabled(checked)
         self.overlap_x.setEnabled(checked)
+        self.estimate_memory_button.setEnabled(checked)
+
+    def on_estimate_memory(self):
+        """Estimate peak GPU memory usage based on current UI parameters."""
+        try:
+            chunk_size = (
+                self.chunk_size_z.value(),
+                self.chunk_size_y.value(),
+                self.chunk_size_x.value(),
+            )
+            overlap = (
+                self.overlap_z.value(),
+                self.overlap_y.value(),
+                self.overlap_x.value(),
+            )
+            boundary_correction = self.boundary_enable_check.isChecked()
+
+            # Calculate PSF shapes from current UI values
+            psf_a_shape = self._calculate_psf_volume_shape(
+                self.psf_a_fwhm_lateral.value(),
+                self.psf_a_fwhm_axial.value(),
+            )
+            psf_b_shape = self._calculate_psf_volume_shape(
+                self.psf_b_fwhm_lateral.value(),
+                self.psf_b_fwhm_axial.value(),
+            )
+
+            # Calculate backprojector shapes
+            if self.flipped_psf_check.isChecked():
+                bp_a_shape = psf_a_shape
+                bp_b_shape = psf_b_shape
+            else:
+                bp_a_shape = self._calculate_psf_volume_shape(
+                    self.bp_a_fwhm_lateral.value(),
+                    self.bp_a_fwhm_axial.value(),
+                )
+                bp_b_shape = self._calculate_psf_volume_shape(
+                    self.bp_b_fwhm_lateral.value(),
+                    self.bp_b_fwhm_axial.value(),
+                )
+
+            memory_mb = estimate_chunk_gpu_memory_mb(
+                chunk_size=chunk_size,
+                overlap=overlap,
+                psf_shape_a=psf_a_shape,
+                psf_shape_b=psf_b_shape,
+                bp_shape_a=bp_a_shape,
+                bp_shape_b=bp_b_shape,
+                boundary_correction=boundary_correction,
+            )
+
+            # Format display
+            cz_eff = chunk_size[0] + 2 * overlap[0]
+            cy_eff = chunk_size[1] + 2 * overlap[1]
+            cx_eff = chunk_size[2] + 2 * overlap[2]
+            c_eff = cz_eff * cy_eff * cx_eff
+
+            if memory_mb >= 1024:
+                memory_display = f"{memory_mb / 1024:.2f} GB"
+            else:
+                memory_display = f"{memory_mb:.1f} MB"
+
+            message = (
+                f"<b>Estimated Peak GPU Memory Usage</b><br><br>"
+                f"Effective chunk size: {cz_eff} × {cy_eff} × {cx_eff}<br>"
+                f"Total effective pixels: {c_eff:,}<br>"
+                f"Boundary correction: {'Yes' if boundary_correction else 'No'}<br><br>"
+                f"<b>Estimated peak memory: {memory_display}</b><br><br>"
+                f"<i>(Includes 1.3× safety margin for CUDA/cuFFT overhead)</i>"
+            )
+
+            QMessageBox.information(self, "GPU Memory Estimate", message)
+
+        except Exception as e:
+            QMessageBox.warning(self, "Estimation Error", f"Could not estimate memory: {e}")
+
+    def _calculate_psf_volume_shape(
+        self, fwhm_lat: float, fwhm_ax: float
+    ) -> Tuple[int, int, int]:
+        """Calculate the PSF volume size from FWHM values, matching make_gaussian_psf_volume."""
+        size = math.ceil(max(fwhm_ax, fwhm_lat) * 3)
+        if size % 2 == 0:
+            size += 1
+        return (size, size, size)
 
     def show_psf(self):
         """Generate PSF volumes and display them as napari layers for inspection."""
