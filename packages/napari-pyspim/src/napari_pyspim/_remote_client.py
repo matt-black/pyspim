@@ -921,12 +921,8 @@ class RemoteClient(QObject):
         handle = self._active_jobs.get(job_id)
         if handle:
             handle.status = "COMPLETED"
-            if handle.poller:
-                handle.poller.finished.emit(result)
 
     def _on_job_error(self, job_id: str, message: str) -> None:
         handle = self._active_jobs.get(job_id)
         if handle:
             handle.status = "FAILED"
-            if handle.poller:
-                handle.poller.error_occurred.emit(message)
