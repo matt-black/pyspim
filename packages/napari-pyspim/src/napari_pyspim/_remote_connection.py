@@ -153,6 +153,68 @@ class RemoteConnectionWidget(QWidget):
         env_group.setLayout(env_layout)
         layout.addWidget(env_group)
 
+        # --- SLURM Batch Job Settings Group ---
+        self.slurm_group = QGroupBox("SLURM Batch Job Settings")
+        slurm_layout = QFormLayout()
+
+        # Time Limit: hours + minutes on one row
+        time_row = QHBoxLayout()
+        time_row.addWidget(QLabel("Time Limit:"))
+        self.slurm_time_hours_spin = QSpinBox()
+        self.slurm_time_hours_spin.setRange(0, 99)
+        self.slurm_time_hours_spin.setValue(1)
+        time_row.addWidget(self.slurm_time_hours_spin)
+        time_row.addWidget(QLabel("h"))
+        self.slurm_time_minutes_spin = QSpinBox()
+        self.slurm_time_minutes_spin.setRange(0, 59)
+        self.slurm_time_minutes_spin.setValue(0)
+        time_row.addWidget(self.slurm_time_minutes_spin)
+        time_row.addWidget(QLabel("min"))
+        time_row.addStretch()
+        slurm_layout.addRow("", time_row)
+
+        # Memory
+        memory_row = QHBoxLayout()
+        memory_row.addWidget(QLabel("Memory:"))
+        self.slurm_memory_spin = QSpinBox()
+        self.slurm_memory_spin.setRange(1, 4096)
+        self.slurm_memory_spin.setValue(64)
+        self.slurm_memory_spin.setSuffix(" GB")
+        memory_row.addWidget(self.slurm_memory_spin)
+        memory_row.addStretch()
+        slurm_layout.addRow("", memory_row)
+
+        # GPUs + Tasks on one row
+        gpu_task_row = QHBoxLayout()
+        gpu_task_row.addWidget(QLabel("GPUs:"))
+        self.slurm_gpus_spin = QSpinBox()
+        self.slurm_gpus_spin.setRange(0, 16)
+        self.slurm_gpus_spin.setValue(1)
+        gpu_task_row.addWidget(self.slurm_gpus_spin)
+        gpu_task_row.addSpacing(20)
+        gpu_task_row.addWidget(QLabel("Tasks:"))
+        self.slurm_ntasks_spin = QSpinBox()
+        self.slurm_ntasks_spin.setRange(1, 64)
+        self.slurm_ntasks_spin.setValue(1)
+        gpu_task_row.addWidget(self.slurm_ntasks_spin)
+        gpu_task_row.addStretch()
+        slurm_layout.addRow("", gpu_task_row)
+
+        # Polling Interval
+        polling_row = QHBoxLayout()
+        polling_row.addWidget(QLabel("Polling Interval:"))
+        self.slurm_polling_spin = QSpinBox()
+        self.slurm_polling_spin.setRange(1, 300)
+        self.slurm_polling_spin.setValue(10)
+        self.slurm_polling_spin.setSuffix(" s")
+        polling_row.addWidget(self.slurm_polling_spin)
+        polling_row.addStretch()
+        slurm_layout.addRow("", polling_row)
+
+        self.slurm_group.setLayout(slurm_layout)
+        self.slurm_group.setVisible(False)  # Hidden until connected
+        layout.addWidget(self.slurm_group)
+
         # --- Status + Progress ---
         status_layout = QHBoxLayout()
         self.status_label = QLabel("Disconnected")
@@ -243,6 +305,13 @@ class RemoteConnectionWidget(QWidget):
             self.jump_host_edit.setText(data.get("jump_host", ""))
             # Trigger toggle to set correct enabled state
             self._on_jump_host_toggled(self.use_jump_host_checkbox.isChecked())
+            # Load SLURM batch job settings
+            self.slurm_time_hours_spin.setValue(data.get("slurm_time_hours", 1))
+            self.slurm_time_minutes_spin.setValue(data.get("slurm_time_minutes", 0))
+            self.slurm_memory_spin.setValue(data.get("slurm_memory_gb", 64))
+            self.slurm_gpus_spin.setValue(data.get("slurm_gpus", 1))
+            self.slurm_ntasks_spin.setValue(data.get("slurm_ntasks", 1))
+            self.slurm_polling_spin.setValue(data.get("slurm_polling_interval", 10))
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -259,6 +328,13 @@ class RemoteConnectionWidget(QWidget):
             "remote_venv": self.venv_path_edit.text().strip(),
             "use_jump_host": self.use_jump_host_checkbox.isChecked(),
             "jump_host": self.jump_host_edit.text().strip(),
+            # SLURM batch job settings
+            "slurm_time_hours": self.slurm_time_hours_spin.value(),
+            "slurm_time_minutes": self.slurm_time_minutes_spin.value(),
+            "slurm_memory_gb": self.slurm_memory_spin.value(),
+            "slurm_gpus": self.slurm_gpus_spin.value(),
+            "slurm_ntasks": self.slurm_ntasks_spin.value(),
+            "slurm_polling_interval": self.slurm_polling_spin.value(),
         }
         cfg.write_text(json.dumps(data, indent=2))
 
@@ -411,6 +487,10 @@ class RemoteConnectionWidget(QWidget):
         self._set_inputs_enabled(True)
         self.test_btn.setEnabled(True)
 
+        # Show SLURM batch job settings when connected
+        self.slurm_group.setVisible(True)
+        self._push_batch_config_to_client()
+
         # Show capabilities
         caps = self.client.server_capabilities
         if caps:
@@ -431,6 +511,21 @@ class RemoteConnectionWidget(QWidget):
         self.progress_bar.setVisible(False)
         self._set_inputs_enabled(True)
         self.test_btn.setEnabled(False)
+
+        # Hide SLURM batch job settings when disconnected
+        self.slurm_group.setVisible(False)
+
+    def _push_batch_config_to_client(self):
+        """Push current SLURM settings to the remote client."""
+        from ._remote_client import BatchJobConfig
+        self.client.batch_config = BatchJobConfig(
+            time_hours=self.slurm_time_hours_spin.value(),
+            time_minutes=self.slurm_time_minutes_spin.value(),
+            memory_gb=self.slurm_memory_spin.value(),
+            gpus=self.slurm_gpus_spin.value(),
+            ntasks=self.slurm_ntasks_spin.value(),
+            polling_interval=self.slurm_polling_spin.value(),
+        )
 
     def _set_disconnecting_state(self):
         self.connect_btn.setEnabled(False)

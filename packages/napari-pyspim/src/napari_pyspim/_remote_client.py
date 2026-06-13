@@ -12,15 +12,150 @@ import queue
 import struct
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 import msgpack
 import numpy as np
 import paramiko
-from qtpy.QtCore import QObject, Signal
+from qtpy.QtCore import QObject, QThread, Signal
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Batch job configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BatchJobConfig:
+    """SLURM batch job parameters.
+
+    Parameters
+    ----------
+    time_hours : int
+        Hours portion of the job time limit.
+    time_minutes : int
+        Minutes portion of the job time limit.
+    memory_gb : int
+        Memory requested per node (in GB).
+    gpus : int
+        Number of GPUs to request (0 = CPU only).
+    ntasks : int
+        Number of tasks (single-node only).
+    polling_interval : int
+        Seconds between ``squeue`` status polls.
+    """
+
+    time_hours: int = 1
+    time_minutes: int = 0
+    memory_gb: int = 64
+    gpus: int = 1
+    ntasks: int = 1
+    polling_interval: int = 10
+
+    @property
+    def time_string(self) -> str:
+        """Return SLURM-compatible time format ``HH:MM:SS``."""
+        return f"{self.time_hours:02d}:{self.time_minutes:02d}:00"
+
+
+@dataclass
+class BatchJobHandle:
+    """Tracks the state of a submitted batch job."""
+
+    job_id: str
+    command_type: str  # "registration" or "deconvolution"
+    result_path: str
+    log_dir: str
+    poller: BatchJobPoller | None = None
+    status: str = "PENDING"  # PENDING / RUNNING / COMPLETED / FAILED / CANCELLED
+
+
+# ---------------------------------------------------------------------------
+# Batch job polling thread
+# ---------------------------------------------------------------------------
+
+class BatchJobPoller(QThread):
+    """Polls SLURM job status until completion.
+
+    Signals
+    -------
+    status_changed : str, str
+        (job_id, new_status) emitted when ``squeue`` reports a change.
+    finished : dict
+        Final result dict (``{"success": bool, "result": ..., "error": ...}``).
+    error_occurred : str
+        Error message if polling or result reading fails.
+    progress_updated : str, int
+        (message, percentage) for UI progress bars.
+    """
+
+    status_changed = Signal(str, str)
+    finished = Signal(dict)
+    error_occurred = Signal(str)
+    progress_updated = Signal(str, int)
+
+    def __init__(
+        self,
+        remote_client: RemoteClient,
+        job_id: str,
+        result_path: str,
+        command_type: str,
+        polling_interval: int = 10,
+    ):
+        super().__init__()
+        self._client = remote_client
+        self._job_id = job_id
+        self._result_path = result_path
+        self._command_type = command_type
+        self._polling_interval = polling_interval
+        self._running = True
+
+    def run(self) -> None:
+        """Poll loop: check status every interval, read results when done."""
+        while self._running:
+            try:
+                status_resp = self._client.send_command_blocking(
+                    "check_job_status",
+                    {"job_id": self._job_id},
+                    timeout=30.0,
+                )
+                status = status_resp.get("status", "NOT_FOUND")
+                self.status_changed.emit(self._job_id, status)
+                self.progress_updated.emit(f"Job #{self._job_id} — {status}", -1)
+
+                if status in ("COMPLETED",):
+                    try:
+                        result_resp = self._client.send_command_blocking(
+                            "read_batch_results",
+                            {
+                                "result_path": self._result_path,
+                                "log_dir": getattr(self._client, "_log_dir", None) or "",
+                            },
+                            timeout=60.0,
+                        )
+                        self.finished.emit(result_resp)
+                    except Exception as e:
+                        self.error_occurred.emit(f"Failed to read results: {e}")
+                    break
+
+                if status in ("FAILED", "CANCELLED", "NOT_FOUND"):
+                    self.error_occurred.emit(
+                        f"Job #{self._job_id} ended with status: {status}"
+                    )
+                    break
+
+                time.sleep(self._polling_interval)
+
+            except Exception as e:
+                self.error_occurred.emit(f"Polling error: {e}")
+                break
+
+    def stop(self) -> None:
+        """Request the poller to exit."""
+        self._running = False
 
 # ---------------------------------------------------------------------------
 # Serialization helpers  (mirror of _remote_server.py)
@@ -96,6 +231,10 @@ class RemoteClient(QObject):
         self._username: str | None = None
         self._key_path: str | None = None
         self._remote_script_path: str | None = None
+        # Batch job configuration
+        self._batch_config = BatchJobConfig()
+        self._log_dir: str | None = None  # Set during connect() from remote_venv
+        self._active_jobs: dict[str, BatchJobHandle] = {}
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -154,6 +293,10 @@ class RemoteClient(QObject):
                 "look_for_keys": False,  # Only use explicitly provided key
                 "timeout": 30,
             }
+
+            # Derive log directory from remote_venv: <pyspim_root>/logs
+            if remote_venv:
+                self._log_dir = os.path.join(os.path.dirname(remote_venv), "logs")
 
             if auth_method == "password":
                 connect_kwargs["password"] = password
@@ -669,3 +812,121 @@ class RemoteClient(QObject):
                 break
             data += chunk
         return data
+
+    # ------------------------------------------------------------------
+    # Batch job configuration
+    # ------------------------------------------------------------------
+
+    @property
+    def batch_config(self) -> BatchJobConfig:
+        """Return the current batch job configuration."""
+        return self._batch_config
+
+    @batch_config.setter
+    def batch_config(self, config: BatchJobConfig) -> None:
+        """Update the batch job configuration."""
+        self._batch_config = config
+
+    @property
+    def log_dir(self) -> str | None:
+        """Return the remote log directory path (derived from remote_venv)."""
+        return self._log_dir
+
+    @property
+    def active_jobs(self) -> dict[str, BatchJobHandle]:
+        """Return the dictionary of currently active batch jobs."""
+        return self._active_jobs
+
+    def submit_batch_job(
+        self,
+        command: str,
+        params: dict,
+        command_type: str,
+    ) -> BatchJobHandle:
+        """Submit a batch job to the remote server and return a handle.
+
+        Parameters
+        ----------
+        command : str
+            Server command name (e.g. ``"submit_batch_deconvolution"``).
+        params : dict
+            Computation-specific parameters.
+        command_type : str
+            Human-readable type label (``"registration"`` or ``"deconvolution"``).
+
+        Returns
+        -------
+        BatchJobHandle
+            Handle containing job_id, result_path, and a started poller thread.
+        """
+        if not self._connected:
+            raise RuntimeError("Not connected to remote server")
+
+        # Inject batch config into params
+        batch_params = dict(params)
+        batch_params["batch_config"] = {
+            "time_string": self._batch_config.time_string,
+            "memory_gb": self._batch_config.memory_gb,
+            "gpus": self._batch_config.gpus,
+            "ntasks": self._batch_config.ntasks,
+            "polling_interval": self._batch_config.polling_interval,
+            "log_dir": self._log_dir,
+        }
+
+        resp = self.send_command_blocking(command, batch_params, timeout=120.0)
+        job_id = resp["job_id"]
+        result_path = resp["result_path"]
+        log_dir = resp.get("log_dir", self._log_dir or "")
+
+        # Start polling
+        poller = BatchJobPoller(
+            remote_client=self,
+            job_id=job_id,
+            result_path=result_path,
+            command_type=command_type,
+            polling_interval=self._batch_config.polling_interval,
+        )
+
+        handle = BatchJobHandle(
+            job_id=job_id,
+            command_type=command_type,
+            result_path=result_path,
+            log_dir=log_dir,
+            poller=poller,
+            status="PENDING",
+        )
+        self._active_jobs[job_id] = handle
+
+        # Watch for status changes to update handle
+        poller.status_changed.connect(
+            lambda jid, status: self._on_job_status_changed(jid, status)
+        )
+        poller.finished.connect(
+            lambda result: self._on_job_finished(job_id, result)
+        )
+        poller.error_occurred.connect(
+            lambda msg: self._on_job_error(job_id, msg)
+        )
+
+        poller.start()
+        handle.status = "RUNNING"
+        return handle
+
+    def _on_job_status_changed(self, job_id: str, status: str) -> None:
+        handle = self._active_jobs.get(job_id)
+        if handle:
+            handle.status = status
+
+    def _on_job_finished(self, job_id: str, result: dict) -> None:
+        handle = self._active_jobs.get(job_id)
+        if handle:
+            handle.status = "COMPLETED"
+            if handle.poller:
+                handle.poller.finished.emit(result)
+
+    def _on_job_error(self, job_id: str, message: str) -> None:
+        handle = self._active_jobs.get(job_id)
+        if handle:
+            handle.status = "FAILED"
+            if handle.poller:
+                handle.poller.error_occurred.emit(message)

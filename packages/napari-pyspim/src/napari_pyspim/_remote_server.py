@@ -1429,7 +1429,231 @@ COMMAND_HANDLERS = {
     "apply_registration": handle_apply_registration,
     "save_zarr": handle_save_zarr,
     "cleanup_zarr": handle_cleanup_zarr,
+    "submit_batch_deconvolution": handle_submit_batch_deconvolution,
+    "submit_batch_registration": handle_submit_batch_registration,
+    "check_job_status": handle_check_job_status,
+    "read_batch_results": handle_read_batch_results,
 }
+
+
+# ---------------------------------------------------------------------------
+# Batch job handlers
+# ---------------------------------------------------------------------------
+
+def handle_submit_batch_deconvolution(params: dict) -> dict:
+    """Submit a deconvolution job via SLURM sbatch.
+
+    Generates a batch script and params JSON, submits with sbatch,
+    and returns the job_id and paths.
+    """
+    import subprocess
+    import shutil
+
+    batch_cfg = params.pop("batch_config", {})
+    time_string = batch_cfg.get("time_string", "01:00:00")
+    memory_gb = batch_cfg.get("memory_gb", 64)
+    gpus = batch_cfg.get("gpus", 1)
+    ntasks = batch_cfg.get("ntasks", 1)
+    log_dir = batch_cfg.get("log_dir", "/tmp")
+
+    # Get remote venv from environment or derive
+    remote_venv = os.environ.get("VIRTUAL_ENV", "")
+    if not remote_venv:
+        # Try to find venv from sys.prefix
+        remote_venv = sys.prefix
+
+    from ._batch_utils import (
+        generate_batch_script,
+        generate_params_json,
+        get_unique_paths,
+        get_batch_runner_path,
+    )
+
+    script_path, params_json_path, result_path = get_unique_paths("/tmp", "deconvolution")
+    batch_runner_path = get_batch_runner_path(remote_venv)
+
+    # Write params JSON
+    with open(params_json_path, "w") as f:
+        f.write(generate_params_json("deconvolution", params))
+
+    # Generate and write batch script
+    script_content = generate_batch_script(
+        command_type="deconvolution",
+        params_json_path=params_json_path,
+        result_path=result_path,
+        remote_venv=remote_venv,
+        batch_runner_path=batch_runner_path,
+        time_string=time_string,
+        memory_gb=memory_gb,
+        gpus=gpus,
+        ntasks=ntasks,
+    )
+    with open(script_path, "w") as f:
+        f.write(script_content)
+
+    # Submit
+    result = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"sbatch failed: {result.stderr}")
+
+    # Parse job ID from sbatch output: "Submitted batch job 12345"
+    job_id = result.stdout.strip().split()[-1]
+
+    return {
+        "job_id": job_id,
+        "result_path": result_path,
+        "script_path": script_path,
+        "log_dir": log_dir,
+    }
+
+
+def handle_submit_batch_registration(params: dict) -> dict:
+    """Submit a registration job via SLURM sbatch.
+
+    Writes deskewed volumes from session to zarr, generates batch script,
+    submits with sbatch, and returns job_id and paths.
+    """
+    import subprocess
+
+    batch_cfg = params.pop("batch_config", {})
+    time_string = batch_cfg.get("time_string", "01:00:00")
+    memory_gb = batch_cfg.get("memory_gb", 64)
+    gpus = batch_cfg.get("gpus", 1)
+    ntasks = batch_cfg.get("ntasks", 1)
+    log_dir = batch_cfg.get("log_dir", "/tmp")
+
+    remote_venv = os.environ.get("VIRTUAL_ENV", "") or sys.prefix
+
+    from ._batch_utils import (
+        generate_batch_script,
+        generate_params_json,
+        get_unique_paths,
+        get_batch_runner_path,
+    )
+
+    session_id = params.get("session_id")
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise KeyError(f"Session '{session_id}' not found on server")
+
+    # Write deskewed volumes to temporary zarr paths
+    import zarr
+    script_path, params_json_path, result_path = get_unique_paths("/tmp", "registration")
+
+    a_zarr_path = params_json_path.replace("_params.json", "_a.zarr")
+    b_zarr_path = params_json_path.replace("_params.json", "_b.zarr")
+
+    zarr.open(a_zarr_path, mode="w", data=session["a_deskewed"])
+    zarr.open(b_zarr_path, mode="w", data=session["b_deskewed"])
+
+    # Build computation params with zarr paths
+    reg_params = dict(params)
+    reg_params["a_zarr_path"] = a_zarr_path
+    reg_params["b_zarr_path"] = b_zarr_path
+    reg_params.pop("session_id", None)
+
+    # Write params JSON
+    with open(params_json_path, "w") as f:
+        f.write(generate_params_json("registration", reg_params))
+
+    # Generate and write batch script
+    batch_runner_path = get_batch_runner_path(remote_venv)
+    script_content = generate_batch_script(
+        command_type="registration",
+        params_json_path=params_json_path,
+        result_path=result_path,
+        remote_venv=remote_venv,
+        batch_runner_path=batch_runner_path,
+        time_string=time_string,
+        memory_gb=memory_gb,
+        gpus=gpus,
+        ntasks=ntasks,
+    )
+    with open(script_path, "w") as f:
+        f.write(script_content)
+
+    # Submit
+    result = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"sbatch failed: {result.stderr}")
+
+    job_id = result.stdout.strip().split()[-1]
+
+    return {
+        "job_id": job_id,
+        "result_path": result_path,
+        "script_path": script_path,
+        "log_dir": log_dir,
+    }
+
+
+def handle_check_job_status(params: dict) -> dict:
+    """Check the status of a SLURM job using squeue."""
+    import subprocess
+
+    job_id = params["job_id"]
+    try:
+        result = subprocess.run(
+            ["squeue", "--job", job_id, "--noheader", "--format", "%T"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            # squeue returns non-zero if job not found
+            return {"status": "NOT_FOUND"}
+        status = result.stdout.strip()
+        return {"status": status}
+    except subprocess.TimeoutExpired:
+        return {"status": "NOT_FOUND"}
+    except FileNotFoundError:
+        return {"status": "NOT_FOUND", "error": "squeue not found"}
+
+
+def handle_read_batch_results(params: dict) -> dict:
+    """Read batch job results from JSON and move logs to log_dir."""
+    import shutil
+
+    result_path = params["result_path"]
+    log_dir = params.get("log_dir", "")
+
+    # Read results
+    if not os.path.exists(result_path):
+        raise FileNotFoundError(f"Result file not found: {result_path}")
+
+    with open(result_path) as f:
+        result_data = json.load(f)
+
+    # Move batch files to log_dir if specified
+    if log_dir and os.path.isdir(log_dir):
+        _move_batch_logs_to_logdir(result_path, log_dir)
+
+    return result_data
+
+
+def _move_batch_logs_to_logdir(result_path: str, log_dir: str):
+    """Move batch script and log files to the designated log directory."""
+    import glob
+    import re
+
+    # Extract base prefix from result_path: /tmp/pyspim_batch_deconvolution_abcdef_results.json
+    base = result_path.replace("_results.json", "")
+    # Find related files: .sh, .out, .err
+    pattern = re.compile(re.escape(base) + r"[\w_-]*\.(sh|out|err)$")
+    tmp_dir = os.path.dirname(base)
+
+    for filepath in glob.glob(os.path.join(tmp_dir, "pyspim_batch_*")):
+        if pattern.match(filepath):
+            dest = os.path.join(log_dir, os.path.basename(filepath))
+            try:
+                shutil.move(filepath, dest)
+            except (shutil.Error, OSError):
+                pass  # Best effort
+
+    # Also move the results JSON
+    dest = os.path.join(log_dir, os.path.basename(result_path))
+    try:
+        shutil.move(result_path, dest)
+    except (shutil.Error, OSError):
+        pass
 
 
 # ---------------------------------------------------------------------------

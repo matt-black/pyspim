@@ -709,6 +709,14 @@ class DeconvolutionWidget(QWidget):
         self.save_only_check.setEnabled(False)
         action_layout.addWidget(self.save_only_check)
 
+        # Batch Job checkbox
+        self.batch_job_checkbox = QCheckBox("Compute with Batch Job")
+        self.batch_job_checkbox.setToolTip(
+            "Submit deconvolution as a SLURM batch job (requires active remote connection)."
+        )
+        self.batch_job_checkbox.setEnabled(False)
+        action_layout.addWidget(self.batch_job_checkbox)
+
         # Deconvolve button
         self.deconvolve_button = QPushButton("Deconvolve")
         self.deconvolve_button.clicked.connect(self.deconvolve_data)
@@ -1167,6 +1175,10 @@ class DeconvolutionWidget(QWidget):
         """Start deconvolution based on UI parameters."""
         # Branch to remote path when connected
         if self._is_remote_connected():
+            # Check if batch job mode is requested
+            if self.batch_job_checkbox.isChecked():
+                self._deconvolve_batch()
+                return
             self._deconvolve_remote()
             return
 
@@ -1272,12 +1284,17 @@ class DeconvolutionWidget(QWidget):
             self.save_check.setChecked(True)
             self.save_check.setEnabled(False)
             self.save_only_check.setEnabled(False)
+            # Enable batch job checkbox when remote connected
+            self.batch_job_checkbox.setEnabled(True)
         else:
             # Restore normal behavior
             self.input_mode_layers.setEnabled(True)
             self.input_mode_paths.setEnabled(True)
             self.save_check.setEnabled(True)
             self.save_only_check.setEnabled(True)
+            # Disable batch job checkbox when disconnected
+            self.batch_job_checkbox.setEnabled(False)
+            self.batch_job_checkbox.setChecked(False)
 
     def _deconvolve_remote(self):
         """Collect parameters from UI and send deconvolve command to remote server."""
@@ -1392,6 +1409,116 @@ class DeconvolutionWidget(QWidget):
         self.remote_client.send_command(  # type: ignore[union-attr]
             "deconvolve", params
         )
+
+    def _deconvolve_batch(self):
+        """Submit deconvolution as a SLURM batch job and poll for completion."""
+        # Collect same parameters as _deconvolve_remote
+        a_path = self.path_a_edit.text().strip()
+        b_path = self.path_b_edit.text().strip()
+        if not a_path or not b_path:
+            QMessageBox.warning(
+                self, "Error", "Please specify input paths for View A and View B"
+            )
+            return
+
+        save_path = self.save_path_edit.text().strip()
+        if not save_path:
+            QMessageBox.warning(
+                self, "Error", "Please specify an output path for saving"
+            )
+            return
+
+        params = {
+            "a_path": a_path,
+            "b_path": b_path,
+            "save_path": save_path,
+            "output_format": self.output_format_combo.currentText(),
+            "psf_type": self.psf_type_combo.currentText().lower(),
+            "psf_a_path": self.psf_a_path.text().strip() if self.psf_type_combo.currentText() == "Custom" else None,
+            "psf_b_path": self.psf_b_path.text().strip() if self.psf_type_combo.currentText() == "Custom" else None,
+            "deskew_method": self.deskew_method_combo.currentText(),
+            "fwhm_a_lat": self.psf_a_fwhm_lateral.value(),
+            "fwhm_a_ax": self.psf_a_fwhm_axial.value(),
+            "fwhm_b_lat": self.psf_b_fwhm_lateral.value(),
+            "fwhm_b_ax": self.psf_b_fwhm_axial.value(),
+            "bp_type": "flipped_psf" if self.flipped_psf_check.isChecked() else self.psf_type_combo.currentText().lower(),
+            "bp_a_path": self.bp_a_path.text().strip() if not self.flipped_psf_check.isChecked() and self.psf_type_combo.currentText() == "Custom" else None,
+            "bp_b_path": self.bp_b_path.text().strip() if not self.flipped_psf_check.isChecked() and self.psf_type_combo.currentText() == "Custom" else None,
+            "bp_fwhm_a_lat": self.bp_a_fwhm_lateral.value(),
+            "bp_fwhm_a_ax": self.bp_a_fwhm_axial.value(),
+            "bp_fwhm_b_lat": self.bp_b_fwhm_lateral.value(),
+            "bp_fwhm_b_ax": self.bp_b_fwhm_axial.value(),
+            "decon_function": self._get_decon_function(),
+            "num_iter": self.iterations_spin.value(),
+            "epsilon": self.epsilon_spin.value(),
+            "req_both": self.require_both_check.isChecked(),
+            "boundary_correction": self.boundary_enable_check.isChecked(),
+            "boundary_sigma": self.boundary_threshold_spin.value(),
+            "chunkwise": self.chunkwise_enable_check.isChecked(),
+            "chunk_size": [self.chunk_size_z.value(), self.chunk_size_y.value(), self.chunk_size_x.value()],
+            "overlap": [self.overlap_z.value(), self.overlap_y.value(), self.overlap_x.value()],
+        }
+
+        # Update UI state
+        self.deconvolve_button.setEnabled(False)
+        self.batch_job_checkbox.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.status_label.setText("Submitting batch job...")
+
+        # Submit batch job
+        try:
+            handle = self.remote_client.submit_batch_job(
+                command="submit_batch_deconvolution",
+                params=params,
+                command_type="deconvolution",
+            )
+            self.status_label.setText(f"Batch job #{handle.job_id} submitted — polling...")
+
+            # Connect poller signals
+            handle.poller.status_changed.connect(self._on_batch_status_changed)
+            handle.poller.finished.connect(self._on_batch_finished)
+            handle.poller.error_occurred.connect(self._on_batch_error)
+            handle.poller.progress_updated.connect(self._on_batch_progress)
+
+        except Exception as e:
+            self.deconvolve_button.setEnabled(True)
+            self.batch_job_checkbox.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(self, "Error", f"Failed to submit batch job: {e}")
+
+    def _on_batch_status_changed(self, job_id: str, status: str):
+        self.status_label.setText(f"Job #{job_id} — {status}")
+
+    def _on_batch_finished(self, result: dict):
+        self.deconvolve_button.setEnabled(True)
+        self.batch_job_checkbox.setEnabled(True)
+        self.progress_bar.setVisible(False)
+
+        if result.get("success"):
+            output_path = result.get("result", {}).get("output_path", "unknown")
+            self.status_label.setText("Batch deconvolution complete")
+            QMessageBox.information(
+                self, "Success",
+                f"Deconvolution completed successfully.\nOutput: {output_path}"
+            )
+        else:
+            error_msg = result.get("error", "Unknown error")
+            self.status_label.setText("Batch deconvolution failed")
+            QMessageBox.critical(self, "Error", f"Deconvolution failed: {error_msg}")
+
+    def _on_batch_error(self, message: str):
+        self.deconvolve_button.setEnabled(True)
+        self.batch_job_checkbox.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.status_label.setText("Batch job error")
+        QMessageBox.critical(self, "Error", f"Batch job error: {message}")
+
+    def _on_batch_progress(self, message: str, percentage: int):
+        self.status_label.setText(message)
+        if percentage >= 0:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(percentage)
 
     def _on_remote_command_response(self, response: dict):
         """Handle response from remote server for deconvolve command.
