@@ -6,12 +6,13 @@ and writes MessagePack responses to stdout.
 Can be run standalone via: pyspim-remote-server
 Or executed by the client after SFTP upload.
 """
-
-import json
-import logging
-import struct
+import os
 import sys
 import time
+import json
+import shutil
+import struct
+import logging
 import msgpack
 
 # Configure logging to stderr so it doesn't interfere with stdout protocol
