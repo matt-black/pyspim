@@ -356,10 +356,19 @@ def _save_result(out, save_path, output_format, shape):
         import dask.array as da
         import tifffile
         dask_data = da.from_zarr(out)
-        tifffile.imwrite(save_path, dask_data, bigtiff=True, photometric="minisblack",
-                          resolution=(1 / 0.1625, 1 / 0.1625),
-                          metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
-                          tile=(1024, 1024))
+        tifffile.imwrite(save_path, dask_data, bigtiff=True, ome=True,
+                         photometric="minisblack",
+                         resolution=(1 / 0.1625, 1 / 0.1625),
+                         metadata={
+                            "axes": axes,
+                            "PhysicalSizeX": 0.1625,
+                            "PhysicalSizeY": 0.1625,
+                            "PhysicalSizeZ": 0.1625,
+                            "PhysicalSizeXUnit": 'µm',
+                            "PhysicalSizeYUnit": 'µm',
+                            "PhysicalSizeZUnit": 'µm',
+                        },
+                        tile=(1024, 1024))
         return save_path
 
 
@@ -380,9 +389,18 @@ def _save_result_array(result, save_path, output_format, shape):
         if not save_path.endswith(".tif") and not save_path.endswith(".tiff"):
             save_path += ".ome.tif"
         import tifffile
-        tifffile.imwrite(save_path, result, bigtiff=True, photometric="minisblack",
-                          resolution=(1 / 0.1625, 1 / 0.1625),
-                          metadata={"axes": axes, "spacing": 0.1625, "units": "um"})
+        tifffile.imwrite(save_path, result, bigtiff=True, ome=True,
+                         photometric="minisblack",
+                         resolution=(1 / 0.1625, 1 / 0.1625),
+                         metadata={
+                            "axes": axes,
+                            "PhysicalSizeX": 0.1625,
+                            "PhysicalSizeY": 0.1625,
+                            "PhysicalSizeZ": 0.1625,
+                            "PhysicalSizeXUnit": 'µm',
+                            "PhysicalSizeYUnit": 'µm',
+                            "PhysicalSizeZUnit": 'µm',
+                        })
         return save_path
 
 

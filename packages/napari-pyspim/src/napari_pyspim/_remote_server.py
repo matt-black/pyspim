@@ -815,11 +815,6 @@ def handle_deconvolve(params: dict) -> dict:
     # Open input zarr arrays
     zarr_a = zarr.open(a_path, mode="r")
     zarr_b = zarr.open(b_path, mode="r")
-    logger.info(
-        "[handle_deconvolve] zarr_a.shape=%s, zarr_b.shape=%s, "
-        "zarr_a.dtype=%s, zarr_b.dtype=%s",
-        zarr_a.shape, zarr_b.shape, zarr_a.dtype, zarr_b.dtype,
-    )
 
     _progress("Generating PSF...", 10)
 
@@ -898,11 +893,6 @@ def handle_deconvolve(params: dict) -> dict:
     # Import deconvolution functions
     from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
 
-    logger.info(
-        "[handle_deconvolve] chunkwise=%s, chunk_size=%s, overlap=%s",
-        chunkwise, chunk_size, overlap,
-    )
-
     if chunkwise:
         _progress("Running chunkwise deconvolution...", 20)
         # Use temporary zarr for chunkwise output
@@ -935,10 +925,6 @@ def handle_deconvolve(params: dict) -> dict:
             )
 
             _progress("Saving output...", 90)
-            logger.info(
-                "[handle_deconvolve] chunkwise out.shape=%s, zarr_a.shape=%s",
-                out.shape, zarr_a.shape,
-            )
             output_path = _save_decon_result(out, save_path, output_format, zarr_a.shape)
     else:
         _progress("Running full deconvolution...", 20)
@@ -975,12 +961,6 @@ def handle_deconvolve(params: dict) -> dict:
 
         result = result_cp.get().astype(np.float32)
 
-        logger.info(
-            "[handle_deconvolve] non-chunkwise result.shape=%s, zarr_a.shape=%s, "
-            "len(result.shape)=%d",
-            result.shape, zarr_a.shape, len(result.shape),
-        )
-
         _progress("Saving output...", 90)
         output_path = _save_decon_result_array(result, save_path, output_format, zarr_a.shape)
 
@@ -1016,16 +996,8 @@ def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, sh
     import os
     import shutil
 
-    logger.info(
-        "[_save_decon_result] out.shape=%s, passed shape=%s, output_format=%s",
-        out.shape, shape, output_format,
-    )
     is_multichannel = len(shape) > 3
     axes = "CZYX" if is_multichannel else "ZYX"
-    logger.info(
-        "[_save_decon_result] is_multichannel=%s, axes=%s",
-        is_multichannel, axes,
-    )
 
     if output_format == "Zarr":
         # Ensure path ends with .zarr
@@ -1068,13 +1040,24 @@ def _save_decon_result(out: "zarr.Array", save_path: str, output_format: str, sh
         dask_data = da.from_zarr(out)
 
         # Write to OME-TIFF using tiled/chunked approach
+        # ome=True is required so that the axes metadata is respected and
+        # the C dimension is NOT silently merged into the Z stack.
         tifffile.imwrite(
             save_path,
             dask_data,
             bigtiff=True,
+            ome=True,
             photometric="minisblack",
             resolution=(1 / 0.1625, 1 / 0.1625),
-            metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
+            metadata={
+                "axes": axes,
+                "PhysicalSizeX": 0.1625,
+                "PhysicalSizeY": 0.1625,
+                "PhysicalSizeZ": 0.1625,
+                "PhysicalSizeXUnit": 'µm',
+                "PhysicalSizeYUnit": 'µm',
+                "PhysicalSizeZUnit": 'µm',
+            },
             tile=(1024, 1024),
         )
         return save_path
@@ -1084,17 +1067,8 @@ def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format
     """Save deconvolution result from a numpy array to the specified format."""
     import zarr
 
-    logger.info(
-        "[_save_decon_result_array] result.shape=%s, passed shape=%s, "
-        "output_format=%s, result.ndim=%d",
-        result.shape, shape, output_format, result.ndim,
-    )
     is_multichannel = len(shape) > 3
     axes = "CZYX" if is_multichannel else "ZYX"
-    logger.info(
-        "[_save_decon_result_array] is_multichannel=%s, axes=%s",
-        is_multichannel, axes,
-    )
 
     if output_format == "Zarr":
         if not save_path.endswith(".zarr"):
@@ -1118,9 +1092,18 @@ def _save_decon_result_array(result: "np.ndarray", save_path: str, output_format
             save_path,
             result,
             bigtiff=True,
+            ome=True,
             photometric="minisblack",
             resolution=(1 / 0.1625, 1 / 0.1625),
-            metadata={"axes": axes, "spacing": 0.1625, "units": "um"},
+            metadata={
+                "axes": axes,
+                "PhysicalSizeX": 0.1625,
+                "PhysicalSizeY": 0.1625,
+                "PhysicalSizeZ": 0.1625,
+                "PhysicalSizeXUnit": 'µm',
+                "PhysicalSizeYUnit": 'µm',
+                "PhysicalSizeZUnit": 'µm',
+            },
         )
         return save_path
 

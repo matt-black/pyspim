@@ -207,8 +207,6 @@ def deconvolve(
         NDArray
     """
     if len(view_a.shape) == 4:
-        if verbose:
-            print(f"[deconvolve] 4D input detected: view_a.shape={view_a.shape}, dispatching to _deconvolve_multichannel")
         return _deconvolve_multichannel(
             view_a,
             view_b,
@@ -228,8 +226,6 @@ def deconvolve(
             verbose,
         )
     elif len(view_a.shape) == 3:
-        if verbose:
-            print(f"[deconvolve] 3D input detected: view_a.shape={view_a.shape}, dispatching to _deconvolve_single_channel")
         return _deconvolve_single_channel(
             view_a,
             view_b,
@@ -891,10 +887,6 @@ def _decon_chunk(
         # load data
         a = view_a.oindex[chunk_props.read_window]
         b = view_b.oindex[chunk_props.read_window]
-        logger.warning(
-            "[_decon_chunk] gpu=%d read_window=%s, a.shape=%s, b.shape=%s",
-            gpu_id, chunk_props.read_window, a.shape, b.shape,
-        )
         # in many large volumes, there's large chunks of black-space
         # (e.g. using the 'shear' or 'dispim' deskewing)
         # so just do a quick check and see if we're in one of those, and if we
@@ -931,17 +923,7 @@ def _decon_chunk(
                 boundary_sigma_a,
                 boundary_sigma_b,
                 verbose=False,
-            )
-            dec_full = dec.get()
-            logger.warning(
-                "[_decon_chunk] gpu=%d dec_full.shape=%s, out_window=%s",
-                gpu_id, dec_full.shape, chunk_props.out_window,
-            )
-            dec = dec_full[chunk_props.out_window]
-            logger.warning(
-                "[_decon_chunk] gpu=%d dec[after out_window].shape=%s, data_window=%s",
-                gpu_id, dec.shape, chunk_props.data_window,
-            )
+            ).get()[chunk_props.out_window]
 
             # Explicit GPU memory cleanup after deconvolution
             # to prevent GPU memory exhaustion across chunks
