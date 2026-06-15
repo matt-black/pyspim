@@ -69,6 +69,7 @@ class LoadDeskewWorker(QThread):
         psf_fwhm_lateral: float = None,
         psf_model: str = "gaussian",
         use_psf_in_plane: bool = False,
+        force_cpu: bool = False,
     ):
         super().__init__()
         self.data_path = data_path
@@ -88,6 +89,7 @@ class LoadDeskewWorker(QThread):
         self.psf_fwhm_lateral = psf_fwhm_lateral
         self.psf_model = psf_model
         self.use_psf_in_plane = use_psf_in_plane
+        self.force_cpu = force_cpu
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists."""
@@ -139,6 +141,11 @@ class LoadDeskewWorker(QThread):
             pass
         return yx_proj, zy_proj, xz_proj
 
+    @property
+    def use_remote(self):
+        """Whether to use remote execution. Defaults to False."""
+        return getattr(self, '_use_remote', False)
+
     def run(self):
         """Load data, deskew, and compute projections in background thread."""
         if self.use_remote:
@@ -151,14 +158,23 @@ class LoadDeskewWorker(QThread):
         try:
             from pyspim.data import dispim as data
             from pyspim import deskew as dsk
-            
+
+            # Use numpy for data loading when force_cpu is True
+            if self.force_cpu:
+                import numpy as load_np
+            else:
+                try:
+                    import cupy as load_np
+                except ImportError:
+                    import numpy as load_np
+
             # Load bounding box if present
             window = self._load_bbox()
             print(window)
 
             # Load data
             self.progress_updated.emit("Loading data...")
-            with data.uManagerAcquisition(self.data_path, self.multi_pos, np) as acq:
+            with data.uManagerAcquisition(self.data_path, self.multi_pos, load_np) as acq:
                 if self.multi_pos:
                     volume_a = acq.get(self.position, "a", self.channel, self.time, window=window)
                     volume_b = acq.get(self.position, "b", self.channel, self.time, window=window)
@@ -300,6 +316,7 @@ class LoadDeskewWorker(QThread):
                 "position": self.position,
                 "auto_crop": self.auto_crop,
                 "camera_offset": self.camera_offset,
+                "force_cpu": self.force_cpu,
             }
             # Add orthopsf-specific params if method is orthopsf
             if self.method == "orthopsf":
@@ -1095,15 +1112,15 @@ class RegistrationWidget(QWidget):
 
         self.psf_fwhm_axial_spin = QDoubleSpinBox()
         self.psf_fwhm_axial_spin.setRange(0.1, 100.0)
-        self.psf_fwhm_axial_spin.setValue(2.1)
-        self.psf_fwhm_axial_spin.setDecimals(3)
+        self.psf_fwhm_axial_spin.setValue(1.6744)
+        self.psf_fwhm_axial_spin.setDecimals(4)
         self.psf_fwhm_axial_spin.setSuffix(" μm")
         self.psf_fwhm_axial_spin.setToolTip("Axial PSF FWHM in micrometers")
         psf_layout.addRow("Axial FWHM:", self.psf_fwhm_axial_spin)
 
         self.psf_fwhm_lateral_spin = QDoubleSpinBox()
         self.psf_fwhm_lateral_spin.setRange(0.01, 50.0)
-        self.psf_fwhm_lateral_spin.setValue(0.381)
+        self.psf_fwhm_lateral_spin.setValue(0.3245)
         self.psf_fwhm_lateral_spin.setDecimals(4)
         self.psf_fwhm_lateral_spin.setSuffix(" μm")
         self.psf_fwhm_lateral_spin.setToolTip("Lateral PSF FWHM in micrometers")
@@ -1124,6 +1141,14 @@ class RegistrationWidget(QWidget):
         psf_layout.addRow(self.use_psf_in_plane_checkbox)
 
         self.psf_group.setLayout(psf_layout)
+
+        # Force CPU checkbox (visible only for ortho* methods)
+        self.force_cpu_checkbox = QCheckBox("Force CPU")
+        self.force_cpu_checkbox.setToolTip(
+            "When enabled, forces CPU computation for orthogeo and orthopsf deskewing. "
+            "Useful when GPU memory is insufficient for large volumes."
+        )
+        self.force_cpu_checkbox.setChecked(False)
 
         # Connect method combo to show/hide method-specific widgets
         self.method_combo.currentTextChanged.connect(self._on_method_changed)
@@ -1291,6 +1316,15 @@ class RegistrationWidget(QWidget):
         )
         apply_layout.addWidget(self.save_tiffs_checkbox)
 
+        # Batch Job checkbox
+        self.batch_job_checkbox = QCheckBox("Compute as Batch Job")
+        self.batch_job_checkbox.setToolTip(
+            "Submit apply computation as a SLURM batch job "
+            "(requires active remote connection)."
+        )
+        self.batch_job_checkbox.setEnabled(False)
+        apply_layout.addWidget(self.batch_job_checkbox)
+
         # Apply button
         self.apply_button = QPushButton("Apply")
         self.apply_button.clicked.connect(self.apply_registration)
@@ -1307,6 +1341,7 @@ class RegistrationWidget(QWidget):
         layout.addWidget(path_group)
         layout.addWidget(deskew_group)
         layout.addWidget(self.psf_group)
+        layout.addWidget(self.force_cpu_checkbox)
         layout.addWidget(self.load_deskew_button)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
@@ -1426,6 +1461,12 @@ class RegistrationWidget(QWidget):
         if current_method == "orthopsf":
             self.psf_fwhm_axial_spin.setValue(2.1)
             self.psf_fwhm_lateral_spin.setValue(0.381)
+        # Enable Force CPU only for ortho* methods
+        if current_method in ("orthogeo", "orthopsf"):
+            self.force_cpu_checkbox.setEnabled(True)
+        else:
+            self.force_cpu_checkbox.setEnabled(False)
+            self.force_cpu_checkbox.setChecked(False)
 
     def _map_psf_model(self, display_name: str) -> str:
         """Map PSF model display name to internal string."""
@@ -1599,6 +1640,7 @@ class RegistrationWidget(QWidget):
         psf_fwhm_lateral = self.psf_fwhm_lateral_spin.value() if method == "orthopsf" else None
         psf_model = self._map_psf_model(self.psf_model_combo.currentText()) if method == "orthopsf" else "gaussian"
         use_psf_in_plane = self.use_psf_in_plane_checkbox.isChecked() if method == "orthopsf" else False
+        force_cpu = self.force_cpu_checkbox.isChecked()
 
         self.load_worker = LoadDeskewWorker(
             data_path, channel, projection_type,
@@ -1607,6 +1649,7 @@ class RegistrationWidget(QWidget):
             multi_pos, time, position,
             auto_crop, camera_offset,
             psf_fwhm_axial, psf_fwhm_lateral, psf_model, use_psf_in_plane,
+            force_cpu,
         )
         self.load_worker.ready.connect(self.on_load_deskew_ready)
         self.load_worker.error_occurred.connect(self.on_error)
@@ -1639,6 +1682,7 @@ class RegistrationWidget(QWidget):
             "position": position,
             "auto_crop": auto_crop,
             "camera_offset": camera_offset,
+            "force_cpu": self.force_cpu_checkbox.isChecked(),
         }
 
         if method == "orthopsf":
@@ -3222,18 +3266,25 @@ class RegistrationWidget(QWidget):
         self.channel_min_spin.setEnabled(enabled)
         self.channel_max_spin.setEnabled(enabled)
         self.apply_button.setEnabled(enabled)
+        # Batch checkbox is only enabled in remote mode
+        if enabled and self._remote_mode:
+            self.batch_job_checkbox.setEnabled(True)
+        else:
+            self.batch_job_checkbox.setEnabled(False)
+            self.batch_job_checkbox.setChecked(False)
 
     def apply_registration(self):
         """Apply saved registration transformations to specified ranges.
 
         Uses remote server when connection is active and path is remote,
         otherwise falls back to local execution using ApplyWorker.
+        When batch checkbox is checked and remote connected, submits as SLURM job.
         """
         data_path = self.path_edit.text()
         if not data_path:
             QMessageBox.warning(self, "Error", "Please select a valid data path")
             return
-    
+     
         # For local mode, validate path and params file exist
         if not self._remote_mode:
             if not os.path.exists(data_path):
@@ -3270,6 +3321,16 @@ class RegistrationWidget(QWidget):
         # Store for later signal emission
         self._apply_output_folder = output_folder
         self._apply_time_range = (time_min, time_max)
+
+        # Check for batch mode when remote connected
+        if self._remote_mode and self.batch_job_checkbox.isChecked():
+            self._apply_registration_batch(
+                data_path, output_folder,
+                (time_min, time_max), (chan_min, chan_max),
+                multi_pos, position, ignore_bbox,
+                save_tiffs,
+            )
+            return
 
         # Disable UI during processing
         self.apply_button.setEnabled(False)
@@ -3368,3 +3429,113 @@ class RegistrationWidget(QWidget):
         self.progress_bar.setVisible(False)
         self.apply_button.setEnabled(True)
         self.load_deskew_button.setEnabled(True)
+
+    # ------------------------------------------------------------------
+    # Batch apply methods
+    # ------------------------------------------------------------------
+
+    def _apply_registration_batch(
+        self,
+        data_path: str,
+        output_folder: str,
+        time_range: tuple,
+        channel_range: tuple,
+        multi_pos: bool,
+        position: int,
+        ignore_bbox: bool,
+        save_tiffs: bool,
+    ):
+        """Submit apply registration as a SLURM batch job."""
+        if not self.remote_client:
+            self._on_apply_error("Remote client not available")
+            return
+
+        params = {
+            "data_path": data_path,
+            "params_path": os.path.join(data_path, "deskew_registration_params.json"),
+            "time_range": list(time_range),
+            "channel_range": list(channel_range),
+            "multi_pos": multi_pos,
+            "position": position,
+            "output_folder": output_folder,
+            "ignore_bbox": ignore_bbox,
+            "save_tiffs": save_tiffs,
+        }
+
+        # Disable UI during batch processing
+        self.apply_button.setEnabled(False)
+        self.load_deskew_button.setEnabled(False)
+        self.batch_job_checkbox.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate
+        self.status_label.setText("Submitting batch job...")
+
+        try:
+            handle = self.remote_client.submit_batch_job(
+                command="submit_batch_apply",
+                params=params,
+                command_type="apply",
+            )
+            self.status_label.setText(
+                f"Batch job #{handle.job_id} submitted — polling..."
+            )
+
+            # Connect poller signals
+            handle.poller.status_changed.connect(self._on_batch_status_changed)
+            handle.poller.finished.connect(self._on_batch_finished)
+            handle.poller.error_occurred.connect(self._on_batch_error)
+            handle.poller.progress_updated.connect(self._on_batch_progress)
+
+        except Exception as e:
+            self.apply_button.setEnabled(True)
+            self.load_deskew_button.setEnabled(True)
+            self.batch_job_checkbox.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(
+                self, "Error", f"Failed to submit batch job: {e}"
+            )
+
+    def _on_batch_status_changed(self, job_id: str, status: str):
+        """Handle status change for batch job."""
+        self.status_label.setText(f"Job #{job_id} — {status}")
+
+    def _on_batch_finished(self, result: dict):
+        """Handle successful completion of batch apply job."""
+        self.apply_button.setEnabled(True)
+        self.load_deskew_button.setEnabled(True)
+        self.batch_job_checkbox.setEnabled(True)
+        self.progress_bar.setVisible(False)
+
+        if result.get("success"):
+            output_folder = result.get("result", {}).get(
+                "output_folder", "unknown"
+            )
+            self.status_label.setText("Batch apply complete")
+            # Emit registered signal with output paths for Deconvolution
+            time_min = self.time_min_spin.value()
+            output_data = {
+                "a_path": os.path.join(output_folder, f"a_t{time_min}.zarr"),
+                "b_path": os.path.join(output_folder, f"b_t{time_min}.zarr"),
+                "output_folder": output_folder,
+            }
+            self.registered.emit(output_data)
+        else:
+            error_msg = result.get("error", "Unknown error")
+            self.status_label.setText("Batch apply failed")
+            QMessageBox.critical(self, "Error", f"Apply failed: {error_msg}")
+
+    def _on_batch_error(self, message: str):
+        """Handle error from batch job."""
+        self.apply_button.setEnabled(True)
+        self.load_deskew_button.setEnabled(True)
+        self.batch_job_checkbox.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.status_label.setText("Batch job error")
+        QMessageBox.critical(self, "Error", f"Batch job error: {message}")
+
+    def _on_batch_progress(self, message: str, percentage: int):
+        """Handle progress update from batch job poller."""
+        self.status_label.setText(message)
+        if percentage >= 0:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(percentage)

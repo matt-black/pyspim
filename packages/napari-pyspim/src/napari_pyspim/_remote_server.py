@@ -281,10 +281,14 @@ def handle_load_deskew(params: dict) -> dict:
                     volume_shape_a, volume_shape_b, method, step_size
     """
     import math
-    try:
-        import cupy as np
-    except:
+    force_cpu = params.get("force_cpu", False)
+    if force_cpu:
         import numpy as np
+    else:
+        try:
+            import cupy as np
+        except:
+            import numpy as np
     import os
 
     data_path = params["data_path"]
@@ -1704,6 +1708,73 @@ def handle_submit_batch_registration(params: dict) -> dict:
     }
 
 
+def handle_submit_batch_apply(params: dict) -> dict:
+    """Submit an apply-registration job via SLURM sbatch.
+
+    Generates a batch script and params JSON, submits with sbatch,
+    and returns the job_id and paths.
+    """
+    import subprocess
+
+    batch_cfg = params.pop("batch_config", {})
+    time_string = batch_cfg.get("time_string", "01:00:00")
+    memory_gb = batch_cfg.get("memory_gb", 64)
+    gpus = batch_cfg.get("gpus", 1)
+    ntasks = batch_cfg.get("ntasks", 1)
+    log_dir = batch_cfg.get("log_dir", "/tmp")
+
+    remote_venv = os.environ.get("VIRTUAL_ENV", "") or sys.prefix
+
+    # Use persistent logs directory on shared filesystem instead of /tmp
+    root_dir = os.path.dirname(remote_venv)
+    batch_dir = os.path.join(root_dir, "logs", "batch_jobs")
+    os.makedirs(batch_dir, exist_ok=True)
+
+    from napari_pyspim._batch_utils import (
+        generate_batch_script,
+        generate_params_json,
+        get_unique_paths,
+        get_batch_runner_path,
+    )
+
+    script_path, params_json_path, result_path = get_unique_paths(batch_dir, "apply")
+    batch_runner_path = get_batch_runner_path(remote_venv)
+
+    # Write params JSON
+    with open(params_json_path, "w") as f:
+        f.write(generate_params_json("apply", params))
+
+    # Generate and write batch script
+    script_content = generate_batch_script(
+        command_type="apply",
+        params_json_path=params_json_path,
+        result_path=result_path,
+        remote_venv=remote_venv,
+        batch_runner_path=batch_runner_path,
+        time_string=time_string,
+        memory_gb=memory_gb,
+        gpus=gpus,
+        ntasks=ntasks,
+    )
+    with open(script_path, "w") as f:
+        f.write(script_content)
+
+    # Submit
+    result = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"sbatch failed: {result.stderr}")
+
+    # Parse job ID from sbatch output: "Submitted batch job 12345"
+    job_id = result.stdout.strip().split()[-1]
+
+    return {
+        "job_id": job_id,
+        "result_path": result_path,
+        "script_path": script_path,
+        "log_dir": log_dir,
+    }
+
+
 def _map_sacct_state(raw_state: str) -> str:
     """Map a raw sacct state string to a canonical job status.
 
@@ -1856,6 +1927,7 @@ COMMAND_HANDLERS = {
     "cleanup_zarr": handle_cleanup_zarr,
     "submit_batch_deconvolution": handle_submit_batch_deconvolution,
     "submit_batch_registration": handle_submit_batch_registration,
+    "submit_batch_apply": handle_submit_batch_apply,
     "check_job_status": handle_check_job_status,
     "read_batch_results": handle_read_batch_results,
 }

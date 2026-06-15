@@ -230,7 +230,6 @@ class RemoteClient(QObject):
         self._port: int | None = None
         self._username: str | None = None
         self._key_path: str | None = None
-        self._remote_script_path: str | None = None
         # Batch job configuration
         self._batch_config = BatchJobConfig()
         self._log_dir: str | None = None  # Set during connect() from remote_venv
@@ -353,15 +352,6 @@ class RemoteClient(QObject):
             # --- SFTP ---
             self._sftp = self._ssh.open_sftp()
 
-            # --- Upload server script ---
-            local_script = os.path.join(
-                os.path.dirname(__file__), "_remote_server.py"
-            )
-            self._remote_script_path = (
-                f"/tmp/pyspim_remote_server_{os.getpid()}.py"
-            )
-            self._sftp.put(local_script, self._remote_script_path)
-
             # --- Start remote Python process ---
             # Prefer the venv's python binary directly (more reliable than
             # sourcing activate which can fail in non-interactive shells).
@@ -381,12 +371,12 @@ class RemoteClient(QObject):
                     pass  # Directory already exists
                 command = (
                     f"PYSPIM_LOG_PATH={self._remote_log_path} "
-                    f"{python_bin} {self._remote_script_path} "
+                    f"{python_bin} -m napari_pyspim._remote_server "
                     f"2>{self._remote_log_path}"
                 )
             else:
                 self._remote_log_path = None
-                command = f"python {self._remote_script_path}"
+                command = "python -m napari_pyspim._remote_server"
 
             logger.info("[CONNECT] Remote command: %s", command)
             self._channel = self._ssh.get_transport().open_session()
@@ -457,12 +447,6 @@ class RemoteClient(QObject):
         if self._receiver_thread and self._receiver_thread.is_alive():
             self._receiver_thread.join(timeout=5)
 
-        # Clean up remote script
-        if self._sftp and self._remote_script_path:
-            try:
-                self._sftp.remove(self._remote_script_path)
-            except Exception:
-                pass
 
         if self._sftp:
             try:

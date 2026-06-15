@@ -28,7 +28,7 @@ def _custom_encoder(obj):
 
 def main():
     parser = argparse.ArgumentParser(description="pyspim batch job runner")
-    parser.add_argument("--command", required=True, help="Command type (deconvolution or registration)")
+    parser.add_argument("--command", required=True, help="Command type (deconvolution, registration, or apply)")
     parser.add_argument("--params-json", required=True, help="Path to JSON params file")
     parser.add_argument("--output", required=True, help="Path to write results JSON")
     args = parser.parse_args()
@@ -49,6 +49,10 @@ def main():
             output["result"] = result
         elif command_type == "registration":
             result = _run_registration(params)
+            output["success"] = True
+            output["result"] = result
+        elif command_type == "apply":
+            result = _run_apply(params)
             output["success"] = True
             output["result"] = result
         else:
@@ -310,6 +314,326 @@ def _run_registration(params: dict) -> dict:
     cr = float(1 - res.fun)
 
     return {"transform_matrix": T_list, "correlation_ratio": cr}
+
+
+def _run_apply(params: dict) -> dict:
+    """Execute Apply computation using parameters from a batch job.
+    
+    Mirrors the logic in ApplyWorker.run() from _registration.py but runs
+    as a standalone script on a compute node.
+    """
+    import math
+    import shutil
+    import numpy as np
+    import zarr
+    import tifffile
+    
+    try:
+        import cupy as cp
+    except ImportError:
+        cp = np
+        
+    from pyspim.data import dispim as data
+    from pyspim import deskew as dsk
+    from pyspim.interp import affine
+
+    data_path = params["data_path"]
+    params_path = params["params_path"]
+    time_range = params["time_range"]
+    channel_range = params["channel_range"]
+    multi_pos = params.get("multi_pos", False)
+    position = params.get("position", 0)
+    output_folder = params["output_folder"]
+    ignore_bbox = params.get("ignore_bbox", False)
+    save_tiffs = params.get("save_tiffs", False)
+
+    # Load parameters
+    with open(params_path, "r") as f:
+        params_dict = json.load(f)
+
+    dp = params_dict["deskewing_parameters"]
+    method = dp["method"]
+    step_size = dp["step_size_um"]
+    pixel_size = dp["pixel_size_um"]
+    camera_offset = dp.get("camera_offset", 0)
+    theta_rad = math.pi / 4  # Hardcoded to 45 degrees
+    affine_matrix = np.array(params_dict["affine_registration_matrix"])
+
+    # Load registration parameters
+    rp = params_dict["registration_parameters"]
+    interp_method = rp.get("interp_method", "cubspl")
+    pre_reg = params_dict["pre_reg_transform"]
+    pre_reg_t = [
+        pre_reg["tz_um"] / pixel_size,
+        pre_reg["ty_um"] / pixel_size,
+        pre_reg["tx_um"] / pixel_size,
+    ]
+    # Load crop bounds from saved params
+    crop_bounds = params_dict.get("crop_bounds")
+
+    # Build deskew kwargs matching ApplyWorker logic
+    deskew_kwargs = _get_deskew_kwargs(method, dp)
+
+    # Load bbox
+    window = _load_bbox(data_path, ignore_bbox)
+
+    # Prepare output folder
+    if os.path.exists(output_folder):
+        shutil.rmtree(output_folder)
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Determine channel indices
+    chan_start = channel_range[0]
+    chan_end = channel_range[1]
+    channels = list(range(chan_start, chan_end + 1))
+    n_channels = len(channels)
+
+    time_start, time_end = time_range
+
+    for t in range(time_start, time_end + 1):
+        # Process first channel to determine output shape
+        first_chan = channels[0]
+
+        with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+            if multi_pos:
+                vol_a = acq.get(position, "a", first_chan, t, window=window)
+                vol_b = acq.get(position, "b", first_chan, t, window=window)
+            else:
+                vol_a = acq.get("a", first_chan, t, window=window)
+                vol_b = acq.get("b", first_chan, t, window=window)
+
+        # Subtract camera offset if non-zero
+        if camera_offset > 0:
+            from pyspim.data.dispim import subtract_constant_uint16arr
+            vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+            vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
+
+        a_dsk = dsk.deskew_stage_scan(
+            vol_a, pixel_size, step_size, 1,
+            theta=theta_rad, method=method, **deskew_kwargs
+        )
+        try:
+            a_dsk = a_dsk.get()
+        except:
+            pass
+
+        b_dsk = dsk.deskew_stage_scan(
+            vol_b, pixel_size, step_size, -1,
+            theta=theta_rad, method=method, **deskew_kwargs
+        )
+        try:
+            b_dsk = b_dsk.get()
+        except:
+            pass
+
+        # Apply crop bounds if present
+        if crop_bounds:
+            z_start = crop_bounds["z_start"]
+            z_end = crop_bounds["z_end"]
+            y_start = crop_bounds["y_start"]
+            y_end = crop_bounds["y_end"]
+            x_start = crop_bounds["x_start"]
+            x_end = crop_bounds["x_end"]
+            tz, ty, tx = pre_reg_t
+
+            a_dsk = a_dsk[z_start:z_end, y_start:y_end, x_start:x_end]
+
+            Zb, Yb, Xb = b_dsk.shape
+            z_start_b = max(0, int(z_start - tz))
+            z_end_b = min(Zb, int(z_end - tz))
+            y_start_b = max(0, int(y_start - ty))
+            y_end_b = min(Yb, int(y_end - ty))
+            x_start_b = max(0, int(x_start - tx))
+            x_end_b = min(Xb, int(x_end - tx))
+            b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
+
+        # Apply affine transform to B
+        b_reg = affine.transform(
+            cp.asarray(b_dsk),
+            cp.asarray(affine_matrix),
+            interp_method=interp_method,
+            preserve_dtype=True,
+            out_shp=None,
+            block_size_z=8,
+            block_size_y=8,
+            block_size_x=8,
+        ).get()
+
+        # Crop to smallest size
+        min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
+        out_shape = (n_channels, *min_shape)
+
+        # Create zarr arrays for this timepoint
+        a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
+        b_zarr_path = os.path.join(output_folder, f"b_t{t}.zarr")
+
+        arr_a = zarr.open(
+            a_zarr_path, mode="w", shape=out_shape,
+            dtype=np.uint16, chunks=(1, 64, 256, 256),
+        )
+        arr_b = zarr.open(
+            b_zarr_path, mode="w", shape=out_shape,
+            dtype=np.uint16, chunks=(1, 64, 256, 256),
+        )
+
+        # Write first channel
+        a_final = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
+        b_final = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
+        arr_a[0, ...] = a_final.astype(np.uint16)
+        arr_b[0, ...] = b_final.astype(np.uint16)
+
+        # Process remaining channels
+        for chan_idx in channels[1:]:
+            c = chan_idx - chan_start
+
+            with data.uManagerAcquisition(data_path, multi_pos, np) as acq:
+                if multi_pos:
+                    vol_a = acq.get(position, "a", chan_idx, t, window=window)
+                    vol_b = acq.get(position, "b", chan_idx, t, window=window)
+                else:
+                    vol_a = acq.get("a", chan_idx, t, window=window)
+                    vol_b = acq.get("b", chan_idx, t, window=window)
+
+            # Subtract camera offset if non-zero
+            if camera_offset > 0:
+                from pyspim.data.dispim import subtract_constant_uint16arr
+                vol_a = subtract_constant_uint16arr(vol_a, camera_offset)
+                vol_b = subtract_constant_uint16arr(vol_b, camera_offset)
+
+            a_dsk = dsk.deskew_stage_scan(
+                vol_a, pixel_size, step_size, 1,
+                theta=theta_rad, method=method, **deskew_kwargs
+            )
+            try:
+                a_dsk = a_dsk.get()
+            except:
+                pass
+
+            b_dsk = dsk.deskew_stage_scan(
+                vol_b, pixel_size, step_size, -1,
+                theta=theta_rad, method=method, **deskew_kwargs
+            )
+            try:
+                b_dsk = b_dsk.get()
+            except:
+                pass
+
+            # Apply crop bounds if present
+            if crop_bounds:
+                z_start = crop_bounds["z_start"]
+                z_end = crop_bounds["z_end"]
+                y_start = crop_bounds["y_start"]
+                y_end = crop_bounds["y_end"]
+                x_start = crop_bounds["x_start"]
+                x_end = crop_bounds["x_end"]
+                tz, ty, tx = pre_reg_t
+
+                a_dsk = a_dsk[z_start:z_end, y_start:y_end, x_start:x_end]
+
+                Zb, Yb, Xb = b_dsk.shape
+                z_start_b = max(0, int(z_start - tz))
+                z_end_b = min(Zb, int(z_end - tz))
+                y_start_b = max(0, int(y_start - ty))
+                y_end_b = min(Yb, int(y_end - ty))
+                x_start_b = max(0, int(x_start - tx))
+                x_end_b = min(Xb, int(x_end - tx))
+                b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
+
+            # Apply affine transform to B
+            b_reg = affine.transform(
+                cp.asarray(b_dsk),
+                cp.asarray(affine_matrix),
+                interp_method=interp_method,
+                preserve_dtype=True,
+                out_shp=None,
+                block_size_z=8,
+                block_size_y=8,
+                block_size_x=8,
+            ).get()
+
+            # Crop to the determined shape
+            a_final = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
+            b_final = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
+
+            arr_a[c, ...] = a_final.astype(np.uint16)
+            arr_b[c, ...] = b_final.astype(np.uint16)
+
+        # Save TIFF files after all channels for this timepoint are written
+        if save_tiffs:
+            _save_tiff_from_zarr(a_zarr_path, arr_a, pixel_size)
+            _save_tiff_from_zarr(b_zarr_path, arr_b, pixel_size)
+
+    return {"output_folder": output_folder}
+
+
+def _load_bbox(data_path: str, ignore_bbox: bool):
+    """Load bounding box from bbox_raw.json if it exists and not ignored."""
+    if ignore_bbox:
+        return None
+    bbox_path = os.path.join(data_path, "bbox_raw.json")
+    if not os.path.exists(bbox_path):
+        return None
+    try:
+        with open(bbox_path, "r") as f:
+            bbox = json.load(f)
+        window = (
+            slice(bbox[0][0], bbox[0][1]),
+            slice(bbox[1][0], bbox[1][1]),
+            slice(bbox[2][0], bbox[2][1]),
+        )
+        return window
+    except (json.JSONDecodeError, IndexError, TypeError):
+        return None
+
+
+def _get_deskew_kwargs(method: str, dp: dict) -> dict:
+    """Get kwargs for deskew based on method, matching LoadDeskewWorker logic."""
+    if method == "shear":
+        return {
+            "rotation_thetas": (0, 0, 0),
+            "interp_method": "cubspl",
+            "auto_crop": False,
+            "preserve_dtype": True,
+            "block_size": (8, 8, 8),
+        }
+    elif method == "orthopsf":
+        kwargs = {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+        for key in ["psf_fwhm_axial", "psf_fwhm_lateral", "psf_model", "use_psf_in_plane"]:
+            if key in dp:
+                kwargs[key] = dp[key]
+        return kwargs
+    elif method.startswith("ortho"):
+        return {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+    elif method == "affine":
+        return {
+            "preserve_dtype": True,
+            "interp_method": "cubspl",
+            "block_size": (8, 8, 8),
+        }
+    else:  # dispim
+        return {"preserve_dtype": True}
+
+
+def _save_tiff_from_zarr(zarr_path, arr, pixel_size):
+    """Save a zarr array as TIFF."""
+    import dask.array as da
+    dask_data = da.from_zarr(arr)
+    tiff_path = zarr_path.replace(".zarr", ".tiff")
+    tifffile.imwrite(
+        tiff_path,
+        dask_data,
+        bigtiff=True,
+        photometric="minisblack",
+        resolution=(1 / pixel_size, 1 / pixel_size),
+        metadata={"axes": "CZYX", "spacing": pixel_size, "units": "um"},
+        tile=(1024, 1024),
+    )
 
 
 # ---- PSF / backprojector helpers (mirrors _deconvolution.py logic) ----
