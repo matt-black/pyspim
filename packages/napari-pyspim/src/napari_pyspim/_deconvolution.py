@@ -1766,7 +1766,6 @@ class DeconvolutionWidget(QWidget):
         }
 
         # Update UI state
-        self.deconvolve_button.setEnabled(False)
         self.batch_job_checkbox.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
@@ -1788,7 +1787,6 @@ class DeconvolutionWidget(QWidget):
             handle.poller.progress_updated.connect(self._on_batch_progress)
 
         except Exception as e:
-            self.deconvolve_button.setEnabled(True)
             self.batch_job_checkbox.setEnabled(True)
             self.progress_bar.setVisible(False)
             QMessageBox.critical(self, "Error", f"Failed to submit batch job: {e}")
