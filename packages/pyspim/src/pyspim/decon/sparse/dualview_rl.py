@@ -22,7 +22,7 @@ from scipy.signal import fftconvolve as fftconv_cpu
 from tqdm.auto import tqdm, trange
 
 from ..._util import supported_float_type, get_ndimage_module
-from ...typing import NDArray, PadType
+from ...typing import NDArray
 from .._util import ChunkProps, calculate_conv_chunks, div_stable
 
 
@@ -75,7 +75,6 @@ def _deconvolve_single_channel(
     verbose: bool,
 ) -> NDArray:
     xp = cupy.get_array_module(view_a)
-    ndi = get_ndimage_module(view_a)
     float_type = supported_float_type(view_a.dtype)
 
     view_a = view_a.astype(float_type, copy=False)
@@ -183,8 +182,14 @@ def _deconvolve_multichannel(
     xp = cupy.get_array_module(view_a)
     n_chan = view_a.shape[0]
 
-    psf_a = repeat(psf_a) if isinstance(psf_a, (numpy.ndarray, cupy.ndarray)) else psf_a
-    psf_b = repeat(psf_b) if isinstance(psf_b, (numpy.ndarray, cupy.ndarray)) else psf_b
+    psf_a = (
+        repeat(psf_a) if isinstance(psf_a, (numpy.ndarray, cupy.ndarray)) 
+        else psf_a
+    )
+    psf_b = (
+        repeat(psf_b) if isinstance(psf_b, (numpy.ndarray, cupy.ndarray)) 
+        else psf_b
+    )
 
     if backproj_a is None or isinstance(backproj_a, (numpy.ndarray, cupy.ndarray)):
         backproj_a = repeat(backproj_a)
