@@ -5,7 +5,7 @@ from cupyx.scipy.ndimage import zoom
 
 from .affine import deskew_stage_scan as deskew_stage_scan_affine
 from .dispim import deskew_stage_scan as deskew_stage_scan_dispim
-from .ortho import deskew_stage_scan as deskew_stage_scan_orthogonal
+from .orthogeo import deskew_stage_scan as deskew_stage_scan_orthogeo
 from .orthopsf import deskew_stage_scan as deskew_stage_scan_orthopsf
 from .shear import deskew_stage_scan as deskew_stage_scan_shear
 from .dispim import rotate90
@@ -25,7 +25,7 @@ def deskew_stage_scan(
             im, pixel_size, step_size, direction, theta, **kwargs
         )
     elif method == "orthogeo":
-        return deskew_stage_scan_orthogonal(
+        return deskew_stage_scan_orthogeo(
             im, pixel_size, step_size, direction, theta, True
         )
     elif method == "dispim":
