@@ -622,10 +622,11 @@ def _get_deskew_kwargs(method: str, dp: dict) -> dict:
 
 def _save_tiff_from_zarr(zarr_path, arr, pixel_size):
     """Save a zarr array as TIFF."""
+    from tifffile import imwrite
     import dask.array as da
     dask_data = da.from_zarr(arr)
     tiff_path = zarr_path.replace(".zarr", ".tiff")
-    tifffile.imwrite(
+    imwrite(
         tiff_path,
         dask_data,
         bigtiff=True,
@@ -741,9 +742,9 @@ def _save_result(out, save_path, output_format, shape):
         if not save_path.endswith(".tif") and not save_path.endswith(".tiff"):
             save_path += ".ome.tif"
         import dask.array as da
-        import tifffile
+        from tifffile import imwrite
         dask_data = da.from_zarr(out)
-        tifffile.imwrite(save_path, dask_data, bigtiff=True, ome=True,
+        imwrite(save_path, dask_data, bigtiff=True, ome=True,
                          photometric="minisblack",
                          resolution=(1 / 0.1625, 1 / 0.1625),
                          metadata={
