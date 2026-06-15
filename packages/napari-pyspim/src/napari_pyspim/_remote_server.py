@@ -842,6 +842,11 @@ def handle_deconvolve(params: dict) -> dict:
     chunk_size = tuple(params.get("chunk_size", [400, 400, 400]))
     overlap = tuple(params.get("overlap", [100, 100, 100]))
 
+    # Sparse RL parameters
+    lambda1 = params.get("lambda1", 0.0)
+    lambda2 = params.get("lambda2", 0.0)
+    epsilon_hess = params.get("epsilon_hess", 1e-5)
+
     _progress("Loading input volumes...", 5)
 
     # Open input zarr arrays
@@ -922,33 +927,130 @@ def handle_deconvolve(params: dict) -> dict:
 
     _progress("Starting deconvolution...", 15)
 
-    # Import deconvolution functions
-    from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
+    # Import deconvolution functions based on function type
+    if decon_function == "sparse_rl":
+        from pyspim.decon.sparse.dualview_rl import deconvolve, deconvolve_chunkwise
 
-    if chunkwise:
-        _progress("Running chunkwise deconvolution...", 20)
-        # Use temporary zarr for chunkwise output
-        with tempfile.TemporaryDirectory(suffix=".zarr") as tmp_dir:
-            out = zarr.open_array(
-                tmp_dir, mode="w", shape=zarr_a.shape, dtype=np.float32, fill_value=0
+        if chunkwise:
+            _progress("Running chunkwise sparse RL deconvolution...", 20)
+            with tempfile.TemporaryDirectory(suffix=".zarr") as tmp_dir:
+                out = zarr.open_array(
+                    tmp_dir, mode="w", shape=zarr_a.shape, dtype=np.float32, fill_value=0
+                )
+
+                deconvolve_chunkwise(
+                    view_a=zarr_a,
+                    view_b=zarr_b,
+                    out=out,
+                    chunk_size=chunk_size,
+                    overlap=overlap,
+                    psf_a=psf_a,
+                    psf_b=psf_b,
+                    bp_a=bp_a,
+                    bp_b=bp_b,
+                    num_iter=num_iter,
+                    epsilon=epsilon,
+                    lambda1=lambda1,
+                    lambda2=lambda2,
+                    epsilon_hess=epsilon_hess,
+                    verbose=True,
+                    decon_function="sparse",
+                )
+
+                _progress("Saving output...", 90)
+                output_path = _save_decon_result(out, save_path, output_format, zarr_a.shape)
+        else:
+            _progress("Running full sparse RL deconvolution...", 20)
+            import cupy
+
+            psf_a_cp = cupy.asarray(psf_a, dtype=cupy.float32)
+            psf_b_cp = cupy.asarray(psf_b, dtype=cupy.float32)
+            bp_a_cp = cupy.asarray(bp_a, dtype=cupy.float32)
+            bp_b_cp = cupy.asarray(bp_b, dtype=cupy.float32)
+
+            a_data = cupy.asarray(np.asarray(zarr_a[:]), dtype=cupy.float32)
+            b_data = cupy.asarray(np.asarray(zarr_b[:]), dtype=cupy.float32)
+
+            result_cp = deconvolve(
+                view_a=a_data,
+                view_b=b_data,
+                est_i=None,
+                psf_a=psf_a_cp,
+                psf_b=psf_b_cp,
+                backproj_a=bp_a_cp,
+                backproj_b=bp_b_cp,
+                num_iter=num_iter,
+                epsilon=epsilon,
+                lambda1=lambda1,
+                lambda2=lambda2,
+                epsilon_hess=epsilon_hess,
+                req_both=req_both,
+                verbose=True,
             )
 
-            # Compute overlap from PSF size
-            psf_overlap = max(s // 2 for s in psf_a.shape)
-            overlap = tuple([max(o, psf_overlap) for o in overlap])
-            deconvolve_chunkwise(
-                zarr_a,
-                zarr_b,
-                out,
-                chunk_size,
-                overlap,
-                psf_a,
-                psf_b,
-                bp_a,
-                bp_b,
+            result = result_cp.get().astype(np.float32)
+
+            _progress("Saving output...", 90)
+            output_path = _save_decon_result_array(result, save_path, output_format, zarr_a.shape)
+    else:
+        from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
+
+        if chunkwise:
+            _progress("Running chunkwise deconvolution...", 20)
+            with tempfile.TemporaryDirectory(suffix=".zarr") as tmp_dir:
+                out = zarr.open_array(
+                    tmp_dir, mode="w", shape=zarr_a.shape, dtype=np.float32, fill_value=0
+                )
+
+                # Compute overlap from PSF size
+                psf_overlap = max(s // 2 for s in psf_a.shape)
+                overlap = tuple([max(o, psf_overlap) for o in overlap])
+                deconvolve_chunkwise(
+                    zarr_a,
+                    zarr_b,
+                    out,
+                    chunk_size,
+                    overlap,
+                    psf_a,
+                    psf_b,
+                    bp_a,
+                    bp_b,
+                    decon_function,
+                    num_iter,
+                    epsilon,
+                    boundary_correction,
+                    None,  # zero_padding
+                    boundary_sigma,
+                    boundary_sigma,
+                    verbose=True,
+                )
+
+                _progress("Saving output...", 90)
+                output_path = _save_decon_result(out, save_path, output_format, zarr_a.shape)
+        else:
+            _progress("Running full deconvolution...", 20)
+            import cupy
+
+            psf_a_cp = cupy.asarray(psf_a, dtype=cupy.float32)
+            psf_b_cp = cupy.asarray(psf_b, dtype=cupy.float32)
+            bp_a_cp = cupy.asarray(bp_a, dtype=cupy.float32)
+            bp_b_cp = cupy.asarray(bp_b, dtype=cupy.float32)
+
+            a_data = cupy.asarray(np.asarray(zarr_a[:]), dtype=cupy.float32)
+            b_data = cupy.asarray(np.asarray(zarr_b[:]), dtype=cupy.float32)
+
+            result_cp = deconvolve(
+                a_data,
+                b_data,
+                None,  # init
+                psf_a_cp,
+                psf_b_cp,
+                bp_a_cp,
+                bp_b_cp,
                 decon_function,
                 num_iter,
                 epsilon,
+                req_both,
                 boundary_correction,
                 None,  # zero_padding
                 boundary_sigma,
@@ -956,45 +1058,10 @@ def handle_deconvolve(params: dict) -> dict:
                 verbose=True,
             )
 
+            result = result_cp.get().astype(np.float32)
+
             _progress("Saving output...", 90)
-            output_path = _save_decon_result(out, save_path, output_format, zarr_a.shape)
-    else:
-        _progress("Running full deconvolution...", 20)
-        import cupy
-
-        # Convert PSFs and backprojectors to cupy
-        psf_a_cp = cupy.asarray(psf_a, dtype=cupy.float32)
-        psf_b_cp = cupy.asarray(psf_b, dtype=cupy.float32)
-        bp_a_cp = cupy.asarray(bp_a, dtype=cupy.float32)
-        bp_b_cp = cupy.asarray(bp_b, dtype=cupy.float32)
-
-        # Load volumes into GPU memory
-        a_data = cupy.asarray(np.asarray(zarr_a[:]), dtype=cupy.float32)
-        b_data = cupy.asarray(np.asarray(zarr_b[:]), dtype=cupy.float32)
-
-        result_cp = deconvolve(
-            a_data,
-            b_data,
-            None,  # init
-            psf_a_cp,
-            psf_b_cp,
-            bp_a_cp,
-            bp_b_cp,
-            decon_function,
-            num_iter,
-            epsilon,
-            req_both,
-            boundary_correction,
-            None,  # zero_padding
-            boundary_sigma,
-            boundary_sigma,
-            verbose=True,
-        )
-
-        result = result_cp.get().astype(np.float32)
-
-        _progress("Saving output...", 90)
-        output_path = _save_decon_result_array(result, save_path, output_format, zarr_a.shape)
+            output_path = _save_decon_result_array(result, save_path, output_format, zarr_a.shape)
 
     _progress("Deconvolution completed!", 100)
 

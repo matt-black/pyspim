@@ -166,6 +166,9 @@ class DeconvolutionWorker(QThread):
         save_path: Optional[str],
         use_remote: bool = False,
         remote_client = None,
+        lambda1: float = 0.0,
+        lambda2: float = 0.0,
+        epsilon_hess: float = 1e-5,
     ):
         super().__init__()
         self.view_a = view_a
@@ -186,6 +189,9 @@ class DeconvolutionWorker(QThread):
         self.save_path = save_path
         self.use_remote = use_remote
         self.remote_client = remote_client
+        self.lambda1 = lambda1
+        self.lambda2 = lambda2
+        self.epsilon_hess = epsilon_hess
 
     def run(self):
         """Perform deconvolution in background thread."""
@@ -197,16 +203,21 @@ class DeconvolutionWorker(QThread):
     def _run_local(self):
         """Perform deconvolution locally."""
         try:
-            # Lazy imports to avoid CUDA compilation at module level
-            import cupy
-            from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
-
-            if self.chunkwise:
-                self.progress_updated.emit("Starting chunkwise deconvolution...", 0)
-                result = self._run_chunkwise()
+            # Route to sparse path when function is sparse_rl
+            if self.decon_function == "sparse_rl":
+                self.progress_updated.emit("Starting sparse RL deconvolution...", 0)
+                result = self._run_sparse_local()
             else:
-                self.progress_updated.emit("Starting deconvolution...", 0)
-                result = self._run_full()
+                # Lazy imports to avoid CUDA compilation at module level
+                import cupy
+                from pyspim.decon.rl.dualview_fft import deconvolve, deconvolve_chunkwise
+
+                if self.chunkwise:
+                    self.progress_updated.emit("Starting chunkwise deconvolution...", 0)
+                    result = self._run_chunkwise()
+                else:
+                    self.progress_updated.emit("Starting deconvolution...", 0)
+                    result = self._run_full()
 
             # Save output if requested
             if self.save_path is not None:
@@ -220,6 +231,104 @@ class DeconvolutionWorker(QThread):
             import traceback
             traceback.print_exc()
             self.error_occurred.emit(str(e))
+
+    def _run_sparse_local(self) -> numpy.ndarray:
+        """Run sparse RL deconvolution locally."""
+        import cupy
+        from pyspim.decon.sparse.dualview_rl import deconvolve, deconvolve_chunkwise
+
+        if self.chunkwise:
+            return self._run_sparse_chunkwise()
+        else:
+            return self._run_sparse_full()
+
+    def _run_sparse_full(self) -> numpy.ndarray:
+        """Run full (non-chunkwise) sparse RL deconvolution."""
+        import cupy
+
+        self.progress_updated.emit("Converting data to GPU...", 5)
+
+        # Convert to cupy float32 arrays
+        view_a = cupy.asarray(self.view_a, dtype=cupy.float32)
+        view_b = cupy.asarray(self.view_b, dtype=cupy.float32)
+        psf_a = cupy.asarray(self.psf_a, dtype=cupy.float32)
+        psf_b = cupy.asarray(self.psf_b, dtype=cupy.float32)
+        backproj_a = cupy.asarray(self.backproj_a, dtype=cupy.float32)
+        backproj_b = cupy.asarray(self.backproj_b, dtype=cupy.float32)
+
+        self.progress_updated.emit("Running sparse RL iterations...", 10)
+
+        result = deconvolve(
+            view_a=view_a,
+            view_b=view_b,
+            est_i=None,
+            psf_a=psf_a,
+            psf_b=psf_b,
+            backproj_a=backproj_a,
+            backproj_b=backproj_b,
+            num_iter=self.num_iter,
+            epsilon=self.epsilon,
+            lambda1=self.lambda1,
+            lambda2=self.lambda2,
+            epsilon_hess=self.epsilon_hess,
+            req_both=self.req_both,
+            verbose=False,
+        )
+
+        self.progress_updated.emit("Transferring result back...", 80)
+        return result.get().astype(numpy.float32)
+
+    def _run_sparse_chunkwise(self) -> numpy.ndarray:
+        """Run chunkwise sparse RL deconvolution using temporary zarr arrays."""
+        from pyspim.decon.sparse.dualview_rl import deconvolve_chunkwise
+
+        self.progress_updated.emit("Preparing chunkwise sparse RL deconvolution...", 5)
+
+        with tempfile.TemporaryDirectory(suffix=".zarr") as tmp_dir:
+            # Create zarr arrays for input and output
+            shape = self.view_a.shape
+            dtype = numpy.float32
+
+            tmp_a = os.path.join(tmp_dir, "view_a.zarr")
+            tmp_b = os.path.join(tmp_dir, "view_b.zarr")
+            tmp_out = os.path.join(tmp_dir, "output.zarr")
+
+            zarr_a = zarr.open(tmp_a, mode="w", shape=shape, dtype=dtype)
+            zarr_b = zarr.open(tmp_b, mode="w", shape=shape, dtype=dtype)
+            zarr_out = zarr.open(tmp_out, mode="w", shape=shape, dtype=dtype, fill_value=0)
+
+            zarr_a[:] = self.view_a
+            zarr_b[:] = self.view_b
+
+            self.progress_updated.emit("Running chunkwise sparse RL deconvolution...", 10)
+
+            # Convert PSF/backprojector arrays to numpy float32
+            psf_a = numpy.asarray(self.psf_a, dtype=numpy.float32)
+            psf_b = numpy.asarray(self.psf_b, dtype=numpy.float32)
+            bp_a = numpy.asarray(self.backproj_a, dtype=numpy.float32)
+            bp_b = numpy.asarray(self.backproj_b, dtype=numpy.float32)
+
+            deconvolve_chunkwise(
+                view_a=zarr_a,
+                view_b=zarr_b,
+                out=zarr_out,
+                chunk_size=self.chunk_size,
+                overlap=self.overlap,
+                psf_a=psf_a,
+                psf_b=psf_b,
+                bp_a=bp_a,
+                bp_b=bp_b,
+                num_iter=self.num_iter,
+                epsilon=self.epsilon,
+                lambda1=self.lambda1,
+                lambda2=self.lambda2,
+                epsilon_hess=self.epsilon_hess,
+                verbose=True,
+                decon_function="sparse",
+            )
+
+            self.progress_updated.emit("Reading chunkwise results...", 80)
+            return numpy.asarray(zarr_out[:]).astype(numpy.float32)
 
     def _run_full(self) -> numpy.ndarray:
         """Run full (non-chunkwise) deconvolution."""
@@ -334,6 +443,9 @@ class DeconvolutionWorker(QThread):
                 "chunkwise": self.chunkwise,
                 "chunk_size": list(self.chunk_size),
                 "overlap": list(self.overlap),
+                "lambda1": self.lambda1,
+                "lambda2": self.lambda2,
+                "epsilon_hess": self.epsilon_hess,
             })
 
             # Convert shape lists to tuples for compatibility
@@ -627,7 +739,8 @@ class DeconvolutionWidget(QWidget):
         main_params_layout = QFormLayout()
 
         self.function_combo = QComboBox()
-        self.function_combo.addItems(["Additive", "Eff. Bayes", "diSPIM"])
+        self.function_combo.addItems(["Additive", "Eff. Bayes", "diSPIM", "Sparse RL"])
+        self.function_combo.currentTextChanged.connect(self.on_function_changed)
 
         self.iterations_spin = QSpinBox()
         self.iterations_spin.setRange(1, 1000)
@@ -646,6 +759,32 @@ class DeconvolutionWidget(QWidget):
         main_params_layout.addRow("Epsilon:", self.epsilon_spin)
         main_params_layout.addRow("Require Both:", self.require_both_check)
         params_layout.addLayout(main_params_layout)
+
+        # Sparsity Parameters subsection (hidden by default, shown for Sparse RL)
+        self.sparsity_group = QGroupBox("Sparsity Parameters")
+        sparsity_layout = QFormLayout()
+
+        self.lambda1_spin = QDoubleSpinBox()
+        self.lambda1_spin.setRange(0.0, 1000.0)
+        self.lambda1_spin.setValue(0.0)
+        self.lambda1_spin.setDecimals(6)
+
+        self.lambda2_spin = QDoubleSpinBox()
+        self.lambda2_spin.setRange(0.0, 1000.0)
+        self.lambda2_spin.setValue(0.0)
+        self.lambda2_spin.setDecimals(6)
+
+        self.epsilon_hess_spin = QDoubleSpinBox()
+        self.epsilon_hess_spin.setRange(1e-10, 1.0)
+        self.epsilon_hess_spin.setValue(1e-5)
+        self.epsilon_hess_spin.setDecimals(10)
+
+        sparsity_layout.addRow("L1 Sparsity Coefficient:", self.lambda1_spin)
+        sparsity_layout.addRow("Hessian Penalty Coefficient:", self.lambda2_spin)
+        sparsity_layout.addRow("Hessian Epsilon:", self.epsilon_hess_spin)
+        self.sparsity_group.setLayout(sparsity_layout)
+        self.sparsity_group.setVisible(False)
+        params_layout.addWidget(self.sparsity_group)
 
         # Boundary Correction subsection
         boundary_group = QGroupBox("Boundary Correction")
@@ -809,6 +948,13 @@ class DeconvolutionWidget(QWidget):
         use_layers = self.input_mode_layers.isChecked()
         self.layers_widget.setVisible(use_layers)
         self.paths_widget.setVisible(not use_layers)
+
+    def on_function_changed(self, text: str):
+        """Show/hide Sparsity Parameters based on selected function."""
+        is_sparse = (text == "Sparse RL")
+        self.sparsity_group.setVisible(is_sparse)
+        if is_sparse:
+            self.require_both_check.setChecked(True)
 
     def on_psf_type_changed(self):
         """Toggle between Gaussian and Custom PSF type."""
@@ -1251,6 +1397,7 @@ class DeconvolutionWidget(QWidget):
             "Additive": "additive",
             "Eff. Bayes": "efficient",
             "diSPIM": "dispim",
+            "Sparse RL": "sparse_rl",
         }
         return func_map[self.function_combo.currentText()]
 
@@ -1342,6 +1489,11 @@ class DeconvolutionWidget(QWidget):
             boundary_correction = self.boundary_enable_check.isChecked()
             boundary_sigma = self.boundary_threshold_spin.value()
 
+            # Collect sparsity parameters (only used for Sparse RL)
+            lambda1 = self.lambda1_spin.value() if decon_function == "sparse_rl" else 0.0
+            lambda2 = self.lambda2_spin.value() if decon_function == "sparse_rl" else 0.0
+            epsilon_hess = self.epsilon_hess_spin.value() if decon_function == "sparse_rl" else 1e-5
+
             # Collect chunkwise parameters
             chunkwise = self.chunkwise_enable_check.isChecked()
             chunk_size = (
@@ -1392,6 +1544,9 @@ class DeconvolutionWidget(QWidget):
                 save_path=save_path,
                 use_remote=use_remote,
                 remote_client=self.remote_client,
+                lambda1=lambda1,
+                lambda2=lambda2,
+                epsilon_hess=epsilon_hess,
             )
             self.decon_worker.finished.connect(self.on_deconvolution_finished)
             self.decon_worker.error_occurred.connect(self.on_deconvolution_error)
@@ -1536,6 +1691,9 @@ class DeconvolutionWidget(QWidget):
             "chunkwise": chunkwise,
             "chunk_size": chunk_size,
             "overlap": overlap,
+            "lambda1": self.lambda1_spin.value(),
+            "lambda2": self.lambda2_spin.value(),
+            "epsilon_hess": self.epsilon_hess_spin.value(),
         }
 
         # Update UI state
@@ -1602,6 +1760,9 @@ class DeconvolutionWidget(QWidget):
             "chunkwise": self.chunkwise_enable_check.isChecked(),
             "chunk_size": [self.chunk_size_z.value(), self.chunk_size_y.value(), self.chunk_size_x.value()],
             "overlap": [self.overlap_z.value(), self.overlap_y.value(), self.overlap_x.value()],
+            "lambda1": self.lambda1_spin.value(),
+            "lambda2": self.lambda2_spin.value(),
+            "epsilon_hess": self.epsilon_hess_spin.value(),
         }
 
         # Update UI state
