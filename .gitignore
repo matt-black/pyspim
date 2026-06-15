@@ -196,3 +196,7 @@ examples/scripts/profiling/test_deskew_results/
 examples/snakemake/results/
 examples/snakemake/.snakemake/
 core*
+
+logs/batch_jobs/*
+*.err
+*.out

@@ -114,7 +114,7 @@ def deskewing_transform(
             *rotation_thetas, *[s / 2 for s in out_shp[::-1]]
         )
         T = (numpy.linalg.inv(D) @ R).astype(numpy.float32)
-    return T, out_shp
+    return numpy.linalg.inv(T), out_shp
 
 
 def deskew_stage_scan(

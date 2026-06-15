@@ -12,14 +12,18 @@ import os
 
 import cupy
 
-from .._util import create_texture_object
+from .._util import create_texture_object, launch_params_for_volume
 from ..typing import NDArray
 
 __module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dispim.cu")
 with open(__module_path) as f:
     __module_txt = f.read()
 
-__kernel_names = ("deskewTexture",)
+__kernel_names = (
+    "deskewTexture",
+    "rotateYAxisNegative<unsigned short>",
+    "rotateYAxisPositive<unsigned short>",
+)
 __cuda_module = cupy.RawModule(code=__module_txt, name_expressions=__kernel_names)
 __cuda_module.compile()  # throw compiler errors here, if problems
 
@@ -104,3 +108,20 @@ def _deskew_texture(
     # NOTE: this seems to solve a CUDAIllegalMemoryAccess error that
     # can occur if the output is left as a 32-bit float
     return cupy.clip(out, 0, 2**16 - 1).astype(in_type)
+
+
+def rotate90(
+    vol: cupy.ndarray, negative: bool = False, block_size: int = 4
+) -> cupy.ndarray:
+    kernel_name = "rotateYAxisNegative" if negative else "rotateYAxisPositive"
+    dkern = __cuda_module.get_function(f"{kernel_name:s}<unsigned short>")
+    launch_pars = launch_params_for_volume(
+        (vol.shape[0], vol.shape[1], vol.shape[2]),
+        block_size, block_size, block_size
+    )
+    out = cupy.zeros_like(vol)
+    dkern(
+        launch_pars[0], launch_pars[1],
+        (vol, out)
+    )
+    return out

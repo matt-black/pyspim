@@ -8,7 +8,7 @@ from .dispim import deskew_stage_scan as deskew_stage_scan_dispim
 from .ortho import deskew_stage_scan as deskew_stage_scan_orthogonal
 from .orthopsf import deskew_stage_scan as deskew_stage_scan_orthopsf
 from .shear import deskew_stage_scan as deskew_stage_scan_shear
-
+from .dispim import rotate90
 
 def deskew_stage_scan(
     im,
@@ -34,7 +34,11 @@ def deskew_stage_scan(
         # to account for this, we use the `zoom` to scale the "z" axis up
         # see `cupyx.scipy.ndimage.zoom` documentation for kwargs to pass
         dsk = deskew_stage_scan_dispim(im, pixel_size, step_size, direction)
-        return zoom(dsk, (step_size / pixel_size, 1, 1), **kwargs)
+        out = zoom(dsk, (step_size / pixel_size, 1, 1), **kwargs)
+        if direction == 1:
+            return out
+        else:
+            return rotate90(out, False, 4)
     elif method == "shear":
         shr = deskew_stage_scan_shear(
             cupy.asarray(im), pixel_size, step_size, direction, **kwargs
