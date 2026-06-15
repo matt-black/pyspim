@@ -30,7 +30,6 @@ def fwd_deskew_matrix(
     Returns:
         numpy.ndarray
     """
-    sq2 = sqrt(2)
     a = 1 / sqrt(2)
     r = step_size / pixel_size
     u_c = (col - 1) / 2
@@ -38,17 +37,17 @@ def fwd_deskew_matrix(
     w_c = (zed - 1) / 2
 
     if direction > 0:
-        return numpy.asarray([
+        return numpy.array([
             [ a, 0, 0, -a * u_c],
             [ 0, 1, 0, -v_c],
-            [ a, 0, r * sq2, -(a * u_c + r * sq2 * w_c)],
+            [ a, 0, r, -(a * u_c + r * w_c)],
             [ 0, 0, 0, 1],
         ])
     else:
-        return numpy.asarray([
+        return numpy.array([
             [-a, 0, 0, a * u_c],
             [ 0, 1, 0, -v_c],
-            [ a, 0, -r * sq2, -(a * u_c - r * sq2 * w_c)],
+            [ a, 0,-r, -(a * u_c - r * w_c)],
             [ 0, 0, 0, 1],
         ])
 

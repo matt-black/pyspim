@@ -24,7 +24,7 @@ def deskew_stage_scan(
         return deskew_stage_scan_orthopsf(
             im, pixel_size, step_size, direction, theta, **kwargs
         )
-    elif method.startswith("ortho"):
+    elif method == "orthogeo":
         return deskew_stage_scan_orthogonal(
             im, pixel_size, step_size, direction, theta, True
         )

@@ -293,13 +293,19 @@ def handle_load_deskew(params: dict) -> dict:
     pixel_size = params["pixel_size"]
     step_size = params["step_size"]
     theta = math.pi / 4  # Hardcoded to 45 degrees
-    method = params["method"]
+    method = _normalize_deskew_method(params["method"])
     ignore_bbox = params.get("ignore_bbox", False)
     multi_pos = params.get("multi_pos", False)
     time = params.get("time", 0)
     position = params.get("position", 0)
     auto_crop = params.get("auto_crop", True)
     camera_offset = params.get("camera_offset", 0)
+
+    # Extract orthopsf-specific params
+    psf_fwhm_axial = params.get("psf_fwhm_axial")
+    psf_fwhm_lateral = params.get("psf_fwhm_lateral")
+    psf_model = params.get("psf_model", "gaussian")
+    use_psf_in_plane = params.get("use_psf_in_plane", False)
 
     from pyspim.data import dispim as data
     from pyspim import deskew as dsk
@@ -344,7 +350,16 @@ def handle_load_deskew(params: dict) -> dict:
             "preserve_dtype": True,
             "block_size": (8, 8, 8),
         }
-    elif method == "ortho":
+    elif method == "orthopsf":
+        deskew_kwargs_a = {
+            "preserve_dtype": True,
+            "stream": None,
+            "psf_fwhm_axial": psf_fwhm_axial,
+            "psf_fwhm_lateral": psf_fwhm_lateral,
+            "psf_model": psf_model,
+            "use_psf_in_plane": use_psf_in_plane,
+        }
+    elif method == "orthogeo":
         deskew_kwargs_a = {
             "preserve_dtype": True,
             "stream": None,
@@ -377,7 +392,16 @@ def handle_load_deskew(params: dict) -> dict:
             "preserve_dtype": True,
             "block_size": (8, 8, 8),
         }
-    elif method == "ortho":
+    elif method == "orthopsf":
+        deskew_kwargs_b = {
+            "preserve_dtype": True,
+            "stream": None,
+            "psf_fwhm_axial": psf_fwhm_axial,
+            "psf_fwhm_lateral": psf_fwhm_lateral,
+            "psf_model": psf_model,
+            "use_psf_in_plane": use_psf_in_plane,
+        }
+    elif method == "orthogeo":
         deskew_kwargs_b = {
             "preserve_dtype": True,
             "stream": None,
@@ -453,8 +477,8 @@ def handle_load_deskew(params: dict) -> dict:
 def _normalize_deskew_method(method: str) -> str:
     """Normalize deskew method name from UI display name to pyspim internal name."""
     method_map = {
-        "orthogonal": "ortho",
-        "ortho": "ortho",
+        "orthogeo": "orthogeo",
+        "orthopsf": "orthopsf",
         "dispim": "dispim",
         "shear": "shear",
         "affine": "affine",
@@ -462,9 +486,8 @@ def _normalize_deskew_method(method: str) -> str:
     return method_map.get(method.lower(), method)
 
 
-def _get_deskew_kwargs(method: str) -> dict:
+def _get_deskew_kwargs(method: str, **extra_kwargs) -> dict:
     """Get kwargs for deskew based on method, matching ApplyWorker logic."""
-    import math
 
     if method == "shear":
         return {
@@ -474,7 +497,16 @@ def _get_deskew_kwargs(method: str) -> dict:
             "preserve_dtype": True,
             "block_size": (8, 8, 8),
         }
-    elif method == "ortho":
+    elif method == "orthopsf":
+        kwargs = {
+            "preserve_dtype": True,
+            "stream": None,
+        }
+        for key in ["psf_fwhm_axial", "psf_fwhm_lateral", "psf_model", "use_psf_in_plane"]:
+            if key in extra_kwargs:
+                kwargs[key] = extra_kwargs[key]
+        return kwargs
+    elif method == "orthogeo":
         return {
             "preserve_dtype": True,
             "stream": None,
@@ -1186,7 +1218,14 @@ def handle_apply_registration(params: dict) -> dict:
         pre_reg["tx_um"] / pixel_size,
     ]
 
-    deskew_kwargs = _get_deskew_kwargs(method)
+    if method == "orthopsf":
+        extra_kwargs = {
+            k: dp[k] for k in ["psf_fwhm_axial", "psf_fwhm_lateral", "psf_model", "use_psf_in_plane"]
+            if k in dp
+        }
+        deskew_kwargs = _get_deskew_kwargs(method, **extra_kwargs)
+    else:
+        deskew_kwargs = _get_deskew_kwargs(method)
 
     # Load bbox
     window = None

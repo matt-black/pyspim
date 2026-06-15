@@ -58,13 +58,17 @@ class LoadDeskewWorker(QThread):
         projection_type: str,
         pixel_size: float,
         step_size: float,
-        method: str = "orthogonal",
+        method: str = "orthogeo",
         ignore_bbox: bool = False,
         multi_pos: bool = False,
         time: int = 0,
         position: int = 0,
         auto_crop: bool = True,
         camera_offset: int = 0,
+        psf_fwhm_axial: float = None,
+        psf_fwhm_lateral: float = None,
+        psf_model: str = "gaussian",
+        use_psf_in_plane: bool = False,
     ):
         super().__init__()
         self.data_path = data_path
@@ -80,6 +84,10 @@ class LoadDeskewWorker(QThread):
         self.position = position
         self.auto_crop = auto_crop
         self.camera_offset = camera_offset
+        self.psf_fwhm_axial = psf_fwhm_axial
+        self.psf_fwhm_lateral = psf_fwhm_lateral
+        self.psf_model = psf_model
+        self.use_psf_in_plane = use_psf_in_plane
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists."""
@@ -179,6 +187,15 @@ class LoadDeskewWorker(QThread):
                     "preserve_dtype": True,
                     "block_size": (8,8,8),
                 }
+            elif self.method == "orthopsf":
+                kwargs = {
+                    "preserve_dtype": True,
+                    "stream": None,
+                    "psf_fwhm_axial": self.psf_fwhm_axial,
+                    "psf_fwhm_lateral": self.psf_fwhm_lateral,
+                    "psf_model": self.psf_model,
+                    "use_psf_in_plane": self.use_psf_in_plane,
+                }
             elif self.method == "ortho":
                 kwargs = {
                     "preserve_dtype": True,
@@ -269,7 +286,7 @@ class LoadDeskewWorker(QThread):
     def _run_remote(self):
         """Load data, deskew, and compute projections via remote server."""
         try:
-            result = self.remote_client.send_command_blocking("load_deskew", {
+            params = {
                 "data_path": self.data_path,
                 "channel": self.channel,
                 "projection_type": self.projection_type,
@@ -282,7 +299,17 @@ class LoadDeskewWorker(QThread):
                 "time": self.time,
                 "position": self.position,
                 "auto_crop": self.auto_crop,
-            })
+                "camera_offset": self.camera_offset,
+            }
+            # Add orthopsf-specific params if method is orthopsf
+            if self.method == "orthopsf":
+                params.update({
+                    "psf_fwhm_axial": self.psf_fwhm_axial,
+                    "psf_fwhm_lateral": self.psf_fwhm_lateral,
+                    "psf_model": self.psf_model,
+                    "use_psf_in_plane": self.use_psf_in_plane,
+                })
+            result = self.remote_client.send_command_blocking("load_deskew", params)
             # Convert shape lists to tuples for compatibility
             if "volume_shape_a" in result and isinstance(result["volume_shape_a"], list):
                 result["volume_shape_a"] = tuple(result["volume_shape_a"])
@@ -564,7 +591,7 @@ class ApplyWorker(QThread):
         except (json.JSONDecodeError, IndexError, TypeError):
             return None
 
-    def _get_deskew_kwargs(self, method: str) -> dict:
+    def _get_deskew_kwargs(self, method: str, **extra_kwargs) -> dict:
         """Get kwargs for deskew based on method, matching LoadDeskewWorker logic."""
         if method == "shear":
             return {
@@ -574,6 +601,15 @@ class ApplyWorker(QThread):
                 "preserve_dtype": True,
                 "block_size": (8, 8, 8),
             }
+        elif method == "orthopsf":
+            kwargs = {
+                "preserve_dtype": True,
+                "stream": None,
+            }
+            for key in ["psf_fwhm_axial", "psf_fwhm_lateral", "psf_model", "use_psf_in_plane"]:
+                if key in extra_kwargs:
+                    kwargs[key] = extra_kwargs[key]
+            return kwargs
         elif method.startswith("ortho"):
             return {
                 "preserve_dtype": True,
@@ -627,7 +663,14 @@ class ApplyWorker(QThread):
             crop_bounds = params.get("crop_bounds")
 
             # Get deskew kwargs
-            deskew_kwargs = self._get_deskew_kwargs(method)
+            if method == "orthopsf":
+                extra_kwargs = {
+                    k: dp[k] for k in ["psf_fwhm_axial", "psf_fwhm_lateral", "psf_model", "use_psf_in_plane"]
+                    if k in dp
+                }
+                deskew_kwargs = self._get_deskew_kwargs(method, **extra_kwargs)
+            else:
+                deskew_kwargs = self._get_deskew_kwargs(method)
 
             # Load bbox
             window = self._load_bbox()
@@ -1016,8 +1059,10 @@ class RegistrationWidget(QWidget):
         deskew_layout = QFormLayout()
 
         self.method_combo = QComboBox()
-        self.method_combo.addItems(["orthogonal", "dispim", "shear", "affine"])
-        self.method_combo.setCurrentText("orthogonal")
+        self.method_combo.addItems(
+            ["orthogeo", "orthopsf", "dispim", "shear", "affine"]
+        )
+        self.method_combo.setCurrentText("orthogeo")
 
         self.step_size_spin = QDoubleSpinBox()
         self.step_size_spin.setRange(0.1, 10.0)
@@ -1044,7 +1089,43 @@ class RegistrationWidget(QWidget):
         self.auto_crop_checkbox.setChecked(True)
         deskew_layout.addRow(self.auto_crop_checkbox)
 
-        # Connect method combo to show/hide auto-crop checkbox
+        # PSF Parameters group (visible only for orthopsf method)
+        self.psf_group = QGroupBox("PSF Parameters")
+        psf_layout = QFormLayout()
+
+        self.psf_fwhm_axial_spin = QDoubleSpinBox()
+        self.psf_fwhm_axial_spin.setRange(0.1, 100.0)
+        self.psf_fwhm_axial_spin.setValue(2.1)
+        self.psf_fwhm_axial_spin.setDecimals(3)
+        self.psf_fwhm_axial_spin.setSuffix(" μm")
+        self.psf_fwhm_axial_spin.setToolTip("Axial PSF FWHM in micrometers")
+        psf_layout.addRow("Axial FWHM:", self.psf_fwhm_axial_spin)
+
+        self.psf_fwhm_lateral_spin = QDoubleSpinBox()
+        self.psf_fwhm_lateral_spin.setRange(0.01, 50.0)
+        self.psf_fwhm_lateral_spin.setValue(0.381)
+        self.psf_fwhm_lateral_spin.setDecimals(4)
+        self.psf_fwhm_lateral_spin.setSuffix(" μm")
+        self.psf_fwhm_lateral_spin.setToolTip("Lateral PSF FWHM in micrometers")
+        psf_layout.addRow("Lateral FWHM:", self.psf_fwhm_lateral_spin)
+
+        self.psf_model_combo = QComboBox()
+        self.psf_model_combo.addItems(["Gaussian", "Airy", "Lorentzian"])
+        self.psf_model_combo.setCurrentText("Gaussian")
+        self.psf_model_combo.setToolTip("PSF model for weighting adjacent planes")
+        psf_layout.addRow("PSF Model:", self.psf_model_combo)
+
+        self.use_psf_in_plane_checkbox = QCheckBox("Use PSF In-Plane")
+        self.use_psf_in_plane_checkbox.setToolTip(
+            "When enabled, uses PSF-weighted interpolation within each plane "
+            "instead of standard bilinear interpolation."
+        )
+        self.use_psf_in_plane_checkbox.setChecked(False)
+        psf_layout.addRow(self.use_psf_in_plane_checkbox)
+
+        self.psf_group.setLayout(psf_layout)
+
+        # Connect method combo to show/hide method-specific widgets
         self.method_combo.currentTextChanged.connect(self._on_method_changed)
         # Set initial visibility based on default method
         self._on_method_changed()
@@ -1225,6 +1306,7 @@ class RegistrationWidget(QWidget):
         # Add widgets to layout
         layout.addWidget(path_group)
         layout.addWidget(deskew_group)
+        layout.addWidget(self.psf_group)
         layout.addWidget(self.load_deskew_button)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
@@ -1335,9 +1417,24 @@ class RegistrationWidget(QWidget):
         return self.remote_client is not None and self.remote_client.is_connected
 
     def _on_method_changed(self, method: str = ""):
-        """Handle Method combo box changed - show/hide Auto-Crop checkbox."""
+        """Handle Method combo box changed - show/hide method-specific widgets."""
         current_method = method if method else self.method_combo.currentText()
         self.auto_crop_checkbox.setVisible(current_method == "shear")
+        # Show PSF parameters only for orthopsf method
+        self.psf_group.setVisible(current_method == "orthopsf")
+        # Set default FWHM values when switching to orthopsf
+        if current_method == "orthopsf":
+            self.psf_fwhm_axial_spin.setValue(2.1)
+            self.psf_fwhm_lateral_spin.setValue(0.381)
+
+    def _map_psf_model(self, display_name: str) -> str:
+        """Map PSF model display name to internal string."""
+        model_map = {
+            "Gaussian": "gaussian",
+            "Airy": "airy",
+            "Lorentzian": "lorentzian",
+        }
+        return model_map.get(display_name, "gaussian")
 
     def _remove_existing_layers(self):
         """Remove any existing projection layers."""
@@ -1498,12 +1595,18 @@ class RegistrationWidget(QWidget):
         auto_crop, camera_offset,
     ):
         """Load deskew locally using LoadDeskewWorker."""
+        psf_fwhm_axial = self.psf_fwhm_axial_spin.value() if method == "orthopsf" else None
+        psf_fwhm_lateral = self.psf_fwhm_lateral_spin.value() if method == "orthopsf" else None
+        psf_model = self._map_psf_model(self.psf_model_combo.currentText()) if method == "orthopsf" else "gaussian"
+        use_psf_in_plane = self.use_psf_in_plane_checkbox.isChecked() if method == "orthopsf" else False
+
         self.load_worker = LoadDeskewWorker(
             data_path, channel, projection_type,
             pixel_size, step_size,
             method, ignore_bbox,
             multi_pos, time, position,
             auto_crop, camera_offset,
+            psf_fwhm_axial, psf_fwhm_lateral, psf_model, use_psf_in_plane,
         )
         self.load_worker.ready.connect(self.on_load_deskew_ready)
         self.load_worker.error_occurred.connect(self.on_error)
@@ -1537,6 +1640,14 @@ class RegistrationWidget(QWidget):
             "auto_crop": auto_crop,
             "camera_offset": camera_offset,
         }
+
+        if method == "orthopsf":
+            params.update({
+                "psf_fwhm_axial": self.psf_fwhm_axial_spin.value(),
+                "psf_fwhm_lateral": self.psf_fwhm_lateral_spin.value(),
+                "psf_model": self._map_psf_model(self.psf_model_combo.currentText()),
+                "use_psf_in_plane": self.use_psf_in_plane_checkbox.isChecked(),
+            })
 
         # Store context for signal handler
         self._pending_command_type = "load_deskew"
@@ -2927,15 +3038,24 @@ class RegistrationWidget(QWidget):
         (reg_z_start, reg_z_end, reg_y_start, reg_y_end,
          reg_x_start, reg_x_end) = self._extract_crop_bounds(for_registration=True)
 
+        deskew_params = {
+            "method": self.method_combo.currentText(),
+            "step_size_um": self.step_size_spin.value(),
+            "pixel_size_um": self.pixel_size_spin.value(),
+            "theta_degrees": 45.0,  # Hardcoded to 45 degrees
+            "auto_crop": self.auto_crop_checkbox.isChecked(),
+            "camera_offset": self.camera_offset_spin.value(),
+        }
+        if self.method_combo.currentText() == "orthopsf":
+            deskew_params.update({
+                "psf_fwhm_axial": self.psf_fwhm_axial_spin.value(),
+                "psf_fwhm_lateral": self.psf_fwhm_lateral_spin.value(),
+                "psf_model": self._map_psf_model(self.psf_model_combo.currentText()),
+                "use_psf_in_plane": self.use_psf_in_plane_checkbox.isChecked(),
+            })
+
         return {
-            "deskewing_parameters": {
-                "method": self.method_combo.currentText(),
-                "step_size_um": self.step_size_spin.value(),
-                "pixel_size_um": self.pixel_size_spin.value(),
-                "theta_degrees": 45.0,  # Hardcoded to 45 degrees
-                "auto_crop": self.auto_crop_checkbox.isChecked(),
-                "camera_offset": self.camera_offset_spin.value(),
-            },
+            "deskewing_parameters": deskew_params,
             "pre_reg_transform": {
                 "tz_um": self._pre_reg_transform[0],
                 "ty_um": self._pre_reg_transform[1],
