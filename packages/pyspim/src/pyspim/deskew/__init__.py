@@ -6,6 +6,7 @@ from cupyx.scipy.ndimage import zoom
 from .affine import deskew_stage_scan as deskew_stage_scan_affine
 from .dispim import deskew_stage_scan as deskew_stage_scan_dispim
 from .ortho import deskew_stage_scan as deskew_stage_scan_orthogonal
+from .orthopsf import deskew_stage_scan as deskew_stage_scan_orthopsf
 from .shear import deskew_stage_scan as deskew_stage_scan_shear
 
 
@@ -19,7 +20,11 @@ def deskew_stage_scan(
     **kwargs,
 ):
     gpu_in = cupy.get_array_module(im) == cupy # type: ignore
-    if method.startswith("ortho"):
+    if method == "orthopsf":
+        return deskew_stage_scan_orthopsf(
+            im, pixel_size, step_size, direction, theta, **kwargs
+        )
+    elif method.startswith("ortho"):
         return deskew_stage_scan_orthogonal(
             im, pixel_size, step_size, direction, theta, True
         )

@@ -103,3 +103,11 @@ markers = [
     "integration: marks tests as integration tests",
 ]
 
+[dependency-groups]
+dev = [
+    "numba>=0.65.1",
+    "numpy>=2.4.6",
+    "pytest>=9.0.3",
+    "scipy>=1.17.1",
+]
+
