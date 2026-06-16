@@ -1561,8 +1561,8 @@ class RegistrationWidget(QWidget):
         self.psf_group.setVisible(current_method == "orthopsf")
         # Set default FWHM values when switching to orthopsf
         if current_method == "orthopsf":
-            self.psf_fwhm_axial_spin.setValue(2.1)
-            self.psf_fwhm_lateral_spin.setValue(0.381)
+            self.psf_fwhm_axial_spin.setValue(1.6744)
+            self.psf_fwhm_lateral_spin.setValue(0.3245)
         # Enable Force CPU only for ortho* methods
         if current_method in ("orthogeo", "orthopsf"):
             self.force_cpu_checkbox.setEnabled(True)
