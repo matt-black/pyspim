@@ -1264,7 +1264,12 @@ def handle_apply_registration(params: dict) -> dict:
     save_tiffs = params.get("save_tiffs", False)
     request_id = params.get("_request_id", 0)
 
-    # Load upsampling parameters
+    # Load parameters from saved JSON file first
+    params_path = os.path.join(data_path, "deskew_registration_params.json")
+    with open(params_path, "r") as f:
+        saved_params = json.load(f)
+
+    # Load upsampling parameters (from explicit params or from saved JSON)
     upsample_factor = params.get(
         "factor", saved_params.get(
             "upsampling_parameters", {}
@@ -1284,11 +1289,6 @@ def handle_apply_registration(params: dict) -> dict:
     from pyspim.data import dispim as data
     from pyspim import deskew as dsk
     from pyspim.interp import affine
-
-    # Load parameters from saved JSON file
-    params_path = os.path.join(data_path, "deskew_registration_params.json")
-    with open(params_path, "r") as f:
-        saved_params = json.load(f)
 
     dp = saved_params["deskewing_parameters"]
     method = _normalize_deskew_method(dp["method"])

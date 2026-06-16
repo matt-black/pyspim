@@ -347,14 +347,14 @@ def _run_apply(params: dict) -> dict:
     ignore_bbox = params.get("ignore_bbox", False)
     save_tiffs = params.get("save_tiffs", False)
 
+    # Load parameters from saved JSON file first
+    with open(params_path, "r") as f:
+        params_dict = json.load(f)
+
     # Load upsampling parameters (from explicit params or from saved JSON)
     upsample_factor = params.get("upsampling_factor", params_dict.get("upsampling_parameters", {}).get("factor", 1.0))
     upsample_method = params.get("upsampling_method", params_dict.get("upsampling_parameters", {}).get("method", "fourier"))
     upsample_order = params.get("upsampling_order", params_dict.get("upsampling_parameters", {}).get("order", 3))
-
-    # Load parameters
-    with open(params_path, "r") as f:
-        params_dict = json.load(f)
 
     dp = params_dict["deskewing_parameters"]
     method = dp["method"]
