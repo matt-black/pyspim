@@ -447,21 +447,24 @@ def _run_apply(params: dict) -> dict:
             x_end_b = min(Xb, int(x_end - tx))
             b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
+            # Min-shape crop both crops
+            min_crop = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_dsk.shape))
+            a_dsk = a_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+            b_dsk = b_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+
         # Apply affine transform to B
         b_reg = affine.transform(
             cp.asarray(b_dsk),
             cp.asarray(affine_matrix),
             interp_method=interp_method,
             preserve_dtype=True,
-            out_shp=None,
+            out_shp=a_dsk.shape,
             block_size_z=8,
             block_size_y=8,
             block_size_x=8,
         ).get()
 
-        # Crop to smallest size
-        min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
-        out_shape = (n_channels, *min_shape)
+        out_shape = (n_channels, *a_dsk.shape)
 
         # Create zarr arrays for this timepoint
         a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
@@ -477,10 +480,8 @@ def _run_apply(params: dict) -> dict:
         )
 
         # Write first channel
-        a_final = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
-        b_final = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
-        arr_a[0, ...] = a_final.astype(np.uint16)
-        arr_b[0, ...] = b_final.astype(np.uint16)
+        arr_a[0, ...] = a_dsk.astype(np.uint16)
+        arr_b[0, ...] = b_reg.astype(np.uint16)
 
         # Process remaining channels
         for chan_idx in channels[1:]:
@@ -539,24 +540,25 @@ def _run_apply(params: dict) -> dict:
                 x_end_b = min(Xb, int(x_end - tx))
                 b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
+                # Min-shape crop both crops
+                min_crop = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_dsk.shape))
+                a_dsk = a_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+                b_dsk = b_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+
             # Apply affine transform to B
             b_reg = affine.transform(
                 cp.asarray(b_dsk),
                 cp.asarray(affine_matrix),
                 interp_method=interp_method,
                 preserve_dtype=True,
-                out_shp=None,
+                out_shp=a_dsk.shape,
                 block_size_z=8,
                 block_size_y=8,
                 block_size_x=8,
             ).get()
 
-            # Crop to the determined shape
-            a_final = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
-            b_final = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
-
-            arr_a[c, ...] = a_final.astype(np.uint16)
-            arr_b[c, ...] = b_final.astype(np.uint16)
+            arr_a[c, ...] = a_dsk.astype(np.uint16)
+            arr_b[c, ...] = b_reg.astype(np.uint16)
 
         # Save TIFF files after all channels for this timepoint are written
         if save_tiffs:

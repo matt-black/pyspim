@@ -602,12 +602,17 @@ def handle_register(params: dict) -> dict:
         x_end_b = min(Xb, int(x_end - tx))
         b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
-    # --- Pad volumes to same size if needed ---
-    from pyspim.util import pad_to_same_size
-    shp_a = a_dsk.shape
-    shp_b = b_dsk.shape
-    if shp_a[0] != shp_b[0] or shp_a[1] != shp_b[1] or shp_a[2] != shp_b[2]:
-        a_dsk, b_dsk = pad_to_same_size(a_dsk, b_dsk)
+        # Min-shape crop both crops (handles boundary clipping from pre-reg shift)
+        min_crop = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_dsk.shape))
+        a_dsk = a_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+        b_dsk = b_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+    else:
+        # Ensure volumes are same shape when no crop bounds provided
+        if a_dsk.shape != b_dsk.shape:
+            raise ValueError(
+                f"View A ({a_dsk.shape}) and View B ({b_dsk.shape}) have different shapes. "
+                "Please define crop bounds to select a common region."
+            )
 
     # --- Set up initial parameters and bounds ---
     bt = bound_translation
@@ -682,13 +687,11 @@ def handle_register(params: dict) -> dict:
     b_reg = affine.transform(
         cp.asarray(b_dsk), cp.asarray(T),
         interp_method=interp_method, preserve_dtype=True,
-        out_shp=None, block_size_z=8, block_size_y=8, block_size_x=8,
+        out_shp=a_dsk.shape, block_size_z=8, block_size_y=8, block_size_x=8,
     ).get()
 
-    # Crop to common size (matching local worker logic)
-    min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
-    a_cropped = a_dsk[:min_shape[0], :min_shape[1], :min_shape[2]]
-    b_cropped = b_reg[:min_shape[0], :min_shape[1], :min_shape[2]]
+    a_cropped = a_dsk
+    b_cropped = b_reg
 
     # Compute max projections for registered B
     yx_proj_b = np.max(b_cropped, axis=0)  # (Y, X)
@@ -1388,20 +1391,23 @@ def handle_apply_registration(params: dict) -> dict:
             x_end_b = min(Xb, int(x_end - tx))
             b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
-        b_cupy = cp.asarray(b_dsk)
+            # Min-shape crop both crops
+            min_crop = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_dsk.shape))
+            a_dsk = a_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+            b_dsk = b_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+
         b_reg = affine.transform(
-            b_cupy,
+            cp.asarray(b_dsk),
             cp.asarray(affine_matrix),
             interp_method=interp_method,
             preserve_dtype=True,
-            out_shp=None,
+            out_shp=a_dsk.shape,
             block_size_z=8,
             block_size_y=8,
             block_size_x=8,
         ).get()
 
-        min_shape = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_reg.shape))
-        out_shape = (n_channels, *min_shape)
+        out_shape = (n_channels, *a_dsk.shape)
 
         a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
         b_zarr_path = os.path.join(output_folder, f"b_t{t}.zarr")
@@ -1415,10 +1421,8 @@ def handle_apply_registration(params: dict) -> dict:
             dtype=np.uint16, chunks=(1, 64, 256, 256),
         )
 
-        a_final = a_dsk[: min_shape[0], : min_shape[1], : min_shape[2]]
-        b_final = b_reg[: min_shape[0], : min_shape[1], : min_shape[2]]
-        arr_a[0, ...] = a_final.astype(np.uint16)
-        arr_b[0, ...] = b_final.astype(np.uint16)
+        arr_a[0, ...] = a_dsk.astype(np.uint16)
+        arr_b[0, ...] = b_reg.astype(np.uint16)
 
         files_created.extend([a_zarr_path, b_zarr_path])
 
@@ -1499,24 +1503,24 @@ def handle_apply_registration(params: dict) -> dict:
                 x_end_b = min(Xb, int(x_end - tx))
                 b_dsk = b_dsk[z_start_b:z_end_b, y_start_b:y_end_b, x_start_b:x_end_b]
 
-            b_cupy = cp.asarray(b_dsk)
+                # Min-shape crop both crops
+                min_crop = tuple(min(a, b) for a, b in zip(a_dsk.shape, b_dsk.shape))
+                a_dsk = a_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+                b_dsk = b_dsk[:min_crop[0], :min_crop[1], :min_crop[2]]
+
             b_reg = affine.transform(
-                b_cupy,
+                cp.asarray(b_dsk),
                 cp.asarray(affine_matrix),
                 interp_method=interp_method,
                 preserve_dtype=True,
-                out_shp=None,
+                out_shp=a_dsk.shape,
                 block_size_z=8,
                 block_size_y=8,
                 block_size_x=8,
-            )
-            b_reg = b_reg.get()
+            ).get()
 
-            a_final = a_dsk[: min_shape[0], : min_shape[1], : min_shape[2]]
-            b_final = b_reg[: min_shape[0], : min_shape[1], : min_shape[2]]
-
-            arr_a[c, ...] = a_final.astype(np.uint16)
-            arr_b[c, ...] = b_final.astype(np.uint16)
+            arr_a[c, ...] = a_dsk.astype(np.uint16)
+            arr_b[c, ...] = b_reg.astype(np.uint16)
 
             current_item += 1
             percentage = int((current_item / total_items) * 100)
