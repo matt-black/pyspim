@@ -1262,6 +1262,7 @@ def handle_apply_registration(params: dict) -> dict:
     position = params.get("position", 0)
     ignore_bbox = params.get("ignore_bbox", False)
     save_tiffs = params.get("save_tiffs", False)
+    normalize_outputs = params.get("normalize_outputs", False)
     request_id = params.get("_request_id", 0)
 
     # Load parameters from saved JSON file first
@@ -1455,17 +1456,29 @@ def handle_apply_registration(params: dict) -> dict:
         a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
         b_zarr_path = os.path.join(output_folder, f"b_t{t}.zarr")
 
+        output_dtype = np.float32 if normalize_outputs else np.uint16
         arr_a = zarr.open(
             a_zarr_path, mode="w", shape=out_shape,
-            dtype=np.uint16, chunks=(1, 64, 256, 256),
+            dtype=output_dtype, chunks=(1, 64, 256, 256),
         )
         arr_b = zarr.open(
             b_zarr_path, mode="w", shape=out_shape,
-            dtype=np.uint16, chunks=(1, 64, 256, 256),
+            dtype=output_dtype, chunks=(1, 64, 256, 256),
         )
 
-        arr_a[0, ...] = a_dsk.astype(np.uint16)
-        arr_b[0, ...] = b_reg.astype(np.uint16)
+        # Apply normalization per channel if enabled
+        if normalize_outputs:
+            a_dsk = a_dsk.astype(np.float32)
+            b_reg = b_reg.astype(np.float32)
+            a_max = a_dsk.max()
+            if a_max > 0:
+                a_dsk = a_dsk / a_max
+            b_max = b_reg.max()
+            if b_max > 0:
+                b_reg = b_reg / b_max
+
+        arr_a[0, ...] = a_dsk.astype(output_dtype)
+        arr_b[0, ...] = b_reg.astype(output_dtype)
 
         files_created.extend([a_zarr_path, b_zarr_path])
 
@@ -1583,8 +1596,19 @@ def handle_apply_registration(params: dict) -> dict:
                     b_reg_gpu, upsample_factor, upsample_method, upsample_order
                 ).get()
 
-            arr_a[c, ...] = a_dsk.astype(np.uint16)
-            arr_b[c, ...] = b_reg.astype(np.uint16)
+            # Apply normalization per channel if enabled
+            if normalize_outputs:
+                a_dsk = a_dsk.astype(np.float32)
+                b_reg = b_reg.astype(np.float32)
+                a_max = a_dsk.max()
+                if a_max > 0:
+                    a_dsk = a_dsk / a_max
+                b_max = b_reg.max()
+                if b_max > 0:
+                    b_reg = b_reg / b_max
+
+            arr_a[c, ...] = a_dsk.astype(output_dtype)
+            arr_b[c, ...] = b_reg.astype(output_dtype)
 
             current_item += 1
             percentage = int((current_item / total_items) * 100)
@@ -1602,6 +1626,7 @@ def handle_apply_registration(params: dict) -> dict:
         output_folder, pixel_size,
         upsample_factor, upsample_method, upsample_order,
         _original_pre_upsample_shape,
+        normalize_outputs,
     )
 
     return {"output_folder": output_folder, "files_created": files_created}
@@ -1614,17 +1639,18 @@ def _write_upsampling_metadata(
     upsample_method: str,
     upsample_order,
     original_shape: list,
+    normalize_outputs: bool = False,
 ):
     """Write upsampling metadata to JSON file in the output folder."""
     import json
     import os
     
     output_shape = (
-        [int(s * upsample_factor) for s in original_shape] 
+        [int(s * upsample_factor) for s in original_shape]
         if upsample_factor > 1 else original_shape
     )
     effective_pixel_size = (
-        pixel_size / upsample_factor 
+        pixel_size / upsample_factor
         if upsample_factor > 1 else pixel_size
     )
     upsampling_metadata = {
@@ -1634,6 +1660,7 @@ def _write_upsampling_metadata(
         "input_shape": original_shape,
         "output_shape": output_shape,
         "pixel_size_um": effective_pixel_size,
+        "normalize_outputs": normalize_outputs,
     }
     metadata_path = os.path.join(output_folder, "upsampling_params.json")
     with open(metadata_path, "w") as f:

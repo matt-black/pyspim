@@ -567,6 +567,7 @@ class ApplyWorker(QThread):
         output_folder: str,
         ignore_bbox: bool,
         save_tiffs: bool = False,
+        normalize_outputs: bool = False,
     ):
         super().__init__()
         self.data_path = data_path
@@ -578,6 +579,7 @@ class ApplyWorker(QThread):
         self.output_folder = output_folder
         self.ignore_bbox = ignore_bbox
         self.save_tiffs = save_tiffs
+        self.normalize_outputs = normalize_outputs
 
     def _load_bbox(self):
         """Load bounding box from bbox_raw.json if it exists and not ignored."""
@@ -652,6 +654,9 @@ class ApplyWorker(QThread):
             self.upsample_factor = upsampling_params.get("factor", 1.0)
             self.upsample_method = upsampling_params.get("method", "fourier")
             self.upsample_order = upsampling_params.get("order", 3)
+
+            # Load normalization parameter (can be overridden by constructor)
+            self.normalize_outputs = params.get("normalize_outputs", self.normalize_outputs)
             self._original_pre_upsample_shape = None  # Set after first channel processing
 
             dp = params["deskewing_parameters"]
@@ -819,18 +824,24 @@ class ApplyWorker(QThread):
                 a_zarr_path = os.path.join(self.output_folder, f"a_t{t}.zarr")
                 b_zarr_path = os.path.join(self.output_folder, f"b_t{t}.zarr")
 
+                output_dtype = np.float32 if self.normalize_outputs else np.uint16
                 arr_a = zarr.open(
                     a_zarr_path, mode="w", shape=out_shape,
-                    dtype=np.uint16, chunks=(1, 64, 256, 256),
+                    dtype=output_dtype, chunks=(1, 64, 256, 256),
                 )
                 arr_b = zarr.open(
                     b_zarr_path, mode="w", shape=out_shape,
-                    dtype=np.uint16, chunks=(1, 64, 256, 256),
+                    dtype=output_dtype, chunks=(1, 64, 256, 256),
                 )
 
+                # Apply normalization per channel if enabled
+                if self.normalize_outputs:
+                    a_dsk = self._normalize_volume(a_dsk)
+                    b_reg = self._normalize_volume(b_reg)
+
                 # Write first channel
-                arr_a[0, ...] = a_dsk.astype(np.uint16)
-                arr_b[0, ...] = b_reg.astype(np.uint16)
+                arr_a[0, ...] = a_dsk.astype(output_dtype)
+                arr_b[0, ...] = b_reg.astype(output_dtype)
 
                 current_item += 1
                 percentage = int((current_item / total_items) * 100)
@@ -954,9 +965,14 @@ class ApplyWorker(QThread):
                             b_reg_gpu, self.upsample_factor, self.upsample_method, self.upsample_order
                         ).get()
 
+                    # Apply normalization per channel if enabled
+                    if self.normalize_outputs:
+                        a_dsk = self._normalize_volume(a_dsk)
+                        b_reg = self._normalize_volume(b_reg)
+
                     # Write to zarr arrays
-                    arr_a[c, ...] = a_dsk.astype(np.uint16)
-                    arr_b[c, ...] = b_reg.astype(np.uint16)
+                    arr_a[c, ...] = a_dsk.astype(output_dtype)
+                    arr_b[c, ...] = b_reg.astype(output_dtype)
 
                     current_item += 1
                     percentage = int((current_item / total_items) * 100)
@@ -973,6 +989,7 @@ class ApplyWorker(QThread):
                 self.output_folder, pixel_size,
                 self.upsample_factor, self.upsample_method, self.upsample_order,
                 self._original_pre_upsample_shape,
+                self.normalize_outputs,
             )
 
             self.progress_updated.emit("Apply completed!", 100)
@@ -991,6 +1008,7 @@ class ApplyWorker(QThread):
         upsample_method: str,
         upsample_order: int,
         original_shape: list,
+        normalize_outputs: bool = False,
     ):
         """Write upsampling metadata to JSON file in the output folder."""
         import os
@@ -1007,10 +1025,31 @@ class ApplyWorker(QThread):
             "input_shape": original_shape,
             "output_shape": output_shape,
             "pixel_size_um": effective_pixel_size,
+            "normalize_outputs": normalize_outputs,
         }
         metadata_path = os.path.join(output_folder, "upsampling_params.json")
         with open(metadata_path, "w") as f:
             json.dump(upsampling_metadata, f, indent=2)
+
+    @staticmethod
+    def _normalize_volume(volume: np.ndarray) -> np.ndarray:
+        """Normalize a single-channel 3D volume to [0, 1] using float division.
+
+        Parameters
+        ----------
+        volume : np.ndarray
+            Input volume of shape (Z, Y, X).
+
+        Returns
+        -------
+        np.ndarray
+            Normalized volume as float32 in [0, 1] range.
+        """
+        result = volume.astype(np.float32)
+        max_val = result.max()
+        if max_val > 0:
+            result = result / max_val
+        return result
 
 
 class RegistrationWidget(QWidget):
@@ -1410,6 +1449,14 @@ class RegistrationWidget(QWidget):
         )
         upsample_row.addWidget(self.upsampling_method_combo)
         apply_layout.addLayout(upsample_row)
+
+        # Normalize Outputs checkbox
+        self.normalize_outputs_checkbox = QCheckBox("Normalize Outputs")
+        self.normalize_outputs_checkbox.setToolTip(
+            "When enabled, normalizes output arrays to [0, 1] range per channel "
+            "using floating point division. Outputs will be float32 instead of uint16."
+        )
+        apply_layout.addWidget(self.normalize_outputs_checkbox)
 
         # Save TIFFs checkbox
         self.save_tiffs_checkbox = QCheckBox("Save TIFFs")
@@ -3238,6 +3285,7 @@ class RegistrationWidget(QWidget):
                 "x_end": reg_x_end,
             },
             "upsampling_parameters": self._get_upsampling_params(),
+            "normalize_outputs": self.normalize_outputs_checkbox.isChecked(),
         }
 
     def _get_upsampling_params(self) -> dict:
@@ -3386,6 +3434,7 @@ class RegistrationWidget(QWidget):
         self.channel_max_spin.setEnabled(enabled)
         self.upsampling_factor_spin.setEnabled(enabled)
         self.upsampling_method_combo.setEnabled(enabled)
+        self.normalize_outputs_checkbox.setEnabled(enabled)
         self.apply_button.setEnabled(enabled)
         # Batch checkbox is only enabled in remote mode
         if enabled and self._remote_mode:
@@ -3476,6 +3525,7 @@ class RegistrationWidget(QWidget):
                 (time_min, time_max), (chan_min, chan_max),
                 multi_pos, position, output_folder, ignore_bbox,
                 save_tiffs,
+                self.normalize_outputs_checkbox.isChecked(),
             )
             self.apply_worker.finished.connect(self._on_apply_finished)
             self.apply_worker.error_occurred.connect(self._on_apply_error)
@@ -3507,6 +3557,7 @@ class RegistrationWidget(QWidget):
             "position": position,
             "ignore_bbox": ignore_bbox,
             "save_tiffs": save_tiffs,
+            "normalize_outputs": self.normalize_outputs_checkbox.isChecked(),
             **self._get_upsampling_params(),
         }
 
@@ -3586,6 +3637,7 @@ class RegistrationWidget(QWidget):
             "output_folder": output_folder,
             "ignore_bbox": ignore_bbox,
             "save_tiffs": save_tiffs,
+            "normalize_outputs": self.normalize_outputs_checkbox.isChecked(),
         }
 
         # Disable UI during batch processing

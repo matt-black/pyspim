@@ -356,6 +356,9 @@ def _run_apply(params: dict) -> dict:
     upsample_method = params.get("upsampling_method", params_dict.get("upsampling_parameters", {}).get("method", "fourier"))
     upsample_order = params.get("upsampling_order", params_dict.get("upsampling_parameters", {}).get("order", 3))
 
+    # Load normalization parameter (from explicit params or from saved JSON)
+    normalize_outputs = params.get("normalize_outputs", params_dict.get("normalize_outputs", False))
+
     dp = params_dict["deskewing_parameters"]
     method = dp["method"]
     step_size = dp["step_size_um"]
@@ -491,18 +494,30 @@ def _run_apply(params: dict) -> dict:
         a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
         b_zarr_path = os.path.join(output_folder, f"b_t{t}.zarr")
 
+        output_dtype = np.float32 if normalize_outputs else np.uint16
         arr_a = zarr.open(
             a_zarr_path, mode="w", shape=out_shape,
-            dtype=np.uint16, chunks=(1, 64, 256, 256),
+            dtype=output_dtype, chunks=(1, 64, 256, 256),
         )
         arr_b = zarr.open(
             b_zarr_path, mode="w", shape=out_shape,
-            dtype=np.uint16, chunks=(1, 64, 256, 256),
+            dtype=output_dtype, chunks=(1, 64, 256, 256),
         )
 
+        # Apply normalization per channel if enabled
+        if normalize_outputs:
+            a_dsk = a_dsk.astype(np.float32)
+            b_reg = b_reg.astype(np.float32)
+            a_max = a_dsk.max()
+            if a_max > 0:
+                a_dsk = a_dsk / a_max
+            b_max = b_reg.max()
+            if b_max > 0:
+                b_reg = b_reg / b_max
+
         # Write first channel
-        arr_a[0, ...] = a_dsk.astype(np.uint16)
-        arr_b[0, ...] = b_reg.astype(np.uint16)
+        arr_a[0, ...] = a_dsk.astype(output_dtype)
+        arr_b[0, ...] = b_reg.astype(output_dtype)
 
         # Process remaining channels
         for chan_idx in channels[1:]:
@@ -591,8 +606,19 @@ def _run_apply(params: dict) -> dict:
                     b_reg_gpu, upsample_factor, upsample_method, upsample_order
                 ).get()
 
-            arr_a[c, ...] = a_dsk.astype(np.uint16)
-            arr_b[c, ...] = b_reg.astype(np.uint16)
+            # Apply normalization per channel if enabled
+            if normalize_outputs:
+                a_dsk = a_dsk.astype(np.float32)
+                b_reg = b_reg.astype(np.float32)
+                a_max = a_dsk.max()
+                if a_max > 0:
+                    a_dsk = a_dsk / a_max
+                b_max = b_reg.max()
+                if b_max > 0:
+                    b_reg = b_reg / b_max
+
+            arr_a[c, ...] = a_dsk.astype(output_dtype)
+            arr_b[c, ...] = b_reg.astype(output_dtype)
 
         # Save TIFF files after all channels for this timepoint are written
         if save_tiffs:
@@ -604,6 +630,7 @@ def _run_apply(params: dict) -> dict:
         output_folder, pixel_size,
         upsample_factor, upsample_method, upsample_order,
         _original_pre_upsample_shape,
+        normalize_outputs,
     )
 
     return {"output_folder": output_folder}
@@ -616,6 +643,7 @@ def _write_upsampling_metadata(
     upsample_method: str,
     upsample_order,
     original_shape: list,
+    normalize_outputs: bool = False,
 ):
     """Write upsampling metadata to JSON file in the output folder."""
     output_shape = [int(s * upsample_factor) for s in original_shape] if upsample_factor > 1 else original_shape
@@ -628,6 +656,7 @@ def _write_upsampling_metadata(
         "input_shape": original_shape,
         "output_shape": output_shape,
         "pixel_size_um": effective_pixel_size,
+        "normalize_outputs": normalize_outputs,
     }
     metadata_path = os.path.join(output_folder, "upsampling_params.json")
     with open(metadata_path, "w") as f:
