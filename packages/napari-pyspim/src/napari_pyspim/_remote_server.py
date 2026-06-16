@@ -1264,6 +1264,23 @@ def handle_apply_registration(params: dict) -> dict:
     save_tiffs = params.get("save_tiffs", False)
     request_id = params.get("_request_id", 0)
 
+    # Load upsampling parameters
+    upsample_factor = params.get(
+        "factor", saved_params.get(
+            "upsampling_parameters", {}
+        ).get("factor", 1.0)
+    )
+    upsample_method = params.get(
+        "method", saved_params.get(
+            "upsampling_parameters", {}
+        ).get("method", "fourier")
+    )
+    upsample_order = params.get(
+        "order", saved_params.get(
+            "upsampling_parameters", {}
+        ).get("order", 3)
+    )
+
     from pyspim.data import dispim as data
     from pyspim import deskew as dsk
     from pyspim.interp import affine
@@ -1407,6 +1424,32 @@ def handle_apply_registration(params: dict) -> dict:
             block_size_x=8,
         ).get()
 
+        # Store original shape before upsampling for metadata
+        _original_pre_upsample_shape = list(a_dsk.shape)
+
+        # Apply upsampling if factor > 1 (for first channel)
+        if upsample_factor > 1:
+            from pyspim.isotropize import upsample_volume
+            send_progress(
+                sys.stdout, request_id,
+                f"Upsampling View A (factor={upsample_factor}, method={upsample_method})...", 
+                0,
+            )
+            a_dsk_gpu = cp.asarray(a_dsk)
+            a_dsk = upsample_volume(
+                a_dsk_gpu, upsample_factor, upsample_method, upsample_order
+            ).get()
+
+            send_progress(
+                sys.stdout, request_id,
+                f"Upsampling View B (factor={upsample_factor}, method={upsample_method})...", 
+                0,
+            )
+            b_reg_gpu = cp.asarray(b_reg)
+            b_reg = upsample_volume(
+                b_reg_gpu, upsample_factor, upsample_method, upsample_order
+            ).get()
+
         out_shape = (n_channels, *a_dsk.shape)
 
         a_zarr_path = os.path.join(output_folder, f"a_t{t}.zarr")
@@ -1519,6 +1562,27 @@ def handle_apply_registration(params: dict) -> dict:
                 block_size_x=8,
             ).get()
 
+            # Apply upsampling if factor > 1 (for remaining channels)
+            if upsample_factor > 1:
+                from pyspim.isotropize import upsample_volume
+                send_progress(
+                    sys.stdout, request_id,
+                    f"Upsampling View A (factor={upsample_factor}, method={upsample_method})...", percentage,
+                )
+                a_dsk_gpu = cp.asarray(a_dsk)
+                a_dsk = upsample_volume(
+                    a_dsk_gpu, upsample_factor, upsample_method, upsample_order
+                ).get()
+
+                send_progress(
+                    sys.stdout, request_id,
+                    f"Upsampling View B (factor={upsample_factor}, method={upsample_method})...", percentage,
+                )
+                b_reg_gpu = cp.asarray(b_reg)
+                b_reg = upsample_volume(
+                    b_reg_gpu, upsample_factor, upsample_method, upsample_order
+                ).get()
+
             arr_a[c, ...] = a_dsk.astype(np.uint16)
             arr_b[c, ...] = b_reg.astype(np.uint16)
 
@@ -1533,7 +1597,47 @@ def handle_apply_registration(params: dict) -> dict:
         _save_tiff_if_needed(a_zarr_path, arr_a)
         _save_tiff_if_needed(b_zarr_path, arr_b)
 
+    # Write upsampling metadata
+    _write_upsampling_metadata(
+        output_folder, pixel_size,
+        upsample_factor, upsample_method, upsample_order,
+        _original_pre_upsample_shape,
+    )
+
     return {"output_folder": output_folder, "files_created": files_created}
+
+
+def _write_upsampling_metadata(
+    output_folder: str,
+    pixel_size: float,
+    upsample_factor: float,
+    upsample_method: str,
+    upsample_order,
+    original_shape: list,
+):
+    """Write upsampling metadata to JSON file in the output folder."""
+    import json
+    import os
+    
+    output_shape = (
+        [int(s * upsample_factor) for s in original_shape] 
+        if upsample_factor > 1 else original_shape
+    )
+    effective_pixel_size = (
+        pixel_size / upsample_factor 
+        if upsample_factor > 1 else pixel_size
+    )
+    upsampling_metadata = {
+        "factor": upsample_factor,
+        "method": upsample_method,
+        "order": upsample_order if upsample_method == "spline" else None,
+        "input_shape": original_shape,
+        "output_shape": output_shape,
+        "pixel_size_um": effective_pixel_size,
+    }
+    metadata_path = os.path.join(output_folder, "upsampling_params.json")
+    with open(metadata_path, "w") as f:
+        json.dump(upsampling_metadata, f, indent=2)
 
 
 def handle_save_zarr(params: dict) -> dict:

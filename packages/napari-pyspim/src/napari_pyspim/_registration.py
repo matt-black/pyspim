@@ -647,6 +647,13 @@ class ApplyWorker(QThread):
             with open(self.params_path, "r") as f:
                 params = json.load(f)
 
+            # Load upsampling parameters
+            upsampling_params = params.get("upsampling_parameters", {})
+            self.upsample_factor = upsampling_params.get("factor", 1.0)
+            self.upsample_method = upsampling_params.get("method", "fourier")
+            self.upsample_order = upsampling_params.get("order", 3)
+            self._original_pre_upsample_shape = None  # Set after first channel processing
+
             dp = params["deskewing_parameters"]
             method = dp["method"]
             step_size = dp["step_size_um"]
@@ -781,6 +788,31 @@ class ApplyWorker(QThread):
                     block_size_y=8,
                     block_size_x=8,
                 ).get()
+
+                # Store original shape before upsampling for metadata
+                self._original_pre_upsample_shape = list(a_dsk.shape)
+
+                # Apply upsampling if factor > 1 (for first channel)
+                if self.upsample_factor > 1:
+                    from pyspim.isotropize import upsample_volume
+                    self.progress_updated.emit(
+                        f"Upsampling View A (factor={self.upsample_factor}, method={self.upsample_method})...",
+                        0
+                    )
+                    a_dsk_gpu = cp.asarray(a_dsk)
+                    a_dsk = upsample_volume(
+                        a_dsk_gpu, self.upsample_factor, self.upsample_method, self.upsample_order
+                    ).get()
+
+                    self.progress_updated.emit(
+                        f"Upsampling View B (factor={self.upsample_factor}, method={self.upsample_method})...",
+                        0
+                    )
+                    b_reg_gpu = cp.asarray(b_reg)
+                    b_reg = upsample_volume(
+                        b_reg_gpu, self.upsample_factor, self.upsample_method, self.upsample_order
+                    ).get()
+
                 out_shape = (n_channels, *a_dsk.shape)
 
                 # Create zarr arrays for this timepoint
@@ -901,6 +933,27 @@ class ApplyWorker(QThread):
                         block_size_x=8,
                     ).get()
 
+                    # Apply upsampling if factor > 1 (for remaining channels)
+                    if self.upsample_factor > 1:
+                        from pyspim.isotropize import upsample_volume
+                        self.progress_updated.emit(
+                            f"Upsampling View A (factor={self.upsample_factor}, method={self.upsample_method})...",
+                            percentage
+                        )
+                        a_dsk_gpu = cp.asarray(a_dsk)
+                        a_dsk = upsample_volume(
+                            a_dsk_gpu, self.upsample_factor, self.upsample_method, self.upsample_order
+                        ).get()
+
+                        self.progress_updated.emit(
+                            f"Upsampling View B (factor={self.upsample_factor}, method={self.upsample_method})...",
+                            percentage
+                        )
+                        b_reg_gpu = cp.asarray(b_reg)
+                        b_reg = upsample_volume(
+                            b_reg_gpu, self.upsample_factor, self.upsample_method, self.upsample_order
+                        ).get()
+
                     # Write to zarr arrays
                     arr_a[c, ...] = a_dsk.astype(np.uint16)
                     arr_b[c, ...] = b_reg.astype(np.uint16)
@@ -915,6 +968,13 @@ class ApplyWorker(QThread):
                 _save_tiff_if_needed(a_zarr_path, arr_a)
                 _save_tiff_if_needed(b_zarr_path, arr_b)
 
+            # Write upsampling metadata
+            self._write_upsampling_metadata(
+                self.output_folder, pixel_size,
+                self.upsample_factor, self.upsample_method, self.upsample_order,
+                self._original_pre_upsample_shape,
+            )
+
             self.progress_updated.emit("Apply completed!", 100)
             self.finished.emit()
 
@@ -922,6 +982,35 @@ class ApplyWorker(QThread):
             import traceback
             traceback.print_exc()
             self.error_occurred.emit(str(e))
+
+    def _write_upsampling_metadata(
+        self,
+        output_folder: str,
+        pixel_size: float,
+        upsample_factor: float,
+        upsample_method: str,
+        upsample_order: int,
+        original_shape: list,
+    ):
+        """Write upsampling metadata to JSON file in the output folder."""
+        import os
+        import json
+        
+        # Calculate output shape based on original shape and factor
+        output_shape = [int(s * upsample_factor) for s in original_shape] if upsample_factor > 1 else original_shape
+        effective_pixel_size = pixel_size / upsample_factor if upsample_factor > 1 else pixel_size
+        
+        upsampling_metadata = {
+            "factor": upsample_factor,
+            "method": upsample_method,
+            "order": upsample_order if upsample_method == "spline" else None,
+            "input_shape": original_shape,
+            "output_shape": output_shape,
+            "pixel_size_um": effective_pixel_size,
+        }
+        metadata_path = os.path.join(output_folder, "upsampling_params.json")
+        with open(metadata_path, "w") as f:
+            json.dump(upsampling_metadata, f, indent=2)
 
 
 class RegistrationWidget(QWidget):
@@ -1297,6 +1386,30 @@ class RegistrationWidget(QWidget):
         chan_row.addWidget(QLabel("-"))
         chan_row.addWidget(self.channel_max_spin)
         apply_layout.addLayout(chan_row)
+
+        # Upsampling row
+        upsample_row = QHBoxLayout()
+        upsample_row.addWidget(QLabel("Upsampling Factor:"))
+        self.upsampling_factor_spin = QDoubleSpinBox()
+        self.upsampling_factor_spin.setRange(1.0, 10.0)
+        self.upsampling_factor_spin.setValue(1.0)
+        self.upsampling_factor_spin.setDecimals(2)
+        self.upsampling_factor_spin.setToolTip(
+            "Isotropic upsampling factor applied to all 3 axes after deskewing and registration. "
+            "A factor of 2 doubles each dimension. Set to 1 to skip upsampling."
+        )
+        upsample_row.addWidget(self.upsampling_factor_spin)
+        upsample_row.addSpacing(10)
+        upsample_row.addWidget(QLabel("Method:"))
+        self.upsampling_method_combo = QComboBox()
+        self.upsampling_method_combo.addItems(["Fourier", "Spline0", "Spline1", "Spline2", "Spline3", "Spline4", "Spline5"])
+        self.upsampling_method_combo.setCurrentText("Fourier")
+        self.upsampling_method_combo.setToolTip(
+            "Upsampling method: Fourier uses 3D Fourier interpolation; "
+            "SplineN uses spline interpolation of order N (0=nearest, 3=cubic)."
+        )
+        upsample_row.addWidget(self.upsampling_method_combo)
+        apply_layout.addLayout(upsample_row)
 
         # Save TIFFs checkbox
         self.save_tiffs_checkbox = QCheckBox("Save TIFFs")
@@ -3124,6 +3237,23 @@ class RegistrationWidget(QWidget):
                 "x_start": reg_x_start,
                 "x_end": reg_x_end,
             },
+            "upsampling_parameters": self._get_upsampling_params(),
+        }
+
+    def _get_upsampling_params(self) -> dict:
+        """Get upsampling parameters from current UI state."""
+        method_text = self.upsampling_method_combo.currentText()
+        if method_text == "Fourier":
+            upsample_method = "fourier"
+            upsample_order = None
+        else:
+            upsample_method = "spline"
+            upsample_order = int(method_text.replace("Spline", ""))
+        
+        return {
+            "factor": self.upsampling_factor_spin.value(),
+            "method": upsample_method,
+            "order": upsample_order,
         }
 
     def _save_params_local(self, data_path: str, params_dict: dict):
@@ -3254,6 +3384,8 @@ class RegistrationWidget(QWidget):
         self.time_max_spin.setEnabled(enabled)
         self.channel_min_spin.setEnabled(enabled)
         self.channel_max_spin.setEnabled(enabled)
+        self.upsampling_factor_spin.setEnabled(enabled)
+        self.upsampling_method_combo.setEnabled(enabled)
         self.apply_button.setEnabled(enabled)
         # Batch checkbox is only enabled in remote mode
         if enabled and self._remote_mode:
@@ -3375,6 +3507,7 @@ class RegistrationWidget(QWidget):
             "position": position,
             "ignore_bbox": ignore_bbox,
             "save_tiffs": save_tiffs,
+            **self._get_upsampling_params(),
         }
 
         self._pending_command_type = "apply_registration"
@@ -3439,11 +3572,15 @@ class RegistrationWidget(QWidget):
             self._on_apply_error("Remote client not available")
             return
 
+        upsampling_params = self._get_upsampling_params()
         params = {
             "data_path": data_path,
             "params_path": os.path.join(data_path, "deskew_registration_params.json"),
             "time_range": list(time_range),
             "channel_range": list(channel_range),
+            "upsampling_factor": upsampling_params["factor"],
+            "upsampling_method": upsampling_params["method"],
+            "upsampling_order": upsampling_params["order"],
             "multi_pos": multi_pos,
             "position": position,
             "output_folder": output_folder,

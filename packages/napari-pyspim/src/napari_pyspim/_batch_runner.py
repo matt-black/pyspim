@@ -347,6 +347,11 @@ def _run_apply(params: dict) -> dict:
     ignore_bbox = params.get("ignore_bbox", False)
     save_tiffs = params.get("save_tiffs", False)
 
+    # Load upsampling parameters (from explicit params or from saved JSON)
+    upsample_factor = params.get("upsampling_factor", params_dict.get("upsampling_parameters", {}).get("factor", 1.0))
+    upsample_method = params.get("upsampling_method", params_dict.get("upsampling_parameters", {}).get("method", "fourier"))
+    upsample_order = params.get("upsampling_order", params_dict.get("upsampling_parameters", {}).get("order", 3))
+
     # Load parameters
     with open(params_path, "r") as f:
         params_dict = json.load(f)
@@ -464,6 +469,22 @@ def _run_apply(params: dict) -> dict:
             block_size_x=8,
         ).get()
 
+        # Store original shape before upsampling for metadata
+        _original_pre_upsample_shape = list(a_dsk.shape)
+
+        # Apply upsampling if factor > 1 (for first channel)
+        if upsample_factor > 1:
+            from pyspim.isotropize import upsample_volume
+            a_dsk_gpu = cp.asarray(a_dsk)
+            a_dsk = upsample_volume(
+                a_dsk_gpu, upsample_factor, upsample_method, upsample_order
+            ).get()
+
+            b_reg_gpu = cp.asarray(b_reg)
+            b_reg = upsample_volume(
+                b_reg_gpu, upsample_factor, upsample_method, upsample_order
+            ).get()
+
         out_shape = (n_channels, *a_dsk.shape)
 
         # Create zarr arrays for this timepoint
@@ -557,6 +578,19 @@ def _run_apply(params: dict) -> dict:
                 block_size_x=8,
             ).get()
 
+            # Apply upsampling if factor > 1 (for remaining channels)
+            if upsample_factor > 1:
+                from pyspim.isotropize import upsample_volume
+                a_dsk_gpu = cp.asarray(a_dsk)
+                a_dsk = upsample_volume(
+                    a_dsk_gpu, upsample_factor, upsample_method, upsample_order
+                ).get()
+
+                b_reg_gpu = cp.asarray(b_reg)
+                b_reg = upsample_volume(
+                    b_reg_gpu, upsample_factor, upsample_method, upsample_order
+                ).get()
+
             arr_a[c, ...] = a_dsk.astype(np.uint16)
             arr_b[c, ...] = b_reg.astype(np.uint16)
 
@@ -565,7 +599,39 @@ def _run_apply(params: dict) -> dict:
             _save_tiff_from_zarr(a_zarr_path, arr_a, pixel_size)
             _save_tiff_from_zarr(b_zarr_path, arr_b, pixel_size)
 
+    # Write upsampling metadata
+    _write_upsampling_metadata(
+        output_folder, pixel_size,
+        upsample_factor, upsample_method, upsample_order,
+        _original_pre_upsample_shape,
+    )
+
     return {"output_folder": output_folder}
+
+
+def _write_upsampling_metadata(
+    output_folder: str,
+    pixel_size: float,
+    upsample_factor: float,
+    upsample_method: str,
+    upsample_order,
+    original_shape: list,
+):
+    """Write upsampling metadata to JSON file in the output folder."""
+    output_shape = [int(s * upsample_factor) for s in original_shape] if upsample_factor > 1 else original_shape
+    effective_pixel_size = pixel_size / upsample_factor if upsample_factor > 1 else pixel_size
+    
+    upsampling_metadata = {
+        "factor": upsample_factor,
+        "method": upsample_method,
+        "order": upsample_order if upsample_method == "spline" else None,
+        "input_shape": original_shape,
+        "output_shape": output_shape,
+        "pixel_size_um": effective_pixel_size,
+    }
+    metadata_path = os.path.join(output_folder, "upsampling_params.json")
+    with open(metadata_path, "w") as f:
+        json.dump(upsampling_metadata, f, indent=2)
 
 
 def _load_bbox(data_path: str, ignore_bbox: bool):

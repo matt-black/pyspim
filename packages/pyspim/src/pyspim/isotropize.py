@@ -95,3 +95,98 @@ def fourier_upsample(
             return out[cent - nmh : cent + nmh, :]
         else:
             return out[:, cent - nmh : cent + nmh]
+
+
+def fourier_upsample_3d(vol: NDArray, zoom_factor: float) -> NDArray:
+    """Upsample a 3D volume by a uniform factor using Fourier upsampling.
+    
+    Extends the technique from fourier_upsample to operate fully in 3D
+    by padding the Fourier domain simultaneously in all three dimensions.
+    All axes are upsampled by the same zoom_factor.
+    
+    Args:
+        vol (NDArray): input 3D volume (must be floating-point dtype)
+        zoom_factor (float): uniform upsampling factor for all 3 axes (e.g., 2.0 doubles all dimensions)
+        
+    Returns:
+        NDArray: Upsampled 3D volume with shape approximately (floor(Z*factor), floor(Y*factor), floor(X*factor))
+    """
+    assert vol.ndim == 3, "input must be a 3D volume"
+    assert zoom_factor > 1, "zoom_factor must be greater than 1"
+    
+    xp = cupy.get_array_module(vol)
+    fft = get_fft_module(vol)
+    
+    shape = vol.shape  # (Z, Y, X)
+    
+    # Step 1: Mirror-pad the volume on all 3 axes and convert to Fourier domain
+    mirror_padding = [(shape[i] // 2, shape[i] // 2) for i in range(3)]
+    padded = xp.pad(vol, mirror_padding, mode="symmetric")
+    fourier = fft.fftshift(fft.rfftn(padded))
+    
+    # Step 2: Calculate zero padding delta for each axis
+    # Using the same formula as fourier_upsample (Eqn. 9 of fSOFI paper)
+    zero_padding = []
+    for i in range(3):
+        ax_sze = shape[i]
+        n12 = math.ceil((2 * ax_sze - 1) / 2)
+        delta = int(math.ceil(zoom_factor * n12 - n12))
+        zero_padding.append((delta, delta))
+    
+    # Step 3: Pad Fourier domain with zeros
+    fourier = xp.pad(fourier, zero_padding, mode="constant", constant_values=0)
+    
+    # Step 4: Inverse FFT
+    out = fft.irfftn(fft.ifftshift(fourier))
+    
+    # Step 5: Trim output to the correct size for each axis
+    slices = []
+    for i in range(3):
+        ax_sze = shape[i]
+        n_mid = math.floor(zoom_factor * ax_sze)
+        nmh = n_mid // 2
+        cent = out.shape[i]
+        slices.append(slice(cent - nmh, cent + nmh))
+    
+    return out[tuple(slices)]
+
+
+def upsample_volume(
+    vol_uint16: NDArray,
+    zoom_factor: float,
+    method: str = "fourier",
+    order: int = 3,
+) -> NDArray:
+    """Upsample a 3D volume by a uniform factor using the specified method.
+    
+    Accepts uint16 input and returns uint16 output (clipped to 0-65535).
+    Internally converts to float32 for computation, then clips and casts back.
+    
+    Args:
+        vol_uint16 (NDArray): Input 3D volume (uint16 dtype, on CPU or GPU)
+        zoom_factor (float): Uniform upsampling factor for all 3 axes
+        method (str): "fourier" for Fourier upsampling, or "spline" for spline interpolation
+        order (int): Spline order (0-5), only used when method="spline"
+        
+    Returns:
+        NDArray: Upsampled volume in same array module as input, dtype uint16
+    """
+    if zoom_factor <= 1:
+        return vol_uint16  # Skip upsampling
+    
+    xp = cupy.get_array_module(vol_uint16)
+    
+    # Convert to float32 for computation
+    vol_float = xp.asarray(vol_uint16, dtype=xp.float32)
+    
+    if method == "fourier":
+        result_float = fourier_upsample_3d(vol_float, zoom_factor)
+    elif method == "spline":
+        ndi = get_ndimage_module(vol_float)
+        result_float = ndi.zoom(vol_float, zoom_factor, order=order)
+    else:
+        raise ValueError(f"Unknown upsampling method: {method}")
+    
+    # Clip to uint16 range and cast back
+    result_uint16 = xp.clip(result_float, 0, 65535).astype(xp.uint16)
+    return result_uint16
