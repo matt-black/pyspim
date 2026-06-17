@@ -491,6 +491,13 @@ class DeconvolutionWidget(QWidget):
         self._remote_mode = False
         self._pending_command_type = None  # 'deconvolve'
         self._remote_output_path = None
+        # PSF projection layer references
+        self.psf_proj_yx_a_layer = None
+        self.psf_proj_zy_a_layer = None
+        self.psf_proj_xz_a_layer = None
+        self.psf_proj_yx_b_layer = None
+        self.psf_proj_zy_b_layer = None
+        self.psf_proj_xz_b_layer = None
         self.setup_ui()
         # Connect to remote client signals if available
         if remote_client is not None:
@@ -723,6 +730,14 @@ class DeconvolutionWidget(QWidget):
         self.backprojector_group.setLayout(self.backprojector_layout)
         self.backprojector_group.setVisible(False)
         psf_layout.addWidget(self.backprojector_group)
+
+        # Show Projections checkbox
+        self.show_psf_projections_check = QCheckBox("Show Projections")
+        self.show_psf_projections_check.setToolTip(
+            "When checked, displays maximum-intensity projections (ZY, YX, XZ) "
+            "for each PSF with aligned axes. When unchecked, shows full 3D PSF volumes."
+        )
+        psf_layout.addWidget(self.show_psf_projections_check)
 
         # Show PSF button
         self.show_psf_button = QPushButton("Show PSF")
@@ -1074,23 +1089,110 @@ class DeconvolutionWidget(QWidget):
             size += 1
         return (size, size, size)
 
+    def _remove_psf_layers(self):
+        """Remove any existing PSF layers from the viewer."""
+        # Remove volume-type PSF layers
+        for layer_name in ["PSF: View A", "PSF: View B"]:
+            try:
+                self.viewer.layers.remove(self.viewer.layers[layer_name])
+            except (KeyError, ValueError):
+                pass
+
+        # Remove projection-type PSF layers
+        proj_layer_names = [
+            "PSF A - YX", "PSF A - ZY", "PSF A - XZ",
+            "PSF B - YX", "PSF B - ZY", "PSF B - XZ",
+        ]
+        for layer_name in proj_layer_names:
+            try:
+                self.viewer.layers.remove(self.viewer.layers[layer_name])
+            except (KeyError, ValueError):
+                pass
+
+        # Reset projection layer references
+        self.psf_proj_yx_a_layer = None
+        self.psf_proj_zy_a_layer = None
+        self.psf_proj_xz_a_layer = None
+        self.psf_proj_yx_b_layer = None
+        self.psf_proj_zy_b_layer = None
+        self.psf_proj_xz_b_layer = None
+
+    def _show_psf_projections(self, psf_a: numpy.ndarray, psf_b: numpy.ndarray):
+        """Display PSF volumes as maximum-intensity projections with aligned axes.
+        
+        Displays 6 layers: YX, ZY, XZ for each of View A and View B.
+        Layout mirrors the registration projection display:
+          - ZY projections above YX (vertical offset)
+          - XZ projections to the right of YX (horizontal offset)
+        """
+        self._remove_psf_layers()
+
+        # Calculate offsets from psf_a dimensions (applied to both views for alignment)
+        Z, Y, X = psf_a.shape
+        offset_z = -Z  # vertical offset in pixel units
+        offset_x = Y   # horizontal offset in pixel units
+
+        for psf_volume, view_prefix in [(psf_a, "PSF A"), (psf_b, "PSF B")]:
+            # Compute maximum projections
+            # psf_volume shape: (Z, Y, X)
+            yx_proj = numpy.max(psf_volume, axis=0)   # shape: (Y, X)
+            zy_proj = numpy.max(psf_volume, axis=2)   # shape: (Z, Y)
+            xz_proj = numpy.max(psf_volume, axis=1)   # shape: (Z, X)
+
+            # Transpose for display alignment
+            yx_proj_t = yx_proj.T   # shape: (X, Y)
+            xz_proj_t = xz_proj.T   # shape: (X, Z)
+
+            # Determine colormap
+            colormap = "red" if "A" in view_prefix else "cyan"
+
+            # Add YX layer: display (X, Y), at origin
+            self.viewer.add_image(
+                yx_proj_t,
+                name=f"{view_prefix} - YX",
+                colormap=colormap,
+                opacity=0.9,
+                blending="additive",
+                scale=(1, 1),
+            )
+
+            # Add ZY layer: display (Z, Y), offset vertically
+            self.viewer.add_image(
+                zy_proj,
+                name=f"{view_prefix} - ZY",
+                colormap=colormap,
+                opacity=0.9,
+                blending="additive",
+                scale=(1, 1),
+                translate=(offset_z, 0),
+            )
+
+            # Add XZ layer: display (X, Z), offset horizontally
+            self.viewer.add_image(
+                xz_proj_t,
+                name=f"{view_prefix} - XZ",
+                colormap=colormap,
+                opacity=0.9,
+                blending="additive",
+                scale=(1, 1),
+                translate=(0, offset_x),
+            )
+
+        self.status_label.setText("PSF projections added (ZY, YX, XZ for each view)")
+
     def show_psf(self):
         """Generate PSF volumes and display them as napari layers for inspection."""
         try:
             psf_a, psf_b, _, _ = self._get_psf_and_backprojectors()
 
-            # Remove existing PSF layers if they exist
-            for layer_name in ["PSF: View A", "PSF: View B"]:
-                try:
-                    self.viewer.layers.remove(self.viewer.layers[layer_name])
-                except (KeyError, ValueError):
-                    pass
-
-            # Add PSF layers
-            self.viewer.add_image(psf_a, name="PSF: View A")
-            self.viewer.add_image(psf_b, name="PSF: View B")
-
-            self.status_label.setText("PSF layers added: PSF: View A, PSF: View B")
+            if self.show_psf_projections_check.isChecked():
+                self._show_psf_projections(psf_a, psf_b)
+            else:
+                # Default behavior: show full 3D volumes
+                self._remove_psf_layers()
+                self.viewer.add_image(psf_a, name="PSF: View A")
+                self.viewer.add_image(psf_b, name="PSF: View B")
+                self.status_label.setText("PSF layers added: PSF: View A, PSF: View B")
 
         except ValueError as e:
             QMessageBox.warning(self, "Validation Error", str(e))
@@ -1420,14 +1522,9 @@ class DeconvolutionWidget(QWidget):
             self.viewer.layers.remove(self.viewer.layers[output_name])
         except (KeyError, ValueError):
             pass
-        try:
-            self.viewer.layers.remove(self.viewer.layers["PSF: View A"])
-        except (KeyError, ValueError):
-            pass
-        try:
-            self.viewer.layers.remove(self.viewer.layers["PSF: View B"])
-        except (KeyError, ValueError):
-            pass
+
+        # Remove all PSF layers (both volume and projection types)
+        self._remove_psf_layers()
         
         self.viewer.add_image(
             deconv_result,
