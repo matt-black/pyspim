@@ -87,13 +87,18 @@ def _reconstruct_volume(shape, chunks, ndim_zyc=3):
         data_win = props.data_window
         read_win = props.read_window
         out_win = props.out_window
+        paddings = props.paddings
 
         # Step 1: Read from input volume using read_window.
         chunk_data = vol[read_win].copy()
 
-        # Step 4: Extract out_window from processed chunk (same shape
-        # as read_window result).
-        result = chunk_data[out_win]
+        # Step 2: Pad the read data (matches actual consumer in _decon_chunk).
+        chunk_padded = np.pad(chunk_data, paddings, mode="constant")
+
+        # Step 3: Process (identity for reconstruction test).
+
+        # Step 4: Extract out_window from the padded chunk.
+        result = chunk_padded[out_win]
 
         # Step 5: Write to data_window in output.
         out[data_win] = result
@@ -404,74 +409,19 @@ class TestPadding:
                 assert l >= 0, f"Chunk {idx} dim {dim}: left_pad={l} < 0"
                 assert r >= 0, f"Chunk {idx} dim {dim}: right_pad={r} < 0"
 
-    def test_padding_matches_boundary_clamping(self):
-        """padding = how much read_window is smaller than data_window + overlap."""
+    def test_padded_size_positive(self):
+        """Padded size after np.pad must be positive in every dimension."""
         z, r, c = 50, 60, 70
         ov = (10, 10, 10)
         chunks = calculate_conv_chunks(z, r, c, (32, 32, 32), ov, None)
 
         for idx, props in chunks.items():
             for dim in range(3):
-                dw = props.data_window[dim]
-                rw = props.read_window[dim]
-                pad = props.paddings[dim]
-                # left_pad = data_left - read_left
-                expected_left = dw.start - rw.start
-                # right_pad = read_right - data_right
-                expected_right = rw.stop - dw.stop
-                assert pad[0] == expected_left, (
-                    f"Chunk {idx} dim {dim}: left_pad={pad[0]} "
-                    f"!= {expected_left}"
-                )
-                assert pad[1] == expected_right, (
-                    f"Chunk {idx} dim {dim}: right_pad={pad[1]} "
-                    f"!= {expected_right}"
-                )
-
-    def test_internal_chunks_padding_equals_overlap(self):
-        """Internal chunks have padding equal to overlap (read extends past data).
-
-        The padding fields represent the gap between read_window edge and
-        data_window edge.  For an internal chunk this gap is exactly the
-        overlap in each direction — i.e. padding = (overlap, overlap).
-        Boundary chunks have larger padding because the read window is
-        clamped to the data bounds.
-        """
-        z, r, c = 128, 128, 128
-        cs = (32, 32, 32)
-        ov = (8, 8, 8)
-        chunks = calculate_conv_chunks(z, r, c, cs, ov, None)
-
-        for idx, props in chunks.items():
-            is_internal = True
-            for dim, sz in enumerate((z, r, c)):
-                if props.data_window[dim].start == 0:
-                    is_internal = False
-                if props.data_window[dim].stop == sz:
-                    is_internal = False
-            if is_internal:
-                for dim in range(3):
-                    expected = (ov[dim], ov[dim])
-                    assert props.paddings[dim] == expected, (
-                        f"Internal chunk {idx} dim {dim}: padding "
-                        f"{props.paddings[dim]} != expected {expected}"
-                    )
-                return  # found one
-        pytest.fail("No internal chunk found")
-
-    def test_read_window_size_equals_data_plus_padding(self):
-        """read_window size = data_window size + left_pad + right_pad."""
-        chunks = calculate_conv_chunks(50, 60, 70, (32, 32, 32), (10, 10, 10), None)
-
-        for idx, props in chunks.items():
-            for dim in range(3):
-                dw_size = props.data_window[dim].stop - props.data_window[dim].start
                 rw_size = props.read_window[dim].stop - props.read_window[dim].start
                 pad = props.paddings[dim]
-                expected_rw = dw_size + pad[0] + pad[1]
-                assert rw_size == expected_rw, (
-                    f"Chunk {idx} dim {dim}: read_size={rw_size} "
-                    f"!= data_size({dw_size}) + padding({pad[0]}+{pad[1]})"
+                padded_size = rw_size + pad[0] + pad[1]
+                assert padded_size > 0, (
+                    f"Chunk {idx} dim {dim}: padded_size={padded_size} <= 0"
                 )
 
 
@@ -496,40 +446,44 @@ class TestOutWindow:
                     f"!= out_size={ow_size}"
                 )
 
-    def test_out_window_corresponds_to_padding(self):
-        """left_out should equal left_pad; right_out = left_pad + data_size."""
-        chunks = calculate_conv_chunks(50, 60, 70, (32, 32, 32), (10, 10, 10), None)
+    def test_out_window_corresponds_to_padded_region(self):
+        """out_window correctly selects the data region from the np.pad-padded output.
+
+        After np.pad(read_data, paddings), the data region should be extractable
+        using out_window. This validates the full consumer pipeline.
+        """
+        import numpy as np
+        z, r, c = 50, 60, 70
+        ov = (10, 10, 10)
+        chunks = calculate_conv_chunks(z, r, c, (32, 32, 32), ov, None)
+
+        z_idx, r_idx, c_idx = np.ogrid[:z, :r, :c]
+        vol = (z_idx * r * c + r_idx * c + c_idx).astype(np.int64)
 
         for idx, props in chunks.items():
-            for dim in range(3):
-                pad = props.paddings[dim]
-                ow = props.out_window[dim]
-                dw_size = props.data_window[dim].stop - props.data_window[dim].start
+            chunk_data = vol[props.read_window].copy()
+            chunk_padded = np.pad(chunk_data, props.paddings, mode="constant")
+            result = chunk_padded[props.out_window]
+            expected = vol[props.data_window]
+            np.testing.assert_array_equal(result, expected,
+                err_msg=f"Chunk {idx}: out_window does not extract correct data region")
 
-                assert ow.start == pad[0], (
-                    f"Chunk {idx} dim {dim}: left_out={ow.start} "
-                    f"!= left_pad={pad[0]}"
-                )
-                assert ow.stop == pad[0] + dw_size, (
-                    f"Chunk {idx} dim {dim}: right_out={ow.stop} "
-                    f"!= left_pad({pad[0]}) + data_size({dw_size})"
-                )
-
-    def test_out_window_within_read_bounds(self):
-        """out_window indices must be within [0, read_window_size)."""
+    def test_out_window_within_padded_bounds(self):
+        """out_window indices must be within [0, padded_size) after np.pad."""
         chunks = calculate_conv_chunks(50, 60, 70, (32, 32, 32), (10, 10, 10), None)
 
         for idx, props in chunks.items():
             for dim in range(3):
                 rw_size = props.read_window[dim].stop - props.read_window[dim].start
+                padded_size = rw_size + props.paddings[dim][0] + props.paddings[dim][1]
                 ow = props.out_window[dim]
-                assert 0 <= ow.start <= rw_size, (
+                assert 0 <= ow.start <= padded_size, (
                     f"Chunk {idx} dim {dim}: out_start={ow.start} "
-                    f"outside read_range [0, {rw_size})"
+                    f"outside padded_range [0, {padded_size})"
                 )
-                assert 0 <= ow.stop <= rw_size, (
+                assert 0 <= ow.stop <= padded_size, (
                     f"Chunk {idx} dim {dim}: out_stop={ow.stop} "
-                    f"outside read_range [0, {rw_size})"
+                    f"outside padded_range [0, {padded_size})"
                 )
 
 
@@ -745,7 +699,8 @@ class TestReconstruction:
 
         for props in chunks.values():
             chunk_data = vol[props.read_window].copy()
-            result = chunk_data[props.out_window]
+            chunk_padded = np.pad(chunk_data, props.paddings, mode="constant")
+            result = chunk_padded[props.out_window]
             out[props.data_window] = result
 
         np.testing.assert_array_equal(out, vol)

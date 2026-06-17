@@ -171,8 +171,8 @@ def calculate_conv_chunks(
     z: int,
     r: int,
     c: int,
-    chunk_shape: tuple[int, int, int],
-    overlap: tuple[int, int, int],
+    chunk_shape: int | tuple[int, int, int],
+    overlap: int | tuple[int, int, int],
     channel_slice: slice | None,
 ) -> dict[int, ChunkProps]:
     """Compute how an array to be convolved should be chunked into parts for chunkwise convolution.
@@ -181,14 +181,68 @@ def calculate_conv_chunks(
         z (int): linear shape of volume, in z-direction
         r (int): linear shape of volume, in r-direction (# rows)
         c (int): linear shape of volume, in c-direction (# columns)
-        chunk_shape (int | tuple[int,int,int]): shape of chunk. If ``int``, chunks are assumed cubic, otherwise a tuple with int for each dimension.
-        overlap (int | tuple[int,int,int]): amount of overlap (in pixels) between chunks.
+        chunk_shape (int | Tuple[int,int,int]): shape of chunk. If ``int``, chunks are assumed cubic, otherwise a tuple with int for each dimension.
+        overlap (int | Tuple[int,int,int]): amount of overlap (in pixels) between chunks.
         channel_slice (slice | None): how to slice channels in output. If ``None``, all channels are taken.
 
     Returns:
-        dict[int,ChunkProps]
+        dict[int,ChunkProps]: mapping from chunk index to ``ChunkProps`` describing
+            how to read, pad, process, and assemble each chunk.
+
+    Notes:
+        The returned ``ChunkProps`` objects describe a **per-chunk processing pipeline**
+        designed for chunk-wise deconvolution of large volumes that exceed GPU memory.
+        Each ``ChunkProps`` has four attributes:
+
+        - ``data_window``: ``slice`` indices into the **original volume** specifying the
+          region of voxels this chunk is responsible for producing. Across all chunks,
+          these windows form a complete, non-overlapping partition of the volume (every
+          voxel belongs to exactly one chunk).
+
+        - ``read_window``: ``slice`` indices into the **original volume** specifying the
+          region that should be read for this chunk. This window is ``data_window``
+          expanded by ``overlap`` pixels in each direction, clamped to the volume
+          boundaries. Reading extra pixels around the edges prevents boundary artifacts
+          from the convolution/deconvolution.
+
+        - ``paddings``: a tuple of ``(left_pad, right_pad)`` pairs, one per dimension,
+          describing how many pixels ``numpy.pad`` (or equivalent) should add to each
+          side of the read data *before* processing. These values are always non-negative
+          and account for both structural padding (when the volume is not evenly divisible
+          by ``chunk_shape``) and boundary overlap gaps.
+
+        - ``out_window``: ``slice`` indices into the **padded-and-processed** output
+          array, specifying which region corresponds to the data window. After processing,
+          this window extracts the result that should be written back to ``data_window``.
+
+        The expected consumer pattern (as used by
+        :func:`~pyspim.decon.sparse.dualview_rl._decon_chunk`) is::
+
+            # 1. Read from the original volume
+            chunk_data = volume[props.read_window]
+
+            # 2. Pad to the correct processing size
+            chunk_padded = np.pad(chunk_data, props.paddings, mode='constant')
+
+            # 3. Process (e.g. deconvolve)
+            processed = deconvolve(chunk_padded)
+
+            # 4. Extract the data region from the padded output
+            result = processed[props.out_window]
+
+            # 5. Write back to the output volume
+            output[props.data_window] = result
+
+        The ``paddings`` and ``out_window`` values are designed as a matched pair:
+        ``out_window`` indexes into the array produced by ``np.pad(chunk_data, paddings)``.
+        Using them separately (e.g. applying ``out_window`` directly to ``chunk_data``
+        without padding) will produce incorrect results.
     """
     shape = tuple([z, r, c])
+    if isinstance(chunk_shape, int):
+        chunk_shape = (chunk_shape,) * 3
+    if isinstance(overlap, int):
+        overlap = (overlap,) * 3
     # determine padding & resulting shape
     pad_size = [_pad_amount(d, cd) for d, cd in zip(shape, chunk_shape)]
     pads = [_pad_splits(p) for p in pad_size]
@@ -210,23 +264,34 @@ def calculate_conv_chunks(
         # now figure out where in the actual data this corresponds to
         data_idxs, pad_amts, read_idxs, out_idxs = [], [], [], []
         for dim_idx, (i0, i1) in enumerate(pad_idxs):
-            # map chunk boundaries from padded-space to original data coordinates
             i0d, i1d = i0 - pads[dim_idx][0], i1 - pads[dim_idx][0]
-            # data region owned by this chunk (clamped to original data bounds)
-            left_data = max(i0d, 0)
-            right_data = min(i1d, shape[dim_idx])
-            # read region: expand data region by overlap, clamped to data bounds
-            left_read = max(left_data - overlap[dim_idx], 0)
-            right_read = min(right_data + overlap[dim_idx], shape[dim_idx])
-            # artificial padding: how much the read region is smaller than
-            # (data region + overlap) on each side — i.e., where we hit
-            # the data boundary and couldn't read the full overlap
-            left_pad = left_data - left_read  # always >= 0
-            right_pad = right_read - right_data  # always >= 0
-            # output window: select from the processed output (same shape as
-            # read region) the region corresponding to the data region
-            left_out = left_pad
-            right_out = left_pad + (right_data - left_data)
+            # figure out conditions for "left" index
+            if i0d < 0:  # we're not starting at data, in the "pad"
+                left_data, left_read = 0, 0
+                left_pad = pads[dim_idx][0]
+                left_out = pads[dim_idx][0]
+            else:  # i0d >= 0 -- we're in the data
+                left_data = i0d
+                left_read = max(i0d - overlap[dim_idx], 0)
+                if left_read == 0:  # can't read full overlap in the data
+                    left_pad = max(0, pads[dim_idx][0] - (overlap[dim_idx] - i0d))
+                else:  # overlap region fully contained in data
+                    left_pad = 0
+                left_out = (left_data - left_read) + left_pad
+            # figure out conditions for "right" index
+            if i1d > shape[dim_idx]:  # we're outside of the data on the rhs
+                right_data, right_read = shape[dim_idx], shape[dim_idx]
+                right_pad = i1 - padded_shape[dim_idx]
+            else:
+                right_data = i1d
+                right_read = right_data + overlap[dim_idx]
+                if right_read > shape[dim_idx]:
+                    over_size = right_read - shape[dim_idx]
+                    right_read = shape[dim_idx]
+                    right_pad = overlap[dim_idx] - over_size
+                else:
+                    right_pad = 0
+            right_out = left_out + (right_data - left_data)
             data_idxs.append((left_data, right_data))
             pad_amts.append((left_pad, right_pad))
             read_idxs.append((left_read, right_read))
@@ -245,7 +310,6 @@ def calculate_conv_chunks(
             out_window.insert(0, channel_slice)
             pad_amts.insert(0, (0, 0))
         chunk_windows[chunk_idx] = ChunkProps(
-            tuple(data_window), tuple(read_window), 
-            tuple(pad_amts), tuple(out_window)
+            tuple(data_window), tuple(read_window), tuple(pad_amts), tuple(out_window)
         )
     return chunk_windows
