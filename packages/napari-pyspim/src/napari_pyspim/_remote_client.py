@@ -54,6 +54,7 @@ class BatchJobConfig:
     gpus: int = 1
     ntasks: int = 1
     polling_interval: int = 10
+    additional_directives: str = ""
 
     @property
     def time_string(self) -> str:
@@ -855,6 +856,7 @@ class RemoteClient(QObject):
             "ntasks": self._batch_config.ntasks,
             "polling_interval": self._batch_config.polling_interval,
             "log_dir": self._log_dir,
+            "additional_directives": self._batch_config.additional_directives,
         }
 
         resp = self.send_command_blocking(command, batch_params, timeout=120.0)

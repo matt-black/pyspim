@@ -21,6 +21,7 @@ def generate_batch_script(
     memory_gb: int,
     gpus: int,
     ntasks: int,
+    additional_directives: str = "",
 ) -> str:
     """Generate a SLURM batch script for a pyspim computation.
 
@@ -44,6 +45,8 @@ def generate_batch_script(
         Number of GPUs to request (0 = CPU only).
     ntasks : int
         Number of tasks.
+    additional_directives : str, optional
+        Extra SLURM directives (one per line) appended to the header.
 
     Returns
     -------
@@ -58,6 +61,11 @@ def generate_batch_script(
     # Build GPU directive (omit if 0)
     gpu_directive = f"#SBATCH --gres=gpu:{gpus}\n" if gpus > 0 else ""
 
+    # Build additional directives block (omit if empty)
+    additional_block = (
+        additional_directives + "\n" if additional_directives else ""
+    )
+
     script = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --nodes=1
@@ -65,7 +73,7 @@ def generate_batch_script(
 #SBATCH --time={time_string}
 #SBATCH --cpus-per-task={ntasks}
 #SBATCH --mem={memory_gb}G
-{gpu_directive}#SBATCH --output={log_dir:s}/pyspim_batch_%j.out
+{gpu_directive}{additional_block}#SBATCH --output={log_dir:s}/pyspim_batch_%j.out
 #SBATCH --error={log_dir:s}/pyspim_batch_%j.err
 
 # Activate virtual environment

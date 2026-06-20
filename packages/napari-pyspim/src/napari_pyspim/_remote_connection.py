@@ -29,6 +29,7 @@ from qtpy.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -211,6 +212,11 @@ class RemoteConnectionWidget(QWidget):
         polling_row.addStretch()
         slurm_layout.addRow("", polling_row)
 
+        # Additional SLURM directives
+        self.slurm_additional_directives_edit = QTextEdit()
+        self.slurm_additional_directives_edit.setMaximumHeight(80)
+        slurm_layout.addRow("Additional Directives:", self.slurm_additional_directives_edit)
+
         self.slurm_group.setLayout(slurm_layout)
         self.slurm_group.setVisible(False)  # Hidden until connected
         layout.addWidget(self.slurm_group)
@@ -312,6 +318,9 @@ class RemoteConnectionWidget(QWidget):
             self.slurm_gpus_spin.setValue(data.get("slurm_gpus", 1))
             self.slurm_ncpus_spin.setValue(data.get("slurm_ntasks", 1))
             self.slurm_polling_spin.setValue(data.get("slurm_polling_interval", 10))
+            self.slurm_additional_directives_edit.setPlainText(
+                data.get("slurm_additional_directives", "")
+            )
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -335,6 +344,7 @@ class RemoteConnectionWidget(QWidget):
             "slurm_gpus": self.slurm_gpus_spin.value(),
             "slurm_ntasks": self.slurm_ncpus_spin.value(),
             "slurm_polling_interval": self.slurm_polling_spin.value(),
+            "slurm_additional_directives": self.slurm_additional_directives_edit.toPlainText(),
         }
         cfg.write_text(json.dumps(data, indent=2))
 
@@ -525,6 +535,7 @@ class RemoteConnectionWidget(QWidget):
             gpus=self.slurm_gpus_spin.value(),
             ntasks=self.slurm_ncpus_spin.value(),
             polling_interval=self.slurm_polling_spin.value(),
+            additional_directives=self.slurm_additional_directives_edit.toPlainText(),
         )
 
     def _set_disconnecting_state(self):

@@ -1701,6 +1701,7 @@ def handle_submit_batch_deconvolution(params: dict) -> dict:
     gpus = batch_cfg.get("gpus", 1)
     ntasks = batch_cfg.get("ntasks", 1)
     log_dir = batch_cfg.get("log_dir", "/tmp")
+    additional_directives = batch_cfg.get("additional_directives", "")
 
     # Get remote venv from environment or derive
     remote_venv = os.environ.get("VIRTUAL_ENV", "")
@@ -1738,6 +1739,7 @@ def handle_submit_batch_deconvolution(params: dict) -> dict:
         memory_gb=memory_gb,
         gpus=gpus,
         ntasks=ntasks,
+        additional_directives=additional_directives,
     )
     with open(script_path, "w") as f:
         f.write(script_content)
@@ -1772,6 +1774,7 @@ def handle_submit_batch_registration(params: dict) -> dict:
     gpus = batch_cfg.get("gpus", 1)
     ntasks = batch_cfg.get("ntasks", 1)
     log_dir = batch_cfg.get("log_dir", "/tmp")
+    additional_directives = batch_cfg.get("additional_directives", "")
 
     remote_venv = os.environ.get("VIRTUAL_ENV", "") or sys.prefix
 
@@ -1824,6 +1827,7 @@ def handle_submit_batch_registration(params: dict) -> dict:
         memory_gb=memory_gb,
         gpus=gpus,
         ntasks=ntasks,
+        additional_directives=additional_directives,
     )
     with open(script_path, "w") as f:
         f.write(script_content)
@@ -1857,6 +1861,7 @@ def handle_submit_batch_apply(params: dict) -> dict:
     gpus = batch_cfg.get("gpus", 1)
     ntasks = batch_cfg.get("ntasks", 1)
     log_dir = batch_cfg.get("log_dir", "/tmp")
+    additional_directives = batch_cfg.get("additional_directives", "")
 
     remote_venv = os.environ.get("VIRTUAL_ENV", "") or sys.prefix
 
@@ -1890,6 +1895,7 @@ def handle_submit_batch_apply(params: dict) -> dict:
         memory_gb=memory_gb,
         gpus=gpus,
         ntasks=ntasks,
+        additional_directives=additional_directives,
     )
     with open(script_path, "w") as f:
         f.write(script_content)
